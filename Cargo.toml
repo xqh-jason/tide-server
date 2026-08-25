@@ -1,0 +1,36 @@
+[package]
+name = "salvo-vben-admin"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Web 框架（oapi 特性用于 #[endpoint] 生成 OpenAPI）
+salvo = { version = "0.95", features = ["oapi"] }
+# 异步运行时（锁定安全版本）
+tokio = { version = "1.44.2", features = ["full"] }
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 日志（W1 第一天引入，锁定安全版本）
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+# 错误处理：库内用 thiserror，应用层用 anyhow
+thiserror = "2"
+anyhow = "1"
+# 配置
+config = "0.15"
+# ORM（MySQL + tokio 运行时 + 宏 + chrono/JSON 类型）
+sea-orm = { version = "1", features = [
+    "sqlx-mysql",
+    "runtime-tokio",
+    "macros",
+    "with-chrono",
+    "with-json",
+] }
+chrono = { version = "0.4.20", features = ["serde"] }
+
+# W2/W3 再加：
+# jsonwebtoken = "9"     # JWT
+# argon2 = "0.5"         # 密码哈希
+# redis = { version = "0.27", features = ["tokio-comp"] }  # token 黑名单 / 验证码
+# reqwest = { version = "0.12", features = ["json"] }       # W7+ AI 延伸
