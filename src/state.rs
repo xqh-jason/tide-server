@@ -7,7 +7,7 @@ use crate::config::Config;
 pub struct AppState {
     pub config: Arc<Config>,
     // TODO(W1): pub db: sea_orm::DatabaseConnection,
-    // TODO(W2): pub redis: redis::Client,
+    // TODO(W2): pub cache: Arc<dyn Cache>（内存实现，dashmap/moka）
 }
 
 impl AppState {

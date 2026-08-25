@@ -3,7 +3,4 @@ host = "0.0.0.0"
 port = 8080
 
 [database]
-url = "mysql://root:root@localhost:3306/salvo_vben"
-
-[redis]
-url = "redis://localhost:6379"
+url = "mysql://root:root@localhost:3307/salvo_vben"

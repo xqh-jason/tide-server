@@ -1,4 +1,25 @@
-/target
+# Rust / Cargo 编译产物（根目录 + 子工程）
+**/target
+*.rs.bk
+
+# 环境与本地配置（含密钥，不入库）
 .env
+.env.*
+config.local.toml
+
+# 日志
 *.log
+
+# macOS
 .DS_Store
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# 运行时产物（W5 文件上传 / 临时文件）
+uploads/
+tmp/
