@@ -3,4 +3,5 @@ host = "0.0.0.0"
 port = 8080
 
 [database]
-url = "mysql://root:root@localhost:3307/salvo_vben"
+# charset=utf8mb4 必须：否则中文（菜单名/昵称等）经 sqlx 读取会乱码
+url = "mysql://root:root@localhost:3307/salvo_vben?charset=utf8mb4"

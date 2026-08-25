@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# Web 框架（oapi 特性用于 #[endpoint] 生成 OpenAPI）
+# Web 框架（oapi: #[endpoint] OpenAPI 契约；状态注入用手写中间件，见 src/middleware）
+# 注：affix-state feature 依赖 salvo_extra 0.95.2，rsproxy 镜像暂无该版本，故手写等价实现
 salvo = { version = "0.95", features = ["oapi"] }
 # 异步运行时（锁定安全版本）
 tokio = { version = "1.44.2", features = ["full"] }

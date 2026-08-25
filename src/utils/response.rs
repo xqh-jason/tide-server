@@ -1,8 +1,10 @@
+use salvo::oapi::ToSchema;
 use serde::Serialize;
 
 /// 统一响应体：`{ code, data, message }`，`code = 200` 表示成功。
 /// 与 vben v5 前端 request.ts 的 `successCode = 200` 契约对齐。
-#[derive(Debug, Serialize)]
+/// ToSchema 用于 #[endpoint] 生成 OpenAPI 文档。
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ApiResponse<T> {
     pub code: i32,
     pub data: T,
