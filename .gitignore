@@ -23,3 +23,13 @@ config.local.toml
 # 运行时产物（W5 文件上传 / 临时文件）
 uploads/
 tmp/
+
+# 工具生成目录（不入库）
+graphify-out/
+src/graphify-out/
+.graphify-out/
+.codex/skills/
+.agents/skills/
+.opencode/skills/
+.trae/skills/
+.claude/skills/

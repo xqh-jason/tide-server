@@ -3,7 +3,9 @@ use salvo::prelude::*;
 use serde::Serialize;
 
 /// 统一响应体：`{ code, data, message }`，`code = 200` 表示成功。
-/// 与 vben v5 前端 request.ts 的 `successCode = 200` 契约对齐。
+/// ⚠️ vben v5 官方模板默认成功码是 `code === 0`（defaultResponseInterceptor 默认
+/// successCode=0），前端 request.ts 必须显式改为 `code === 200`（successCode: 200）
+/// 才能对接本契约，不是默认匹配。
 /// ToSchema 用于 #[endpoint] 生成 OpenAPI 文档。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ApiResponse<T> {

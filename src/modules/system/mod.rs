@@ -5,5 +5,5 @@ use salvo::prelude::*;
 pub mod api;
 
 pub fn routes() -> Router {
-    Router::with_path("health").get(api::health)
+    Router::with_path("health").post(api::health)
 }

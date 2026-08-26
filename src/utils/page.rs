@@ -1,16 +1,14 @@
-//! 分页通用结构：请求 `PageQuery` + 响应 `PageResult`（跨模块复用）。
+//! 分页通用结构：请求 `PageQuery`（JSON body 内嵌）+ 响应 `PageResult`（跨模块复用）。
 
-use salvo::oapi::{ToParameters, ToSchema};
+use salvo::oapi::ToSchema;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// 分页请求（query 源，通用）。字段**只在此定义一次**：
-/// 各域查询结构体用 `#[salvo(extract(flatten))]` 组合它，后续改字段名只改这里，
+/// 分页请求（JSON body 源，通用）。字段**只在此定义一次**：
+/// 各域请求 DTO（如 `UserListReq`）通过 `#[serde(flatten)]` 内嵌本结构，
+/// 由 `JsonBody<T>` 一个提取器整体反序列化；后续改字段名只改这里，
 /// 所有列表接口自动生效（机制保证统一，而非靠约定）。
-/// 注：`ToParameters` derive 自带 `Extractible` 实现（运行时提取 + OpenAPI 文档），
-/// 不要同时 derive `Extractible`（会冲突）。
-#[derive(Debug, Deserialize, Serialize, ToSchema, ToParameters)]
-#[salvo(extract(default_source(from = "query")))]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct PageQuery {
     pub page: Option<u64>, // 从 1 开始
     pub page_size: Option<u64>,

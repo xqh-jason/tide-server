@@ -10,6 +10,6 @@ pub mod service;
 
 pub fn routes() -> Router {
     Router::with_path("user")
-        .push(Router::with_path("list").get(api::list_users))
-        .push(Router::with_path("by-username/{username}").get(api::get_by_username))
+        .push(Router::with_path("list").post(api::list_users))
+        .push(Router::with_path("by-username").post(api::get_by_username))
 }
