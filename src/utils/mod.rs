@@ -1,6 +1,8 @@
 pub mod error;
+pub mod page;
 pub mod response;
 
+pub use page::{PageQuery, PageResult};
 pub use response::ApiResponse;
 
 /// 统一 API 返回类型。handler 直接返回 `ApiResult<T>`：
