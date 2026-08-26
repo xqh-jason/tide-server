@@ -23,7 +23,7 @@ mod tests {
 
     /// 测试数据库连接：读 config.toml 连真库（需 MySQL 运行：docker compose up -d）
     async fn test_db() -> sea_orm::DatabaseConnection {
-        let config = crate::config::Config::load().unwrap();
+        let config = crate::infra::config::Config::load().unwrap();
         Database::connect(&config.database.url).await.unwrap()
     }
 

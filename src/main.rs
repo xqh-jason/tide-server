@@ -1,11 +1,7 @@
-mod api;
-mod app;
-mod config;
 mod entity;
+mod infra;
 mod middleware;
 mod modules;
-mod router;
-mod state;
 mod task;
 mod utils;
 
@@ -19,6 +15,6 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = config::Config::load()?;
-    app::run(config).await
+    let config = infra::config::Config::load()?;
+    infra::app::run(config).await
 }

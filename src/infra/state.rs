@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::config::Config;
+use crate::infra::config::Config;
 
 /// 应用级共享状态，注入到所有 Handler。
 #[derive(Clone)]

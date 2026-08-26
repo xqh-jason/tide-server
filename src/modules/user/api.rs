@@ -4,7 +4,7 @@ use salvo::prelude::*;
 
 use crate::modules::user::dto::UserResp;
 use crate::modules::user::service as user_service;
-use crate::state::AppState;
+use crate::infra::state::AppState;
 use crate::utils::error::AppError;
 use crate::utils::response::ApiResponse;
 
