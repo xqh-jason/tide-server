@@ -1,7 +1,7 @@
-use crate::entity::{sys_menu, sys_role, sys_user, sys_user_role};
+use crate::entity::{sys_role, sys_user, sys_user_role};
 use crate::entity::sys_user::Model;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, PaginatorTrait, QueryOrder};
+use sea_orm::{Condition, DatabaseConnection, PaginatorTrait};
 
 pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
     Ok(sys_user::Entity::find_by_id(id).one(db).await?)
@@ -35,17 +35,6 @@ pub async fn find_roles_by_user_id(
     Ok(sys_role::Entity::find()
         .filter(sys_role::Column::Id.is_in(role_ids))
         .filter(sys_role::Column::Status.eq(1))
-        .all(db)
-        .await?)
-}
-
-/// 查询全部启用菜单（W2 超管全量菜单树；按角色过滤 W3 再做）。
-pub async fn find_all_menus(db: &DatabaseConnection) -> anyhow::Result<Vec<sys_menu::Model>> {
-    Ok(sys_menu::Entity::find()
-        .filter(sys_menu::Column::Status.eq(1))
-        .filter(sys_menu::Column::DeletedAt.is_null())
-        .order_by_asc(sys_menu::Column::Sort)
-        .order_by_asc(sys_menu::Column::Id)
         .all(db)
         .await?)
 }

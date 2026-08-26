@@ -1,7 +1,6 @@
 //! 分页通用结构：请求 `PageQuery`（JSON body 内嵌）+ 响应 `PageResult`（跨模块复用）。
 
 use salvo::oapi::ToSchema;
-use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// 分页请求（JSON body 源，通用）。字段**只在此定义一次**：

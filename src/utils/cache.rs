@@ -44,6 +44,10 @@ impl Cache for MemoryCache {
     }
 
     fn set(&self, key: &str, value: String, ttl: Duration) {
+        if ttl <= Duration::ZERO {
+            return;
+        }
+
         self.inner
             .insert(key.to_string(), (value, Instant::now() + ttl));
     }

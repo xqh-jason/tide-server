@@ -2,5 +2,8 @@
 //! entity/ 保持全局独立（关联表跨域共享，如 sys_user_role）。
 
 pub mod auth;
+pub mod menu;
+pub mod role;
 pub mod system;
+pub mod sys_api;
 pub mod user;

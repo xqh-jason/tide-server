@@ -4,9 +4,7 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
-use crate::modules::user::dto::{
-    UserInfoResp, UserListReq, UsernameReq, UserResp, VbenMenuItem,
-};
+use crate::modules::user::dto::{UserInfoResp, UserListReq, UserResp, UsernameReq};
 use crate::modules::user::service as user_service;
 use crate::utils::error::AppError;
 use crate::utils::{ApiResponse, ApiResult, PageResult};
@@ -73,17 +71,4 @@ pub async fn access_codes(depot: &mut Depot) -> ApiResult<Vec<String>> {
         .map_err(|_| AppError::Biz("unauthorized".into()))?;
     let codes = user_service::get_access_codes(&state.db, &auth.roles).await?;
     Ok(ApiResponse::ok(codes))
-}
-
-/// vben 菜单树（契约 §3.2），vben `fetchMenuListAsync` 消费后动态注册路由。
-#[endpoint]
-pub async fn menus(depot: &mut Depot) -> ApiResult<Vec<VbenMenuItem>> {
-    let state = depot
-        .get_typed::<AppState>()
-        .map_err(|_| AppError::Biz("app state not found".into()))?;
-    let auth = depot
-        .get_typed::<AuthUser>()
-        .map_err(|_| AppError::Biz("unauthorized".into()))?;
-    let menu_tree = user_service::get_menus(&state.db, &auth.roles).await?;
-    Ok(ApiResponse::ok(menu_tree))
 }
