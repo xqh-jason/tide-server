@@ -1,12 +1,10 @@
 mod api;
 mod app;
 mod config;
-mod dto;
 mod entity;
 mod middleware;
-mod repo;
+mod modules;
 mod router;
-mod service;
 mod state;
 mod task;
 mod utils;

@@ -1,5 +1,4 @@
-//! 用户相关 DTO（请求/响应体）。
-//! entity（Model）不直接暴露给接口，经 From 转换脱敏（如 password 不外传）。
+//! 用户 DTO（传输对象）：entity（Model）不直接暴露给接口，经 From 转换脱敏。
 
 use salvo::oapi::ToSchema;
 use serde::Serialize;

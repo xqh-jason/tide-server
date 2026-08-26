@@ -1,11 +1,9 @@
 use salvo::prelude::*;
 
 pub mod health;
-pub mod user;
 
-/// v1 路由表：/api/v1 下的所有接口在此注册。
+/// v1 系统级路由（健康检查等非业务接口）。
+/// 业务接口在各域模块 `src/modules/<domain>/mod.rs` 的 `routes()` 注册。
 pub fn routes() -> Router {
-    Router::new()
-        .push(Router::with_path("health").get(health::health))
-        .push(Router::with_path("user/by-username/{username}").get(user::get_by_username))
+    Router::new().push(Router::with_path("health").get(health::health))
 }
