@@ -9,7 +9,10 @@ pub mod repo;
 pub mod service;
 
 pub fn routes() -> Router {
-    Router::with_path("user")
+    Router::new()
         .push(Router::with_path("list").post(api::list_users))
         .push(Router::with_path("by-username").post(api::get_by_username))
+        .push(Router::with_path("info").post(api::info))
+        .push(Router::with_path("access-codes").post(api::access_codes))
+        .push(Router::with_path("menus").post(api::menus))
 }

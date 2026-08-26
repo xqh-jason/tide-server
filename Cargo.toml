@@ -29,8 +29,13 @@ sea-orm = { version = "1", features = [
     "with-json",
 ] }
 chrono = { version = "0.4.20", features = ["serde"] }
+# 密码哈希（W2 认证底座：注册/登录共用）
+argon2 = "0.5"
+# JWT（W2 认证：签发/校验）。10.x 必须显式指定一个加密提供者：
+# rust_crypto（纯 Rust）用于 HS256 足够，无需系统依赖。
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+# 内存缓存实现（W2 token 黑名单；对照 GVA_CACHE 抽象理念）
+dashmap = "6"
 
 # W2/W3 再加：
-# jsonwebtoken = "9"     # JWT
-# argon2 = "0.5"         # 密码哈希
 # reqwest = { version = "0.12", features = ["json"] }       # W7+ AI 延伸

@@ -1,20 +1,53 @@
-use crate::entity::{
-    prelude::SysUser,
-    sys_user::{self, Model},
-};
+use crate::entity::{sys_menu, sys_role, sys_user, sys_user_role};
+use crate::entity::sys_user::Model;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, PaginatorTrait};
+use sea_orm::{Condition, DatabaseConnection, PaginatorTrait, QueryOrder};
+
+pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
+    Ok(sys_user::Entity::find_by_id(id).one(db).await?)
+}
 
 pub async fn find_by_username(
     db: &DatabaseConnection,
     username: &str,
 ) -> anyhow::Result<Option<Model>> {
-    let user = SysUser::find()
+    let user = sys_user::Entity::find()
         .filter(sys_user::Column::Username.eq(username))
         .one(db)
         .await?;
 
     Ok(user)
+}
+
+/// 查询用户关联的所有启用角色（W2 登录取角色；先不做 join，W3 学 many-to-many 时再换 Linked）。
+pub async fn find_roles_by_user_id(
+    db: &DatabaseConnection,
+    user_id: u64,
+) -> anyhow::Result<Vec<sys_role::Model>> {
+    let links = sys_user_role::Entity::find()
+        .filter(sys_user_role::Column::UserId.eq(user_id))
+        .all(db)
+        .await?;
+    if links.is_empty() {
+        return Ok(vec![]);
+    }
+    let role_ids: Vec<u64> = links.into_iter().map(|l| l.role_id).collect();
+    Ok(sys_role::Entity::find()
+        .filter(sys_role::Column::Id.is_in(role_ids))
+        .filter(sys_role::Column::Status.eq(1))
+        .all(db)
+        .await?)
+}
+
+/// 查询全部启用菜单（W2 超管全量菜单树；按角色过滤 W3 再做）。
+pub async fn find_all_menus(db: &DatabaseConnection) -> anyhow::Result<Vec<sys_menu::Model>> {
+    Ok(sys_menu::Entity::find()
+        .filter(sys_menu::Column::Status.eq(1))
+        .filter(sys_menu::Column::DeletedAt.is_null())
+        .order_by_asc(sys_menu::Column::Sort)
+        .order_by_asc(sys_menu::Column::Id)
+        .all(db)
+        .await?)
 }
 
 /// 分页 + 动态过滤查询（列表接口核心）：
@@ -36,7 +69,7 @@ pub async fn find_page(
         cond = cond.add(sys_user::Column::Status.eq(s));
     }
 
-    let paginator = SysUser::find().filter(cond).paginate(db, page_size);
+    let paginator = sys_user::Entity::find().filter(cond).paginate(db, page_size);
     let total = paginator.num_items().await?;
     let items = paginator.fetch_page(page_index).await?;
     Ok((total, items))

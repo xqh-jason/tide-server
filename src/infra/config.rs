@@ -5,6 +5,7 @@ use serde::Deserialize;
 pub struct Config {
     pub server: Server,
     pub database: Database,
+    pub jwt: Jwt,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -16,6 +17,12 @@ pub struct Server {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Database {
     pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Jwt {
+    pub secret: String,
+    pub ttl_seconds: i64,
 }
 
 impl Config {

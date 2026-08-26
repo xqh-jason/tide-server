@@ -3,7 +3,10 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
-use crate::modules::user::dto::{UserListReq, UsernameReq, UserResp};
+use crate::middleware::auth::AuthUser;
+use crate::modules::user::dto::{
+    UserInfoResp, UserListReq, UsernameReq, UserResp, VbenMenuItem,
+};
 use crate::modules::user::service as user_service;
 use crate::utils::error::AppError;
 use crate::utils::{ApiResponse, ApiResult, PageResult};
@@ -44,4 +47,43 @@ pub async fn list_users(
     )
     .await?;
     Ok(ApiResponse::ok((total, items).into()))
+}
+
+/// 当前登录用户信息（契约 §3.2）。认证中间件已注入 `AuthUser`。
+#[endpoint]
+pub async fn info(depot: &mut Depot) -> ApiResult<UserInfoResp> {
+    let state = depot
+        .get_typed::<AppState>()
+        .map_err(|_| AppError::Biz("app state not found".into()))?;
+    let auth = depot
+        .get_typed::<AuthUser>()
+        .map_err(|_| AppError::Biz("unauthorized".into()))?;
+    let resp = user_service::get_user_info(&state.db, &auth).await?;
+    Ok(ApiResponse::ok(resp))
+}
+
+/// 权限码数组（契约 §3.2），vben `getAccessCodes` 消费，`v-access` 判断按钮显隐。
+#[endpoint]
+pub async fn access_codes(depot: &mut Depot) -> ApiResult<Vec<String>> {
+    let state = depot
+        .get_typed::<AppState>()
+        .map_err(|_| AppError::Biz("app state not found".into()))?;
+    let auth = depot
+        .get_typed::<AuthUser>()
+        .map_err(|_| AppError::Biz("unauthorized".into()))?;
+    let codes = user_service::get_access_codes(&state.db, &auth.roles).await?;
+    Ok(ApiResponse::ok(codes))
+}
+
+/// vben 菜单树（契约 §3.2），vben `fetchMenuListAsync` 消费后动态注册路由。
+#[endpoint]
+pub async fn menus(depot: &mut Depot) -> ApiResult<Vec<VbenMenuItem>> {
+    let state = depot
+        .get_typed::<AppState>()
+        .map_err(|_| AppError::Biz("app state not found".into()))?;
+    let auth = depot
+        .get_typed::<AuthUser>()
+        .map_err(|_| AppError::Biz("unauthorized".into()))?;
+    let menu_tree = user_service::get_menus(&state.db, &auth.roles).await?;
+    Ok(ApiResponse::ok(menu_tree))
 }

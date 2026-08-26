@@ -4,6 +4,8 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 
+pub mod auth;
+
 /// 状态注入中间件：把 `AppState` 按类型（`insert_typed`）存入每个请求的 Depot，
 /// handler 中通过 `depot.get_typed::<AppState>()` 获取。
 ///
