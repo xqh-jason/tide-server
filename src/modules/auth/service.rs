@@ -40,9 +40,7 @@ mod tests {
     use super::*;
     use crate::entity::{sys_role, sys_user, sys_user_role};
     use crate::utils::crypt;
-    use sea_orm::{
-        ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set,
-    };
+    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -70,9 +68,7 @@ mod tests {
     }
 
     /// 造唯一用户 + 关联角色（唯一命名避免并行冲突），返回 (user_id, role_id, username, role_key)。
-    async fn seed_user(
-        db: &sea_orm::DatabaseConnection,
-    ) -> (u64, u64, String, String) {
+    async fn seed_user(db: &sea_orm::DatabaseConnection) -> (u64, u64, String, String) {
         let username = unique_name("login_test");
         let role_key = unique_name("super");
 
@@ -115,8 +111,14 @@ mod tests {
             .exec(db)
             .await
             .unwrap();
-        sys_role::Entity::delete_by_id(role_id).exec(db).await.unwrap();
-        sys_user::Entity::delete_by_id(user_id).exec(db).await.unwrap();
+        sys_role::Entity::delete_by_id(role_id)
+            .exec(db)
+            .await
+            .unwrap();
+        sys_user::Entity::delete_by_id(user_id)
+            .exec(db)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

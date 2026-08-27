@@ -13,11 +13,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(
-        config: Config,
-        db: sea_orm::DatabaseConnection,
-        cache: Arc<dyn Cache>,
-    ) -> Self {
+    pub fn new(config: Config, db: sea_orm::DatabaseConnection, cache: Arc<dyn Cache>) -> Self {
         Self {
             config: Arc::new(config),
             db,

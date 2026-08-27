@@ -1,7 +1,7 @@
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
-use crate::middleware::{auth::AuthRequired, InjectState};
+use crate::middleware::{InjectState, auth::AuthRequired};
 
 /// 组装全局路由。系统域在 modules/system，业务域在 modules/*。
 pub fn build(state: AppState) -> Router {

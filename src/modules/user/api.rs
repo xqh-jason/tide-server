@@ -4,7 +4,7 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
-use crate::modules::user::dto::{UserInfoResp, UserListReq, UserResp, UsernameReq};
+use crate::modules::user::dto::{CreateUserReq, UserInfoResp, UserListReq, UserResp, UsernameReq};
 use crate::modules::user::service as user_service;
 use crate::utils::error::AppError;
 use crate::utils::{ApiResponse, ApiResult, PageResult};
@@ -71,4 +71,15 @@ pub async fn access_codes(depot: &mut Depot) -> ApiResult<Vec<String>> {
         .map_err(|_| AppError::Biz("unauthorized".into()))?;
     let codes = user_service::get_access_codes(&state.db, &auth.roles).await?;
     Ok(ApiResponse::ok(codes))
+}
+
+/// 创建用户（POST + JSON body）。
+#[endpoint]
+pub async fn create_user(depot: &mut Depot, body: JsonBody<CreateUserReq>) -> ApiResult<UserResp> {
+    let state = depot
+        .get_typed::<AppState>()
+        .map_err(|_| AppError::Biz("app state not found".into()))?;
+    let req = body.into_inner();
+    let resp = user_service::create_user(&state.db, req).await?;
+    Ok(ApiResponse::ok(resp))
 }

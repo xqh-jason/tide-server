@@ -29,10 +29,7 @@ fn build_menu_tree(menus: Vec<sys_menu::Model>) -> Vec<VbenMenuItem> {
         by_parent.entry(m.parent_id).or_default().push(m);
     }
 
-    fn build(
-        parent_id: u64,
-        by_parent: &HashMap<u64, Vec<sys_menu::Model>>,
-    ) -> Vec<VbenMenuItem> {
+    fn build(parent_id: u64, by_parent: &HashMap<u64, Vec<sys_menu::Model>>) -> Vec<VbenMenuItem> {
         by_parent
             .get(&parent_id)
             .map(|items| {

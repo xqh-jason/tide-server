@@ -4,7 +4,7 @@
 //! 认证中间件（W2 第 4 步）解析后写入 Depot，后续接口不再重复查库取身份。
 
 use chrono::Utc;
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
 /// JWT 载荷。`iat`/`exp` 使用标准 claim 名（jsonwebtoken 校验过期依赖 exp）。

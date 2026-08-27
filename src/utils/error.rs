@@ -29,9 +29,11 @@ impl Writer for AppError {
     async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
         let (code, status, message) = match &self {
             AppError::Biz(msg) => (400, StatusCode::BAD_REQUEST, msg.clone()),
-            AppError::Internal(_) => {
-                (500, StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
-            }
+            AppError::Internal(_) => (
+                500,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error".to_string(),
+            ),
         };
         res.status_code(status);
         res.render(Json(ApiResponse::<()>::fail(code, message)));

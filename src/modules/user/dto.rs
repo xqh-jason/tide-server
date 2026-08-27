@@ -69,3 +69,15 @@ impl From<(u64, Vec<sys_user::Model>)> for PageResult<UserResp> {
         PageResult::new(total, items.into_iter().map(UserResp::from).collect())
     }
 }
+
+/// 创建用户请求：`{ username, password, nickname?, phone?, email?, status?, role_ids?: [] }`
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateUserReq {
+    pub username: String,
+    pub password: String,
+    pub nickname: String,
+    pub phone: Option<String>,
+    pub email: Option<String>,
+    pub status: Option<i8>,
+    pub role_ids: Vec<u64>, // 角色 ID列表 ，允许空
+}

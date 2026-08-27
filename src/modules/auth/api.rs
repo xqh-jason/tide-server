@@ -14,10 +14,7 @@ use std::time::Duration;
 
 /// 登录：校验用户名密码，签发 JWT。公开接口（不挂认证中间件）。
 #[endpoint]
-pub async fn login(
-    depot: &mut Depot,
-    body: JsonBody<LoginReq>,
-) -> ApiResult<LoginResp> {
+pub async fn login(depot: &mut Depot, body: JsonBody<LoginReq>) -> ApiResult<LoginResp> {
     let state = depot
         .get_typed::<AppState>()
         .map_err(|_| AppError::Biz("app state not found".into()))?;

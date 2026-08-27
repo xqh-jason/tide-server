@@ -1,5 +1,5 @@
-use salvo::oapi::swagger_ui::SwaggerUi;
 use salvo::oapi::OpenApi;
+use salvo::oapi::swagger_ui::SwaggerUi;
 use salvo::prelude::*;
 
 use crate::infra::config::Config;
@@ -9,7 +9,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let addr = format!("{}:{}", config.server.host, config.server.port);
     // 连接 MySQL 连接池（SeaORM DatabaseConnection 内部是 sqlx 连接池，Clone 共享）。
     let db = sea_orm::Database::connect(&config.database.url).await?;
-    let state = crate::infra::state::AppState::new(config, db, std::sync::Arc::new(MemoryCache::new()));
+    let state =
+        crate::infra::state::AppState::new(config, db, std::sync::Arc::new(MemoryCache::new()));
 
     let router = crate::infra::router::build(state);
 
