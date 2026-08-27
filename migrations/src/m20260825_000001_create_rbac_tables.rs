@@ -27,13 +27,43 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(SysUser::Username).string_len(50).unique_key().not_null())
+                    .col(
+                        ColumnDef::new(SysUser::Username)
+                            .string_len(50)
+                            .unique_key()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(SysUser::Password).string_len(100).not_null())
-                    .col(ColumnDef::new(SysUser::Nickname).string_len(50).not_null().default(""))
-                    .col(ColumnDef::new(SysUser::Phone).string_len(20).not_null().default(""))
-                    .col(ColumnDef::new(SysUser::Email).string_len(100).not_null().default(""))
-                    .col(ColumnDef::new(SysUser::Avatar).string_len(255).not_null().default(""))
-                    .col(ColumnDef::new(SysUser::Status).tiny_integer().not_null().default(1))
+                    .col(
+                        ColumnDef::new(SysUser::Nickname)
+                            .string_len(50)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysUser::Phone)
+                            .string_len(20)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysUser::Email)
+                            .string_len(100)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysUser::Avatar)
+                            .string_len(255)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysUser::Status)
+                            .tiny_integer()
+                            .not_null()
+                            .default(1),
+                    )
                     .col(
                         ColumnDef::new(SysUser::CreatedAt)
                             .date_time()
@@ -66,10 +96,30 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(SysRole::RoleName).string_len(50).not_null())
-                    .col(ColumnDef::new(SysRole::RoleKey).string_len(50).unique_key().not_null())
-                    .col(ColumnDef::new(SysRole::Sort).integer().not_null().default(0))
-                    .col(ColumnDef::new(SysRole::Status).tiny_integer().not_null().default(1))
-                    .col(ColumnDef::new(SysRole::Remark).string_len(255).not_null().default(""))
+                    .col(
+                        ColumnDef::new(SysRole::RoleKey)
+                            .string_len(50)
+                            .unique_key()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(SysRole::Sort)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(SysRole::Status)
+                            .tiny_integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(SysRole::Remark)
+                            .string_len(255)
+                            .not_null()
+                            .default(""),
+                    )
                     .col(
                         ColumnDef::new(SysRole::CreatedAt)
                             .date_time()
@@ -103,18 +153,78 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(SysMenu::ParentId).big_unsigned().not_null().default(0))
-                    .col(ColumnDef::new(SysMenu::Path).string_len(255).not_null().default(""))
-                    .col(ColumnDef::new(SysMenu::Name).string_len(100).not_null().default(""))
-                    .col(ColumnDef::new(SysMenu::Component).string_len(255).not_null().default(""))
-                    .col(ColumnDef::new(SysMenu::Title).string_len(100).not_null().default(""))
-                    .col(ColumnDef::new(SysMenu::Icon).string_len(100).not_null().default(""))
-                    .col(ColumnDef::new(SysMenu::Sort).integer().not_null().default(0))
-                    .col(ColumnDef::new(SysMenu::KeepAlive).tiny_integer().not_null().default(0))
-                    .col(ColumnDef::new(SysMenu::Hidden).tiny_integer().not_null().default(0))
-                    .col(ColumnDef::new(SysMenu::MenuType).tiny_integer().not_null().default(2))
-                    .col(ColumnDef::new(SysMenu::Permission).string_len(100).not_null().default(""))
-                    .col(ColumnDef::new(SysMenu::Status).tiny_integer().not_null().default(1))
+                    .col(
+                        ColumnDef::new(SysMenu::ParentId)
+                            .big_unsigned()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::Path)
+                            .string_len(255)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::Name)
+                            .string_len(100)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::Component)
+                            .string_len(255)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::Title)
+                            .string_len(100)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::Icon)
+                            .string_len(100)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::Sort)
+                            .integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::KeepAlive)
+                            .tiny_integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::Hidden)
+                            .tiny_integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::MenuType)
+                            .tiny_integer()
+                            .not_null()
+                            .default(2),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::Permission)
+                            .string_len(100)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysMenu::Status)
+                            .tiny_integer()
+                            .not_null()
+                            .default(1),
+                    )
                     .col(
                         ColumnDef::new(SysMenu::CreatedAt)
                             .date_time()
@@ -129,7 +239,11 @@ impl MigrationTrait for Migration {
                             .extra("ON UPDATE CURRENT_TIMESTAMP"),
                     )
                     .col(ColumnDef::new(SysMenu::DeletedAt).date_time().null())
-                    .index(Index::create().name("idx_menu_parent").col(SysMenu::ParentId))
+                    .index(
+                        Index::create()
+                            .name("idx_menu_parent")
+                            .col(SysMenu::ParentId),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -149,9 +263,24 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(SysApi::Path).string_len(255).not_null())
                     .col(ColumnDef::new(SysApi::Method).string_len(10).not_null())
-                    .col(ColumnDef::new(SysApi::Description).string_len(255).not_null().default(""))
-                    .col(ColumnDef::new(SysApi::ApiGroup).string_len(100).not_null().default(""))
-                    .col(ColumnDef::new(SysApi::Status).tiny_integer().not_null().default(1))
+                    .col(
+                        ColumnDef::new(SysApi::Description)
+                            .string_len(255)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysApi::ApiGroup)
+                            .string_len(100)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysApi::Status)
+                            .tiny_integer()
+                            .not_null()
+                            .default(1),
+                    )
                     .col(
                         ColumnDef::new(SysApi::CreatedAt)
                             .date_time()
@@ -183,9 +312,21 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(SysUserRole::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(SysUserRole::UserId).big_unsigned().not_null())
-                    .col(ColumnDef::new(SysUserRole::RoleId).big_unsigned().not_null())
-                    .primary_key(Index::create().col(SysUserRole::UserId).col(SysUserRole::RoleId))
+                    .col(
+                        ColumnDef::new(SysUserRole::UserId)
+                            .big_unsigned()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(SysUserRole::RoleId)
+                            .big_unsigned()
+                            .not_null(),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(SysUserRole::UserId)
+                            .col(SysUserRole::RoleId),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -196,9 +337,21 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(SysRoleMenu::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(SysRoleMenu::RoleId).big_unsigned().not_null())
-                    .col(ColumnDef::new(SysRoleMenu::MenuId).big_unsigned().not_null())
-                    .primary_key(Index::create().col(SysRoleMenu::RoleId).col(SysRoleMenu::MenuId))
+                    .col(
+                        ColumnDef::new(SysRoleMenu::RoleId)
+                            .big_unsigned()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(SysRoleMenu::MenuId)
+                            .big_unsigned()
+                            .not_null(),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(SysRoleMenu::RoleId)
+                            .col(SysRoleMenu::MenuId),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -211,7 +364,11 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(ColumnDef::new(SysRoleApi::RoleId).big_unsigned().not_null())
                     .col(ColumnDef::new(SysRoleApi::ApiId).big_unsigned().not_null())
-                    .primary_key(Index::create().col(SysRoleApi::RoleId).col(SysRoleApi::ApiId))
+                    .primary_key(
+                        Index::create()
+                            .col(SysRoleApi::RoleId)
+                            .col(SysRoleApi::ApiId),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -220,13 +377,27 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(SysUserRole::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(SysRoleMenu::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(SysRoleApi::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(SysApi::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(SysMenu::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(SysRole::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(SysUser::Table).to_owned()).await?;
+        manager
+            .drop_table(Table::drop().table(SysUserRole::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(SysRoleMenu::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(SysRoleApi::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(SysApi::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(SysMenu::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(SysRole::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(SysUser::Table).to_owned())
+            .await?;
         Ok(())
     }
 }
