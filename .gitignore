@@ -23,6 +23,7 @@ config.local.toml
 # 运行时产物（W5 文件上传 / 临时文件）
 uploads/
 tmp/
+backups/
 
 # 工具生成目录（不入库）
 graphify-out/

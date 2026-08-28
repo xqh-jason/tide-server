@@ -7,13 +7,14 @@ use sea_orm::DatabaseConnection;
 use crate::entity::sys_menu;
 use crate::modules::menu::dto::{VbenMenuItem, VbenMenuMeta};
 use crate::modules::menu::repo as menu_repo;
+use crate::modules::permission::SUPER_ROLE_KEY;
 
 /// vben 菜单树（契约 §3.2 的 `/user/menus`）：超管返回全量，普通用户 W3 按角色过滤。
 pub async fn get_menus(
     db: &DatabaseConnection,
     roles: &[String],
 ) -> anyhow::Result<Vec<VbenMenuItem>> {
-    if !roles.iter().any(|r| r == "super") {
+    if !roles.iter().any(|r| r == SUPER_ROLE_KEY) {
         // TODO(W3)：按角色过滤 sys_role_menu
         return Ok(vec![]);
     }

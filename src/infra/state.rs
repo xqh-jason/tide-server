@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
+use salvo::prelude::Depot;
+
 use crate::infra::config::Config;
 use crate::utils::cache::Cache;
+use crate::utils::error::AppError;
 
 /// 应用级共享状态，注入到所有 Handler。
 #[derive(Clone)]
@@ -19,5 +22,13 @@ impl AppState {
             db,
             cache,
         }
+    }
+
+    /// 从请求上下文（Depot）读取注入的应用状态（`InjectState` 写入）。
+    pub fn from_depot(depot: &Depot) -> Result<Self, AppError> {
+        depot
+            .get_typed::<AppState>()
+            .map_err(|_| AppError::Biz("app state not found".into()))
+            .cloned()
     }
 }

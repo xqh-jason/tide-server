@@ -3,6 +3,10 @@ use sea_orm::DatabaseConnection;
 
 use crate::entity::sys_user;
 use crate::middleware::auth::AuthUser;
+use crate::modules::permission::repo as permission_repo;
+use crate::modules::permission::{
+    SUPER_ROLE_KEY, SYSTEM_USER_CREATE, service as permission_service,
+};
 use crate::modules::role::service as role_service;
 use crate::modules::user::dto::{CreateUserReq, UserInfoResp, UserResp};
 use crate::modules::user::repo as user_repo;
@@ -44,21 +48,27 @@ pub async fn get_user_info(
 /// 超管返回 `['super']`；普通用户按角色查按钮权限码（W3 完善）。
 pub async fn get_access_codes(
     db: &DatabaseConnection,
-    roles: &[String],
+    user_id: u64,
 ) -> anyhow::Result<Vec<String>> {
-    if roles.iter().any(|r| r == "super") {
-        return Ok(vec!["super".to_string()]);
+    let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
+    if roles.iter().any(|role| role.role_key == SUPER_ROLE_KEY) {
+        return Ok(vec![SUPER_ROLE_KEY.to_string()]);
     }
-    // TODO(W3)：sys_role_menu → sys_menu(menu_type=3) 拍平 permission 码，与后端授权点同源
-    let _ = db;
-    Ok(vec![])
+
+    let permissions = permission_repo::find_permission_codes_by_user_id(db, user_id).await?;
+    Ok(permissions)
 }
 
-/// 创建用户
+/// 创建用户（发起人 `actor_id` 需拥有 `system:user:create` 权限）。
 pub async fn create_user(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: CreateUserReq,
 ) -> Result<UserResp, AppError> {
+    if !permission_service::has_permission(db, actor_id, SYSTEM_USER_CREATE).await? {
+        return Err(AppError::Biz("用户没有创建用户权限".into()));
+    }
+
     // username唯一性检测
     if user_repo::find_by_username_include_deleted(db, &req.username)
         .await?
@@ -126,11 +136,11 @@ pub async fn create_user(
 
     Ok(UserResp::from(model))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_role, sys_user_role};
+    use crate::entity::{sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+    use crate::modules::permission::{SUPER_ROLE_KEY, SYSTEM_USER_CREATE};
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -161,9 +171,290 @@ mod tests {
         }
     }
 
+    /// 已存在的 `super` 是全局唯一角色，测试只能复用；只有新创建时才物理清理。
+    struct SuperRoleFixture {
+        role: sys_role::Model,
+        owned_by_test: bool,
+    }
+
+    /// 授权操作者（actor）：create_user 的发起人。
+    async fn seed_actor(
+        db: &DatabaseConnection,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_user::Model {
+        sys_user::ActiveModel {
+            username: Set(unique_name("actor")),
+            password: Set("x".to_string()),
+            nickname: Set("授权操作者".to_string()),
+            status: Set(1),
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn load_super_role(db: &DatabaseConnection) -> SuperRoleFixture {
+        let existing = sys_role::Entity::find()
+            .filter(sys_role::Column::RoleKey.eq(SUPER_ROLE_KEY))
+            .one(db)
+            .await
+            .unwrap();
+
+        if let Some(role) = existing {
+            return SuperRoleFixture {
+                role,
+                owned_by_test: false,
+            };
+        }
+
+        let role = sys_role::ActiveModel {
+            role_name: Set("超级管理员".to_string()),
+            role_key: Set(SUPER_ROLE_KEY.to_string()),
+            sort: Set(0),
+            status: Set(1),
+            remark: Set("授权测试创建".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+
+        SuperRoleFixture {
+            role,
+            owned_by_test: true,
+        }
+    }
+
+    async fn seed_role(
+        db: &DatabaseConnection,
+        status: i8,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_role::Model {
+        sys_role::ActiveModel {
+            role_name: Set(unique_name("actor_role")),
+            role_key: Set(unique_name("actor_role_key")),
+            sort: Set(0),
+            status: Set(status),
+            remark: Set(String::new()),
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn seed_button(db: &DatabaseConnection, permission: &str) -> sys_menu::Model {
+        sys_menu::ActiveModel {
+            parent_id: Set(0),
+            title: Set(unique_name("actor_menu")),
+            name: Set(unique_name("ActorMenu")),
+            menu_type: Set(3),
+            permission: Set(permission.to_string()),
+            status: Set(1),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn bind_user_role(db: &DatabaseConnection, user_id: u64, role_id: u64) {
+        sys_user_role::ActiveModel {
+            user_id: Set(user_id),
+            role_id: Set(role_id),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn bind_role_menu(db: &DatabaseConnection, role_id: u64, menu_id: u64) {
+        sys_role_menu::ActiveModel {
+            role_id: Set(role_id),
+            menu_id: Set(menu_id),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    /// 清理 actor 及其绑定关系；super 角色共享时不物理删除。
+    async fn cleanup_actor(
+        db: &DatabaseConnection,
+        user: &sys_user::Model,
+        roles: &[sys_role::Model],
+        menus: &[sys_menu::Model],
+        super_fixture: Option<SuperRoleFixture>,
+    ) {
+        sys_user_role::Entity::delete_many()
+            .filter(sys_user_role::Column::UserId.eq(user.id))
+            .exec(db)
+            .await
+            .unwrap();
+        sys_user::Entity::delete_by_id(user.id)
+            .exec(db)
+            .await
+            .unwrap();
+
+        for role in roles {
+            sys_role_menu::Entity::delete_many()
+                .filter(sys_role_menu::Column::RoleId.eq(role.id))
+                .exec(db)
+                .await
+                .unwrap();
+            sys_role::Entity::delete_by_id(role.id)
+                .exec(db)
+                .await
+                .unwrap();
+        }
+
+        for menu in menus {
+            sys_menu::Entity::delete_by_id(menu.id)
+                .exec(db)
+                .await
+                .unwrap();
+        }
+
+        if let Some(fixture) = super_fixture.filter(|item| item.owned_by_test) {
+            sys_role_menu::Entity::delete_many()
+                .filter(sys_role_menu::Column::RoleId.eq(fixture.role.id))
+                .exec(db)
+                .await
+                .unwrap();
+            sys_role::Entity::delete_by_id(fixture.role.id)
+                .exec(db)
+                .await
+                .unwrap();
+        }
+    }
+
+    /// create_user 授权测试。覆盖 W3 计划步骤 5 的 service 层场景；
+    /// “无登录请求”与“发起人已软删除”由 AuthRequired 中间件保证，不在本层重复。
+    #[tokio::test]
+    async fn create_user_denies_actor_without_permission_and_saves_nothing() {
+        let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let role = seed_role(&db, 1, None).await;
+        bind_user_role(&db, actor.id, role.id).await;
+
+        let target = unique_name("no_perm_target");
+        let result = create_user(&db, actor.id, request(target.clone(), vec![])).await;
+
+        cleanup_actor(&db, &actor, &[role], &[], None).await;
+
+        assert!(
+            result.is_err(),
+            "无 system:user:create 权限应被拒绝: {result:?}"
+        );
+        assert!(
+            user_repo::find_by_username_include_deleted(&db, &target)
+                .await
+                .unwrap()
+                .is_none(),
+            "无权限时不应创建目标用户"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_user_allows_actor_with_button_permission() {
+        let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let role = seed_role(&db, 1, None).await;
+        let menu = seed_button(&db, SYSTEM_USER_CREATE).await;
+        bind_user_role(&db, actor.id, role.id).await;
+        bind_role_menu(&db, role.id, menu.id).await;
+
+        let target = unique_name("perm_ok_target");
+        let result = create_user(&db, actor.id, request(target.clone(), vec![])).await;
+
+        let created = result.expect("拥有 system:user:create 的普通用户应创建成功");
+        let saved = user_repo::find_by_id(&db, created.id).await.unwrap();
+        cleanup_actor(&db, &actor, &[role], &[menu], None).await;
+        if let Some(saved) = saved.as_ref() {
+            sys_user_role::Entity::delete_many()
+                .filter(sys_user_role::Column::UserId.eq(saved.id))
+                .exec(&db)
+                .await
+                .unwrap();
+            sys_user::Entity::delete_by_id(saved.id)
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            saved.as_ref().map(|user| user.username.as_str()),
+            Some(target.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn create_user_allows_super_actor() {
+        let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let super_fixture = load_super_role(&db).await;
+        bind_user_role(&db, actor.id, super_fixture.role.id).await;
+
+        let target = unique_name("super_target");
+        let result = create_user(&db, actor.id, request(target.clone(), vec![])).await;
+
+        let created = result.expect("有效 super 角色应创建成功");
+        let saved = user_repo::find_by_id(&db, created.id).await.unwrap();
+        cleanup_actor(&db, &actor, &[], &[], Some(super_fixture)).await;
+        if let Some(saved) = saved.as_ref() {
+            sys_user_role::Entity::delete_many()
+                .filter(sys_user_role::Column::UserId.eq(saved.id))
+                .exec(&db)
+                .await
+                .unwrap();
+            sys_user::Entity::delete_by_id(saved.id)
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            saved.as_ref().map(|user| user.username.as_str()),
+            Some(target.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn create_user_denies_actor_whose_roles_are_disabled_or_deleted() {
+        let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let disabled_role = seed_role(&db, 0, None).await;
+        let deleted_role = seed_role(&db, 1, Some(chrono::Utc::now().naive_utc())).await;
+        bind_user_role(&db, actor.id, disabled_role.id).await;
+        bind_user_role(&db, actor.id, deleted_role.id).await;
+
+        // JWT 里可能还保留旧角色（如 super），但授权只看数据库实时状态。
+        let target = unique_name("stale_role_target");
+        let result = create_user(&db, actor.id, request(target.clone(), vec![])).await;
+
+        cleanup_actor(&db, &actor, &[disabled_role, deleted_role], &[], None).await;
+
+        assert!(
+            result.is_err(),
+            "库中角色已禁用/删除时即使 JWT 保留旧角色也应拒绝: {result:?}"
+        );
+        assert!(
+            user_repo::find_by_username_include_deleted(&db, &target)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
     #[tokio::test]
     async fn create_user_links_enabled_roles_and_stores_hashed_password() {
         let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let super_fixture = load_super_role(&db).await;
+        bind_user_role(&db, actor.id, super_fixture.role.id).await;
         let username = unique_name("create_user");
         let role_key = unique_name("created");
 
@@ -179,7 +470,7 @@ mod tests {
         .await
         .unwrap();
 
-        let created = create_user(&db, request(username.clone(), vec![role.id]))
+        let created = create_user(&db, actor.id, request(username.clone(), vec![role.id]))
             .await
             .unwrap();
 
@@ -214,14 +505,20 @@ mod tests {
             .exec(&db)
             .await
             .unwrap();
+        cleanup_actor(&db, &actor, &[], &[], Some(super_fixture)).await;
     }
 
     #[tokio::test]
     async fn create_user_rejects_unknown_role_ids_without_saving_user() {
         let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let super_fixture = load_super_role(&db).await;
+        bind_user_role(&db, actor.id, super_fixture.role.id).await;
         let username = unique_name("create_user_invalid_role");
 
-        let result = create_user(&db, request(username.clone(), vec![u64::MAX])).await;
+        let result = create_user(&db, actor.id, request(username.clone(), vec![u64::MAX])).await;
+
+        cleanup_actor(&db, &actor, &[], &[], Some(super_fixture)).await;
 
         assert!(
             matches!(result, Err(AppError::Biz(ref message)) if message.contains("角色")),
@@ -276,6 +573,9 @@ mod tests {
     #[tokio::test]
     async fn create_user_rejects_username_matching_soft_deleted_user() {
         let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let super_fixture = load_super_role(&db).await;
+        bind_user_role(&db, actor.id, super_fixture.role.id).await;
         let username = unique_name("deleted_unique_user");
 
         let old_user = sys_user::ActiveModel {
@@ -292,13 +592,14 @@ mod tests {
         mark_deleted.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
         mark_deleted.update(&db).await.unwrap();
 
-        let result = create_user(&db, request(username.clone(), vec![])).await;
+        let result = create_user(&db, actor.id, request(username.clone(), vec![])).await;
 
         // 唯一约束来自原同名记录，因此这里必须物理清理旧数据。
         sys_user::Entity::delete_by_id(old_user.id)
             .exec(&db)
             .await
             .unwrap();
+        cleanup_actor(&db, &actor, &[], &[], Some(super_fixture)).await;
 
         assert!(
             matches!(result, Err(AppError::Biz(ref message)) if message.contains("用户名已存在")),
@@ -309,6 +610,9 @@ mod tests {
     #[tokio::test]
     async fn create_user_rejects_duplicate_role_ids() {
         let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let super_fixture = load_super_role(&db).await;
+        bind_user_role(&db, actor.id, super_fixture.role.id).await;
         let username = unique_name("duplicate_role_user");
         let role_key = unique_name("duplicate_role");
 
@@ -325,7 +629,12 @@ mod tests {
         .unwrap();
 
         // 乱序传入两个不同 ID 的场景由另一个用例覆盖；这里验证同一个 ID 重复。
-        let result = create_user(&db, request(username.clone(), vec![role.id, role.id])).await;
+        let result = create_user(
+            &db,
+            actor.id,
+            request(username.clone(), vec![role.id, role.id]),
+        )
+        .await;
 
         assert!(
             user_repo::find_by_username(&db, &username)
@@ -339,6 +648,7 @@ mod tests {
             .exec(&db)
             .await
             .unwrap();
+        cleanup_actor(&db, &actor, &[], &[], Some(super_fixture)).await;
 
         assert!(
             matches!(result, Err(AppError::Biz(ref message)) if message.contains("重复")),
@@ -349,6 +659,9 @@ mod tests {
     #[tokio::test]
     async fn create_user_accepts_unsorted_distinct_role_ids() {
         let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let super_fixture = load_super_role(&db).await;
+        bind_user_role(&db, actor.id, super_fixture.role.id).await;
         let username = unique_name("unsorted_roles_user");
 
         let mut roles = Vec::new();
@@ -370,7 +683,7 @@ mod tests {
 
         // MySQL 自增 ID 通常按插入顺序生成；这里反向传入，验证“未排序”而不只是“不同”。
         let role_ids = roles.iter().rev().map(|role| role.id).collect();
-        let result = create_user(&db, request(username.clone(), role_ids)).await;
+        let result = create_user(&db, actor.id, request(username.clone(), role_ids)).await;
 
         let links = sys_user_role::Entity::find()
             .filter(
@@ -397,9 +710,95 @@ mod tests {
                 .await
                 .unwrap();
         }
+        cleanup_actor(&db, &actor, &[], &[], Some(super_fixture)).await;
 
         let created = result.expect("不同且未排序的角色 ID 应创建成功");
         assert_eq!(created.username, username);
         assert_eq!(links.len(), 3);
+    }
+
+    /// access-codes 契约（W3 步骤 7）：super 返回超管标识，普通用户返回去重的按钮权限码。
+    #[tokio::test]
+    async fn access_codes_returns_super_flag_for_super_user() {
+        let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let super_fixture = load_super_role(&db).await;
+        bind_user_role(&db, actor.id, super_fixture.role.id).await;
+
+        let result = get_access_codes(&db, actor.id).await;
+
+        cleanup_actor(&db, &actor, &[], &[], Some(super_fixture)).await;
+
+        assert_eq!(
+            result.unwrap(),
+            vec![SUPER_ROLE_KEY.to_string()],
+            "有效 super 角色应返回超管标识"
+        );
+    }
+
+    #[tokio::test]
+    async fn access_codes_returns_deduped_sorted_button_codes_for_normal_user() {
+        let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let role_a = seed_role(&db, 1, None).await;
+        let role_b = seed_role(&db, 1, None).await;
+        let menu_create = seed_button(&db, "system:user:create").await;
+        let menu_update = seed_button(&db, "system:user:update").await;
+
+        bind_user_role(&db, actor.id, role_a.id).await;
+        bind_user_role(&db, actor.id, role_b.id).await;
+        bind_role_menu(&db, role_a.id, menu_create.id).await;
+        bind_role_menu(&db, role_a.id, menu_update.id).await;
+        // 两个角色都绑定同一按钮，验证去重。
+        bind_role_menu(&db, role_b.id, menu_create.id).await;
+
+        let result = get_access_codes(&db, actor.id).await;
+
+        cleanup_actor(
+            &db,
+            &actor,
+            &[role_a, role_b],
+            &[menu_create, menu_update],
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            result.unwrap(),
+            vec![
+                "system:user:create".to_string(),
+                "system:user:update".to_string()
+            ],
+            "应去重并按稳定顺序返回按钮权限码"
+        );
+    }
+
+    #[tokio::test]
+    async fn access_codes_returns_empty_for_user_without_permissions() {
+        let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+        let role = seed_role(&db, 1, None).await;
+        bind_user_role(&db, actor.id, role.id).await;
+
+        let result = get_access_codes(&db, actor.id).await;
+
+        cleanup_actor(&db, &actor, &[role], &[], None).await;
+
+        assert!(result.unwrap().is_empty(), "无按钮权限的用户应返回空数组");
+    }
+
+    #[tokio::test]
+    async fn access_codes_returns_empty_for_user_without_roles() {
+        let db = test_db().await;
+        let actor = seed_actor(&db, None).await;
+
+        let result = get_access_codes(&db, actor.id).await;
+
+        cleanup_actor(&db, &actor, &[], &[], None).await;
+
+        assert!(
+            result.unwrap().is_empty(),
+            "无角色用户应返回空数组，且不触发无效 SQL"
+        );
     }
 }

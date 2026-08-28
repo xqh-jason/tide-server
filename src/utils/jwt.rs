@@ -55,16 +55,17 @@ pub fn verify(token: &str, secret: &str) -> anyhow::Result<Claims> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::permission::SUPER_ROLE_KEY;
 
     const SECRET: &str = "test-secret";
 
     #[test]
     fn sign_and_verify_roundtrip() {
-        let token = sign(1, "admin", &["super".into()], SECRET, 7200).unwrap();
+        let token = sign(1, "admin", &[SUPER_ROLE_KEY.into()], SECRET, 7200).unwrap();
         let claims = verify(&token, SECRET).unwrap();
         assert_eq!(claims.user_id, 1);
         assert_eq!(claims.username, "admin");
-        assert_eq!(claims.roles, vec!["super"]);
+        assert_eq!(claims.roles, vec![SUPER_ROLE_KEY]);
         assert!(claims.exp > claims.iat);
     }
 

@@ -5,8 +5,11 @@
 //! 白名单（login/health）不挂本中间件，由路由组装层控制。
 
 use salvo::prelude::*;
+use sea_orm::{DatabaseConnection, EntityTrait};
 
+use crate::entity::sys_user;
 use crate::infra::state::AppState;
+use crate::utils::error::AppError;
 use crate::utils::response::ApiResponse;
 
 /// 当前登录用户（JWT 载荷的视图，认证中间件注入）。
@@ -15,6 +18,30 @@ pub struct AuthUser {
     pub user_id: u64,
     pub username: String,
     pub roles: Vec<String>,
+}
+
+impl AuthUser {
+    /// 从请求上下文（Depot）读取当前登录用户（`AuthRequired` 写入）。
+    pub fn from_depot(depot: &Depot) -> Result<Self, AppError> {
+        depot
+            .get_typed::<AuthUser>()
+            .map_err(|_| AppError::Biz("unauthorized".into()))
+            .cloned()
+    }
+}
+
+/// 校验用户当前有效：存在、未软删除、启用。
+///
+/// 认证中间件在 JWT 验证通过后调用，避免 token 仍有效但用户已被
+/// 禁用/删除的请求继续进入业务层（用户有效性统一在认证层过滤）。
+pub(crate) async fn ensure_user_active(
+    db: &DatabaseConnection,
+    user_id: u64,
+) -> anyhow::Result<bool> {
+    let Some(user) = sys_user::Entity::find_by_id(user_id).one(db).await? else {
+        return Ok(false);
+    };
+    Ok(user.deleted_at.is_none() && user.status == 1)
 }
 
 /// 从请求头提取 Bearer token。
@@ -55,13 +82,19 @@ impl Handler for AuthRequired {
         }
 
         match crate::utils::jwt::verify(&token, &state.config.jwt.secret) {
-            Ok(claims) => {
-                depot.insert_typed(AuthUser {
-                    user_id: claims.user_id,
-                    username: claims.username,
-                    roles: claims.roles,
-                });
-            }
+            Ok(claims) => match ensure_user_active(&state.db, claims.user_id).await {
+                Ok(true) => {
+                    depot.insert_typed(AuthUser {
+                        user_id: claims.user_id,
+                        username: claims.username,
+                        roles: claims.roles,
+                    });
+                }
+                _ => {
+                    tracing::debug!("user inactive or unavailable, user_id={}", claims.user_id);
+                    unauthorized(res, ctrl);
+                }
+            },
             Err(err) => {
                 tracing::debug!("jwt verify failed: {err}");
                 unauthorized(res, ctrl);
@@ -75,4 +108,98 @@ fn unauthorized(res: &mut Response, ctrl: &mut FlowCtrl) {
     res.status_code(StatusCode::UNAUTHORIZED);
     res.render(Json(ApiResponse::<()>::fail(401, "unauthorized")));
     ctrl.skip_rest();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn unique(prefix: &str) -> String {
+        format!(
+            "{prefix}_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    async fn test_db() -> DatabaseConnection {
+        let config = crate::infra::config::Config::load().unwrap();
+        Database::connect(&config.database.url).await.unwrap()
+    }
+
+    async fn seed_user(
+        db: &DatabaseConnection,
+        status: i8,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_user::Model {
+        sys_user::ActiveModel {
+            username: Set(unique("auth_user")),
+            password: Set("x".to_string()),
+            nickname: Set("认证测试用户".to_string()),
+            status: Set(status),
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn ensure_user_active_accepts_active_user() {
+        let db = test_db().await;
+        let user = seed_user(&db, 1, None).await;
+
+        let result = ensure_user_active(&db, user.id).await;
+
+        sys_user::Entity::delete_by_id(user.id)
+            .exec(&db)
+            .await
+            .unwrap();
+
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn ensure_user_active_rejects_deleted_user() {
+        let db = test_db().await;
+        let user = seed_user(&db, 1, Some(chrono::Utc::now().naive_utc())).await;
+
+        let result = ensure_user_active(&db, user.id).await;
+
+        sys_user::Entity::delete_by_id(user.id)
+            .exec(&db)
+            .await
+            .unwrap();
+
+        assert!(!result.unwrap(), "软删除用户不应通过有效性检查");
+    }
+
+    #[tokio::test]
+    async fn ensure_user_active_rejects_disabled_user() {
+        let db = test_db().await;
+        let user = seed_user(&db, 0, None).await;
+
+        let result = ensure_user_active(&db, user.id).await;
+
+        sys_user::Entity::delete_by_id(user.id)
+            .exec(&db)
+            .await
+            .unwrap();
+
+        assert!(!result.unwrap(), "禁用用户不应通过有效性检查");
+    }
+
+    #[tokio::test]
+    async fn ensure_user_active_rejects_missing_user() {
+        let db = test_db().await;
+
+        let result = ensure_user_active(&db, u64::MAX).await;
+
+        assert!(!result.unwrap(), "不存在的用户不应通过有效性检查");
+    }
 }

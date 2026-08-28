@@ -6,7 +6,6 @@ use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
 use crate::modules::user::dto::{CreateUserReq, UserInfoResp, UserListReq, UserResp, UsernameReq};
 use crate::modules::user::service as user_service;
-use crate::utils::error::AppError;
 use crate::utils::{ApiResponse, ApiResult, PageResult};
 
 /// 按用户名查询用户（POST + JSON body：`{ "username": "..." }`）。
@@ -18,9 +17,7 @@ pub async fn get_by_username(
     depot: &mut Depot,
     body: JsonBody<UsernameReq>,
 ) -> ApiResult<Option<UserResp>> {
-    let state = depot
-        .get_typed::<AppState>()
-        .map_err(|_| AppError::Biz("app state not found".into()))?;
+    let state = AppState::from_depot(depot)?;
     let user = user_service::get_by_username(&state.db, &body.username).await?;
     Ok(ApiResponse::ok(user.map(UserResp::from)))
 }
@@ -32,9 +29,7 @@ pub async fn list_users(
     depot: &mut Depot,
     body: JsonBody<UserListReq>,
 ) -> ApiResult<PageResult<UserResp>> {
-    let state = depot
-        .get_typed::<AppState>()
-        .map_err(|_| AppError::Biz("app state not found".into()))?;
+    let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let (total, items) = user_service::page_users(
         &state.db,
@@ -50,12 +45,8 @@ pub async fn list_users(
 /// 当前登录用户信息（契约 §3.2）。认证中间件已注入 `AuthUser`。
 #[endpoint]
 pub async fn info(depot: &mut Depot) -> ApiResult<UserInfoResp> {
-    let state = depot
-        .get_typed::<AppState>()
-        .map_err(|_| AppError::Biz("app state not found".into()))?;
-    let auth = depot
-        .get_typed::<AuthUser>()
-        .map_err(|_| AppError::Biz("unauthorized".into()))?;
+    let state = AppState::from_depot(depot)?;
+    let auth = AuthUser::from_depot(depot)?;
     let resp = user_service::get_user_info(&state.db, &auth).await?;
     Ok(ApiResponse::ok(resp))
 }
@@ -63,23 +54,19 @@ pub async fn info(depot: &mut Depot) -> ApiResult<UserInfoResp> {
 /// 权限码数组（契约 §3.2），vben `getAccessCodes` 消费，`v-access` 判断按钮显隐。
 #[endpoint]
 pub async fn access_codes(depot: &mut Depot) -> ApiResult<Vec<String>> {
-    let state = depot
-        .get_typed::<AppState>()
-        .map_err(|_| AppError::Biz("app state not found".into()))?;
-    let auth = depot
-        .get_typed::<AuthUser>()
-        .map_err(|_| AppError::Biz("unauthorized".into()))?;
-    let codes = user_service::get_access_codes(&state.db, &auth.roles).await?;
+    let state = AppState::from_depot(depot)?;
+    let auth = AuthUser::from_depot(depot)?;
+    let codes = user_service::get_access_codes(&state.db, auth.user_id).await?;
     Ok(ApiResponse::ok(codes))
 }
 
 /// 创建用户（POST + JSON body）。
 #[endpoint]
 pub async fn create_user(depot: &mut Depot, body: JsonBody<CreateUserReq>) -> ApiResult<UserResp> {
-    let state = depot
-        .get_typed::<AppState>()
-        .map_err(|_| AppError::Biz("app state not found".into()))?;
+    let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let resp = user_service::create_user(&state.db, req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+
+    let resp = user_service::create_user(&state.db, auth.user_id, req).await?;
     Ok(ApiResponse::ok(resp))
 }
