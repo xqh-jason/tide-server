@@ -1,7 +1,9 @@
 //! 认证中间件（W2 第 4 步）：`Authorization: Bearer <token>` → JWT 校验 → 黑名单检查。
 //!
 //! 校验通过后把 `AuthUser` 按类型写入 Depot，handler 用 `depot.get_typed::<AuthUser>()`
-//! 取当前登录用户；失败统一返回 HTTP 401 + `{code:401, data, message}` 契约体。
+//! 取当前登录用户；鉴权失败返回 HTTP 401 + `{code:0, data, message}` 契约体
+//! （唯一使用 HTTP 状态码的例外：token 缺失/无效/黑名单/用户失效，
+//!  前端 vben 的 authenticateResponseInterceptor 按 401 触发登出/刷新）。
 //! 白名单（login/health）不挂本中间件，由路由组装层控制。
 
 use salvo::prelude::*;
@@ -103,10 +105,10 @@ impl Handler for AuthRequired {
     }
 }
 
-/// 渲染统一 401 响应并跳过后续 handler。
+/// 渲染统一 401 响应（HTTP 401 + code 0）并跳过后续 handler。
 fn unauthorized(res: &mut Response, ctrl: &mut FlowCtrl) {
     res.status_code(StatusCode::UNAUTHORIZED);
-    res.render(Json(ApiResponse::<()>::fail(401, "unauthorized")));
+    res.render(Json(ApiResponse::<()>::fail("unauthorized")));
     ctrl.skip_rest();
 }
 

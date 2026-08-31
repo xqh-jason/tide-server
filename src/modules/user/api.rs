@@ -31,7 +31,7 @@ pub async fn list_users(
 ) -> ApiResult<PageResult<UserResp>> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let (total, items) = user_service::page_users(
+    let (total, total_pages, items) = user_service::page_users(
         &state.db,
         req.keyword,
         req.status,
@@ -39,7 +39,7 @@ pub async fn list_users(
         req.page.page_size(),
     )
     .await?;
-    Ok(ApiResponse::ok((total, items).into()))
+    Ok(ApiResponse::ok((total, total_pages, items).into()))
 }
 
 /// 当前登录用户信息（契约 §3.2）。认证中间件已注入 `AuthUser`。

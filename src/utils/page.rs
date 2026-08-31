@@ -18,9 +18,9 @@ impl PageQuery {
     pub fn page(&self) -> u64 {
         self.page.unwrap_or(1)
     }
-    /// 页大小，缺省 10
+    /// 页大小，缺省 10；下限 1、上限 100，防止除零与超大分页
     pub fn page_size(&self) -> u64 {
-        self.page_size.unwrap_or(10)
+        self.page_size.unwrap_or(10).clamp(1, 100)
     }
     /// 转 SeaORM Paginator 用的 0-based 页号
     pub fn page_index(&self) -> u64 {
@@ -28,15 +28,21 @@ impl PageQuery {
     }
 }
 
-/// 分页响应：`{ total, items }`。`total` 为总条数，`items` 为当前页数据。
+/// 分页响应：`{ total, total_pages, items }`。
+/// `total` 为总条数，`total_pages` 为总页数，`items` 为当前页数据。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PageResult<T> {
     pub total: u64,
+    pub total_pages: u64,
     pub items: Vec<T>,
 }
 
 impl<T> PageResult<T> {
-    pub fn new(total: u64, items: Vec<T>) -> Self {
-        Self { total, items }
+    pub fn new(total: u64, total_pages: u64, items: Vec<T>) -> Self {
+        Self {
+            total,
+            total_pages,
+            items,
+        }
     }
 }

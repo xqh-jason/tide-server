@@ -1,14 +1,42 @@
-use sea_orm::DatabaseConnection;
+use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
+use sea_orm::{Condition, DatabaseConnection, TransactionTrait};
 
-use crate::entity::sys_role;
+use crate::entity::{sys_role, sys_role_api, sys_role_menu};
 
 /// 查询单个有效角色（排除软删除）。
 pub async fn find_by_id(
     db: &DatabaseConnection,
     id: u64,
 ) -> anyhow::Result<Option<sys_role::Model>> {
-    todo!("实现 find_by_id")
+    let role = sys_role::Entity::find()
+        .filter(sys_role::Column::Id.eq(id))
+        .filter(sys_role::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+    Ok(role)
+}
+
+pub async fn find_by_role_key_include_deleted(
+    db: &DatabaseConnection,
+    role_key: &str,
+) -> anyhow::Result<Option<sys_role::Model>> {
+    let role = sys_role::Entity::find()
+        .filter(sys_role::Column::RoleKey.eq(role_key))
+        .one(db)
+        .await?;
+    Ok(role)
+}
+
+pub async fn find_by_role_name_include_deleted(
+    db: &DatabaseConnection,
+    role_name: &str,
+) -> anyhow::Result<Option<sys_role::Model>> {
+    let role = sys_role::Entity::find()
+        .filter(sys_role::Column::RoleName.eq(role_name))
+        .one(db)
+        .await?;
+    Ok(role)
 }
 
 /// 分页 + 动态过滤查询角色（keyword 模糊匹配 role_name/role_key，status 精确）。
@@ -18,8 +46,32 @@ pub async fn find_page(
     status: Option<i8>,
     page_index: u64,
     page_size: u64,
-) -> anyhow::Result<(u64, Vec<sys_role::Model>)> {
-    todo!("实现 find_page")
+) -> anyhow::Result<(u64, u64, Vec<sys_role::Model>)> {
+    let mut cond = Condition::all();
+
+    if let Some(status) = status {
+        cond = cond.add(sys_role::Column::Status.eq(status));
+    }
+    if let Some(kw) = keyword {
+        // keyword 命中角色名或角色键任一即可（OR 语义）
+        let kw_cond = Condition::any()
+            .add(sys_role::Column::RoleName.like(format!("%{kw}%")))
+            .add(sys_role::Column::RoleKey.like(format!("%{kw}%")));
+        cond = cond.add(kw_cond);
+    }
+
+    let paginator = sys_role::Entity::find()
+        .filter(cond)
+        .filter(sys_role::Column::DeletedAt.is_null())
+        .paginate(db, page_size);
+    // 使用 num_items_and_pages 一次性获取总数和总页数
+    let items_and_pages = paginator.num_items_and_pages().await?;
+    let total = items_and_pages.number_of_items;
+    let total_pages = items_and_pages.number_of_pages;
+
+    // 获取指定页的数据
+    let items = paginator.fetch_page(page_index).await?;
+    Ok((total, total_pages, items))
 }
 
 /// 事务写入角色并维护菜单/API 关联（关系表硬删除，只插不判软删）。
@@ -29,7 +81,37 @@ pub async fn create_role_with_links(
     menu_ids: Vec<u64>,
     api_ids: Vec<u64>,
 ) -> anyhow::Result<sys_role::Model> {
-    todo!("实现 create_role_with_links")
+    let txn = db.begin().await?;
+    let role = role.insert(&txn).await?;
+    // 插入菜单关联
+    if !menu_ids.is_empty() {
+        let role_menu_ids = menu_ids
+            .into_iter()
+            .map(|menu_id| sys_role_menu::ActiveModel {
+                role_id: Set(role.id),
+                menu_id: Set(menu_id),
+            })
+            .collect::<Vec<_>>();
+        sys_role_menu::Entity::insert_many(role_menu_ids)
+            .exec(&txn)
+            .await?;
+    }
+    // 插入 API关联
+    if !api_ids.is_empty() {
+        let role_api_ids = api_ids
+            .into_iter()
+            .map(|api_id| sys_role_api::ActiveModel {
+                role_id: Set(role.id),
+                api_id: Set(api_id),
+            })
+            .collect::<Vec<_>>();
+        sys_role_api::Entity::insert_many(role_api_ids)
+            .exec(&txn)
+            .await?;
+    }
+
+    txn.commit().await?;
+    Ok(role)
 }
 
 /// 事务更新角色并重建菜单/API 关联（先删旧关联，再插新关联）。
@@ -39,13 +121,82 @@ pub async fn update_role_with_links(
     menu_ids: Vec<u64>,
     api_ids: Vec<u64>,
 ) -> anyhow::Result<sys_role::Model> {
-    todo!("实现 update_role_with_links")
+    let txn = db.begin().await?;
+
+    // 更新角色
+    let role = role.update(&txn).await?;
+
+    // 删除旧菜单关联
+    sys_role_menu::Entity::delete_many()
+        .filter(sys_role_menu::Column::RoleId.eq(role.id))
+        .exec(&txn)
+        .await?;
+
+    // 删除旧 API关联
+    sys_role_api::Entity::delete_many()
+        .filter(sys_role_api::Column::RoleId.eq(role.id))
+        .exec(&txn)
+        .await?;
+
+    // 写入菜单关联
+    if !menu_ids.is_empty() {
+        let role_menu_ids = menu_ids
+            .into_iter()
+            .map(|menu_id| sys_role_menu::ActiveModel {
+                role_id: Set(role.id),
+                menu_id: Set(menu_id),
+            })
+            .collect::<Vec<_>>();
+
+        sys_role_menu::Entity::insert_many(role_menu_ids)
+            .exec(&txn)
+            .await?;
+    }
+
+    // 写入 API关联
+    if !api_ids.is_empty() {
+        let role_api_ids = api_ids
+            .into_iter()
+            .map(|api_id| sys_role_api::ActiveModel {
+                role_id: Set(role.id),
+                api_id: Set(api_id),
+            })
+            .collect::<Vec<_>>();
+        sys_role_api::Entity::insert_many(role_api_ids)
+            .exec(&txn)
+            .await?;
+    }
+    txn.commit().await?;
+    Ok(role)
 }
 
 /// 软删除角色：同一事务内物理清空关联（sys_role_menu / sys_role_api），
 /// 再把 `sys_role.deleted_at` 置为当前时间。
 pub async fn soft_delete_role(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
-    todo!("实现 soft_delete_role")
+    let txn = db.begin().await?;
+    // 删除旧菜单关联
+    sys_role_menu::Entity::delete_many()
+        .filter(sys_role_menu::Column::RoleId.eq(id))
+        .exec(&txn)
+        .await?;
+    // 删除旧 API关联
+    sys_role_api::Entity::delete_many()
+        .filter(sys_role_api::Column::RoleId.eq(id))
+        .exec(&txn)
+        .await?;
+    // 更新角色
+    let role = sys_role::Entity::find()
+        .filter(sys_role::Column::Id.eq(id))
+        .one(db)
+        .await?;
+    if let Some(role) = role {
+        let mut role: sys_role::ActiveModel = role.into();
+        role.deleted_at = Set(Some(chrono::Local::now().naive_local()));
+        role.update(&txn).await?;
+    }
+
+    txn.commit().await?;
+    Ok(true)
 }
 
 pub async fn find_by_ids(
@@ -63,7 +214,7 @@ pub async fn find_by_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_api, sys_menu, sys_role_menu, sys_role_api};
+    use crate::entity::{sys_api, sys_menu, sys_role_api, sys_role_menu};
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -132,12 +283,7 @@ mod tests {
     }
 
     /// 清理顺序：先删关联，再删角色主表，最后删菜单/API（关系表硬删除）。
-    async fn cleanup(
-        db: &DatabaseConnection,
-        role_ids: &[u64],
-        menu_ids: &[u64],
-        api_ids: &[u64],
-    ) {
+    async fn cleanup(db: &DatabaseConnection, role_ids: &[u64], menu_ids: &[u64], api_ids: &[u64]) {
         for role_id in role_ids {
             sys_role_menu::Entity::delete_many()
                 .filter(sys_role_menu::Column::RoleId.eq(*role_id))
@@ -185,10 +331,14 @@ mod tests {
             ..Default::default()
         };
 
-        let created =
-            create_role_with_links(&db, role, vec![menu_a.id, menu_b.id], vec![api_a.id, api_b.id])
-                .await
-                .unwrap();
+        let created = create_role_with_links(
+            &db,
+            role,
+            vec![menu_a.id, menu_b.id],
+            vec![api_a.id, api_b.id],
+        )
+        .await
+        .unwrap();
 
         let menu_links = sys_role_menu::Entity::find()
             .filter(sys_role_menu::Column::RoleId.eq(created.id))
@@ -227,7 +377,9 @@ mod tests {
             ..Default::default()
         };
 
-        let created = create_role_with_links(&db, role, vec![], vec![]).await.unwrap();
+        let created = create_role_with_links(&db, role, vec![], vec![])
+            .await
+            .unwrap();
 
         let menu_links = sys_role_menu::Entity::find()
             .filter(sys_role_menu::Column::RoleId.eq(created.id))
@@ -316,6 +468,7 @@ mod tests {
     async fn find_by_id_excludes_soft_deleted_role() {
         let db = test_db().await;
         let live = seed_role(&db, &unique("find_live"), 1, None).await;
+        let disabled = seed_role(&db, &unique("find_disabled"), 0, None).await;
         let deleted = seed_role(
             &db,
             &unique("find_deleted"),
@@ -325,11 +478,17 @@ mod tests {
         .await;
 
         let found_live = find_by_id(&db, live.id).await.unwrap();
+        let found_disabled = find_by_id(&db, disabled.id).await.unwrap();
         let found_deleted = find_by_id(&db, deleted.id).await.unwrap();
 
-        cleanup(&db, &[live.id, deleted.id], &[], &[]).await;
+        cleanup(&db, &[live.id, disabled.id, deleted.id], &[], &[]).await;
 
         assert_eq!(found_live.as_ref().map(|r| r.id), Some(live.id));
+        assert_eq!(
+            found_disabled.as_ref().map(|r| r.id),
+            Some(disabled.id),
+            "禁用角色仍应被 find_by_id 查到（get/update 场景禁用不等于不存在）"
+        );
         assert!(found_deleted.is_none(), "软删除角色不应被 find_by_id 查到");
     }
 
@@ -347,12 +506,14 @@ mod tests {
         )
         .await;
 
-        let (total_all, items_all) = find_page(&db, Some(keyword.clone()), None, 0, 10)
-            .await
-            .unwrap();
-        let (total_enabled, items_enabled) = find_page(&db, Some(keyword.clone()), Some(1), 0, 10)
-            .await
-            .unwrap();
+        let (total_all, _total_pages, items_all) =
+            find_page(&db, Some(keyword.clone()), None, 0, 10)
+                .await
+                .unwrap();
+        let (total_enabled, _total_pages, items_enabled) =
+            find_page(&db, Some(keyword.clone()), Some(1), 0, 10)
+                .await
+                .unwrap();
 
         cleanup(&db, &[live.id, disabled.id, deleted.id], &[], &[]).await;
 

@@ -63,10 +63,14 @@ impl UserInfoResp {
     }
 }
 
-/// 用户域特有转换：repo 的 `(total, Vec<Model>)` → 通用分页响应。
-impl From<(u64, Vec<sys_user::Model>)> for PageResult<UserResp> {
-    fn from((total, items): (u64, Vec<sys_user::Model>)) -> Self {
-        PageResult::new(total, items.into_iter().map(UserResp::from).collect())
+/// 用户域特有转换：repo 的 `(total, total_pages, Vec<Model>)` → 通用分页响应。
+impl From<(u64, u64, Vec<sys_user::Model>)> for PageResult<UserResp> {
+    fn from((total, total_pages, items): (u64, u64, Vec<sys_user::Model>)) -> Self {
+        PageResult::new(
+            total,
+            total_pages,
+            items.into_iter().map(UserResp::from).collect(),
+        )
     }
 }
 

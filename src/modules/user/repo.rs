@@ -60,14 +60,14 @@ pub async fn find_roles_by_user_id(
 /// 分页 + 动态过滤查询（列表接口核心）：
 /// - 过滤条件用 `Condition` 动态拼接（有值才 add，无值跳过）
 /// - 分页用 `PaginatorTrait::paginate`，`page_index` 为 0-based
-/// 返回 `(总条数, 当前页数据)`。
+/// 返回 `(总条数, 总页数, 当前页数据)`。
 pub async fn find_page(
     db: &DatabaseConnection,
     keyword: Option<String>,
     status: Option<i8>,
     page_index: u64,
     page_size: u64,
-) -> anyhow::Result<(u64, Vec<Model>)> {
+) -> anyhow::Result<(u64, u64, Vec<Model>)> {
     let mut cond = Condition::all();
     if let Some(kw) = keyword {
         cond = cond.add(sys_user::Column::Username.like(format!("%{kw}%")));
@@ -80,9 +80,11 @@ pub async fn find_page(
         .filter(cond)
         .filter(sys_user::Column::DeletedAt.is_null())
         .paginate(db, page_size);
-    let total = paginator.num_items().await?;
+    let items_and_pages = paginator.num_items_and_pages().await?;
+    let total = items_and_pages.number_of_items;
+    let total_pages = items_and_pages.number_of_pages;
     let items = paginator.fetch_page(page_index).await?;
-    Ok((total, items))
+    Ok((total, total_pages, items))
 }
 
 pub async fn create_user_with_roles(
@@ -171,16 +173,17 @@ mod tests {
         let inserted = model.insert(&db).await.unwrap();
 
         // 关键词命中 + 0-based 第 0 页
-        let (total, items) = find_page(&db, Some(username.clone()), None, 0, 10)
+        let (total, total_page, items) = find_page(&db, Some(username.clone()), None, 0, 10)
             .await
             .unwrap();
         assert!(total >= 1);
         assert!(items.iter().any(|u| u.username == username));
 
         // 关键词不命中
-        let (total, _) = find_page(&db, Some("no_such_keyword_xyz".to_string()), None, 0, 10)
-            .await
-            .unwrap();
+        let (total, total_page, _) =
+            find_page(&db, Some("no_such_keyword_xyz".to_string()), None, 0, 10)
+                .await
+                .unwrap();
         assert_eq!(total, 0);
 
         sys_user::Entity::delete_by_id(inserted.id)
@@ -303,7 +306,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (total, items) = result.unwrap();
+        let (total, total_page, items) = result.unwrap();
         assert_eq!(total, 1);
         assert!(items.iter().any(|user| user.username == live_username));
         assert!(

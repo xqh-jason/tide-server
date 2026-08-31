@@ -5,7 +5,7 @@
 //! - `#[endpoint]` 额外要求 Err 实现 `salvo::oapi::EndpointOutRegister`（OpenAPI 文档化）。
 //!
 //! 因此为 `AppError` 实现 `Writer` + `EndpointOutRegister`，错误统一输出
-//! `{code, data, message}` 契约体（与 vben successCode=200 对齐）。
+//! `{code, data, message}` 契约体（`code`: 1 成功 / 0 失败，与 vben successCode=1 对齐）。
 
 use salvo::oapi::{self, EndpointOutRegister, ToSchema};
 use salvo::prelude::*;
@@ -23,35 +23,27 @@ pub enum AppError {
 }
 
 /// 让 AppError 成为合法的 handler 错误返回类型（运行时）。
-/// Biz → HTTP 400 + 业务码 400；Internal → HTTP 500 + 业务码 500。
+/// 契约：业务/系统失败统一 HTTP 200 + `code: 0` + message（具体提示由 message 承担）；
+/// Biz 返回业务消息，Internal 返回固定内部错误消息。
 #[async_trait]
 impl Writer for AppError {
     async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
-        let (code, status, message) = match &self {
-            AppError::Biz(msg) => (400, StatusCode::BAD_REQUEST, msg.clone()),
-            AppError::Internal(_) => (
-                500,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal error".to_string(),
-            ),
+        let message = match &self {
+            AppError::Biz(msg) => msg.clone(),
+            AppError::Internal(_) => "internal error".to_string(),
         };
-        res.status_code(status);
-        res.render(Json(ApiResponse::<()>::fail(code, message)));
+        res.render(Json(ApiResponse::<()>::fail(message)));
     }
 }
 
 /// 让 AppError 的错误响应出现在 OpenAPI 文档中（#[endpoint] 要求）。
 impl EndpointOutRegister for AppError {
     fn register(components: &mut oapi::Components, operation: &mut oapi::Operation) {
-        for (code, desc) in [
-            (StatusCode::BAD_REQUEST, "bad request"),
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
-        ] {
-            operation.responses.insert(
-                code.as_str(),
-                oapi::Response::new(desc)
-                    .add_content("application/json", ApiResponse::<()>::to_schema(components)),
-            );
-        }
+        // HTTP 状态码统一 200，错误由响应体 code（0）区分
+        operation.responses.insert(
+            "200",
+            oapi::Response::new("business error")
+                .add_content("application/json", ApiResponse::<()>::to_schema(components)),
+        );
     }
 }

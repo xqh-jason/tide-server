@@ -29,7 +29,7 @@ pub async fn page_users(
     status: Option<i8>,
     page_index: u64,
     page_size: u64,
-) -> anyhow::Result<(u64, Vec<sys_user::Model>)> {
+) -> anyhow::Result<(u64, u64, Vec<sys_user::Model>)> {
     user_repo::find_page(db, keyword, status, page_index, page_size).await
 }
 
@@ -136,6 +136,7 @@ pub async fn create_user(
 
     Ok(UserResp::from(model))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

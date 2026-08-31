@@ -30,6 +30,7 @@ graphify-out/
 src/graphify-out/
 .graphify-out/
 .codex/skills/
+.zcode/
 .agents/skills/
 .opencode/skills/
 .trae/skills/

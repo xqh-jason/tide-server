@@ -87,9 +87,9 @@
 
 ### 3.3 响应体契约（容易踩坑）
 
-- vben v5 官方模板（v5.2 / v5.4 的 web-ele `request.ts`）硬编码 `code === 0` 为成功；`defaultResponseInterceptor` 的默认 `successCode` 也是 0。**后端用 `code=200` 时，前端 `request.ts` 必须显式改为 `code === 200`（或 `successCode: 200`）——这是必做定制项，不是默认匹配。**
-- **后端统一响应体：`{ "code": 200, "data": ..., "message": "ok" }`**，`code=200` 为成功，失败返回非 200 code + message。
-- ⚠️ GVA 是 `{ code: 0, data, msg }`——code 值（0 vs 200）和 msg 字段名都不同，不能照抄；要么后端按 vben 默认返回 `code=0`，要么后端用 `code=200` 并在前端显式配置 `successCode: 200`（本项目采用后者，见 3.3 第一条）。
+- vben v5 官方模板（v5.2 / v5.4 的 web-ele `request.ts`）硬编码 `code === 0` 为成功；`defaultResponseInterceptor` 的默认 `successCode` 也是 0。**本项目后端用 `code=1` 表示成功，前端 `request.ts` 必须显式改为 `code === 1`（或 `successCode: 1`）——这是必做定制项，不是默认匹配。**
+- **后端统一响应体：`{ "code": 1, "data": ..., "message": "ok" }`**，`code=1` 为成功、`code=0` 为失败（失败具体提示看 `message`）；HTTP 状态码一律 200，仅鉴权失败例外返回 HTTP 401。
+- ⚠️ GVA 是 `{ code: 0, data, msg }`——本项目成功码是 `1`（既不是 GVA 的 0，也不是 vben 默认的 0），字段名用 `message` 而非 `msg`，不能照抄；前端须显式配置 `successCode: 1`。
 - 401 语义：token 过期返回 401，vben 内置 authenticateResponseInterceptor 处理登出/刷新（可选实现 refresh token 队列）。
 
 ### 3.4 sys_menu → vben 菜单 schema 字段映射
@@ -244,7 +244,7 @@ salvo-vben-admin/
 前端（独立仓库或 apps/web-ele）：
     ├── preferences.ts      # accessMode='backend'
     ├── src/router/access.ts# fetchMenuListAsync → /user/menus
-    ├── src/api/request.ts  # 响应体 code=200 契约（默认已匹配）
+    ├── src/api/request.ts  # 响应体 code=1 成功 / 0 失败契约（successCode: 1）
     └── src/views/system/   # user / role / menu / dict / log / monitor / task 页面
 ```
 
@@ -254,7 +254,7 @@ salvo-vben-admin/
 
 1. **vben 版本**：用 v5 的 web-ele 子应用（`pnpm run dev:ele`），不要用 v2 分支；强制 pnpm。
 2. **Salvo 版本**：0.95.x 起基于 Rust 2024 edition / MSRV 1.94；别用 <0.89.3（OOM 漏洞）。
-3. **响应体契约**：`{code:200,data,message}`，不是 GVA 的 `{code:0,data,msg}`；注意 vben 官方模板默认成功码是 0（`code === 0`），`code=200` 必须显式修改前端 request.ts，否则成功响应全部被判为错误。
+3. **响应体契约**：`{code:1,data,message}`，`code=1` 成功、`code=0` 失败，提示看 `message`；不是 GVA 的 `{code:0,data,msg}`；注意 vben 官方模板默认成功码是 0（`code === 0`），前端 request.ts 必须显式配置 `successCode: 1`，否则成功响应全部被判为错误。
 4. **权限码与菜单分离**：vben 按钮权限是全局 accessCodes 数组，不挂在菜单树节点上。
 5. **component 路径**：必须能被 `import.meta.glob` 命中 views 目录；页面文件要真实存在。
 6. **SeaORM 迁移**：用 `sea-orm-migration` + `sea-orm-cli migrate up` 执行；新增表/字段一律走迁移文件，不要手改库。

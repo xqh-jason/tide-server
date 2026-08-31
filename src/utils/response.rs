@@ -2,9 +2,10 @@ use salvo::oapi::{self, EndpointOutRegister, ToSchema};
 use salvo::prelude::*;
 use serde::Serialize;
 
-/// 统一响应体：`{ code, data, message }`，`code = 200` 表示成功。
+/// 统一响应体：`{ code, data, message }`。
+/// `code` 为简单枚举：`1` 成功、`0` 失败；具体提示看 `message`。
 /// ⚠️ vben v5 官方模板默认成功码是 `code === 0`（defaultResponseInterceptor 默认
-/// successCode=0），前端 request.ts 必须显式改为 `code === 200`（successCode: 200）
+/// successCode=0），前端 request.ts 必须显式改为 `code === 1`（successCode: 1）
 /// 才能对接本契约，不是默认匹配。
 /// ToSchema 用于 #[endpoint] 生成 OpenAPI 文档。
 #[derive(Debug, Serialize, ToSchema)]
@@ -39,18 +40,18 @@ impl<T: ToSchema + oapi::ComposeSchema + 'static> EndpointOutRegister for ApiRes
 impl<T: Serialize> ApiResponse<T> {
     pub fn ok(data: T) -> Self {
         Self {
-            code: 200,
+            code: 1,
             data,
             message: "ok".to_string(),
         }
     }
 
-    pub fn fail(code: i32, message: impl Into<String>) -> Self
+    pub fn fail(message: impl Into<String>) -> Self
     where
         T: Default,
     {
         Self {
-            code,
+            code: 0,
             data: T::default(),
             message: message.into(),
         }
