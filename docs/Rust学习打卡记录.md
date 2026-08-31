@@ -133,3 +133,27 @@ static GLOBAL: Jemalloc = Jemalloc;
 - 已在项目模块注释中固化权限码约定。
 - `cargo fmt --check` 通过。
 - `cargo test` 通过：28 passed / 0 failed。
+
+---
+
+## 2026-08-31（W3 角色域收尾 + 契约统一 + 重构）
+
+- 目标：完成角色域 CRUD，统一响应契约，做一轮全代码优化检查。
+- 完成：
+  - 角色域四件套 + `POST /api/v1/role/{list,create,update,get,delete}` 五个端点（认证保护），
+    创建/更新在同一事务维护 `sys_role_menu` / `sys_role_api` 关联（全量替换、空数组清空）。
+  - 响应体契约统一：`code = 1` 成功 / `code = 0` 失败，HTTP 一律 200，仅鉴权失败保留 401。
+  - 分页重构：新增 `PageData<T>` + 泛型转换 + 通用 `paginate<E>()`，repo 分页机械动作收敛到一处，
+    各域 dto 删除重复的 `From` 实现。
+  - 优化修复：登录拒绝禁用用户（防枚举）、logout TTL 防御、`from_depot` 错误改 `Internal`、
+    菜单树深度上限（防超深链递归）、接口命名与挂载顺序统一（list → create → update → get → delete）。
+  - 测试 57/57 全绿，`cargo fmt --check` 通过；提交已由用户完成。
+- 卡点：
+  - `role_key` 唯一索引与软删除冲突：同 key 两条记录（正常 + 软删）物理插不进去，
+    测试改为两个 key 分别验证"正常占位 / 软删占位"。
+  - SeaORM 泛型 `paginate` 需要 `E::Model: FromQueryResult + Send + Sync` bound，
+    且 `PaginatorTrait` 必须显式导入（曾误删导致方法解析失败）。
+  - repo / service 错误分层：repo 用 `anyhow` 传播技术错误，service 用 `AppError` 分类业务错误，
+    `#[from] anyhow::Error` 自动把技术错误归为 `Internal`；业务校验放 service，否则会被吞成 500。
+- 明日：菜单域 CRUD——保留 `/user/menus` 契约，新增菜单管理端点，补普通用户按 `sys_role_menu`
+  过滤菜单树（当前 TODO），按钮权限码同源生效。
