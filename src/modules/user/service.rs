@@ -8,8 +8,9 @@ use crate::modules::permission::{
     SUPER_ROLE_KEY, SYSTEM_USER_CREATE, service as permission_service,
 };
 use crate::modules::role::service as role_service;
-use crate::modules::user::dto::{CreateUserReq, UserInfoResp, UserResp};
+use crate::modules::user::dto::{CreateUserReq, UserInfoResp, UserListReq, UserResp};
 use crate::modules::user::repo as user_repo;
+use crate::utils::PageData;
 use crate::utils::crypt;
 use crate::utils::error::AppError;
 
@@ -25,12 +26,16 @@ pub async fn get_by_username(
 /// 分页查询用户。`page_index` 为 0-based（由 handler 层从 PageQuery 转换）。
 pub async fn page_users(
     db: &sea_orm::DatabaseConnection,
-    keyword: Option<String>,
-    status: Option<i8>,
-    page_index: u64,
-    page_size: u64,
-) -> anyhow::Result<(u64, u64, Vec<sys_user::Model>)> {
-    user_repo::find_page(db, keyword, status, page_index, page_size).await
+    req: &UserListReq,
+) -> anyhow::Result<PageData<sys_user::Model>> {
+    user_repo::find_page(
+        db,
+        req.keyword.clone(),
+        req.status,
+        req.page.page_index(),
+        req.page.page_size(),
+    )
+    .await
 }
 
 /// 当前登录用户完整信息（契约 §3.2 的 `/user/info`）。
@@ -554,7 +559,6 @@ mod tests {
 
         let auth = AuthUser {
             user_id: user.id,
-            username: username.clone(),
             roles: vec![],
         };
         let result = get_user_info(&db, &auth).await;

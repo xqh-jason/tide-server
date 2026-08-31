@@ -1,6 +1,7 @@
 //! 分页通用结构：请求 `PageQuery`（JSON body 内嵌）+ 响应 `PageResult`（跨模块复用）。
 
 use salvo::oapi::ToSchema;
+use sea_orm::{DatabaseConnection, EntityTrait, FromQueryResult, PaginatorTrait, Select};
 use serde::{Deserialize, Serialize};
 
 /// 分页请求（JSON body 源，通用）。字段**只在此定义一次**：
@@ -45,4 +46,59 @@ impl<T> PageResult<T> {
             items,
         }
     }
+}
+
+/// repo 层分页返回：带名字的三元组，替代 `(u64, u64, Vec<T>)`。
+/// 三个字段都有语义名，调用处不会再把 total 和 total_pages 弄混。
+#[derive(Debug, Clone)]
+pub struct PageData<T> {
+    pub total: u64,       // 总条数
+    pub total_pages: u64, // 总页数
+    pub items: Vec<T>,    // 当前页数据
+}
+
+/// 泛型转换：只要域响应实现了 `From<Model>`（如 `RoleResp: From<sys_role::Model>`），
+/// `PageData<Model>` 就能自动变成 `PageResult<域Resp>`。
+/// 各域 dto 里手写的 `impl From<(u64, u64, Vec<Model>)>` 全部可以删除。
+impl<T, U> From<PageData<T>> for PageResult<U>
+where
+    U: From<T>,
+{
+    fn from(data: PageData<T>) -> Self {
+        PageResult::new(
+            data.total,
+            data.total_pages,
+            data.items.into_iter().map(U::from).collect(),
+        )
+    }
+}
+
+/// 通用分页执行器：把「分页机械动作」收敛到一处。
+///
+/// 各域 repo 只负责拼过滤条件，构造出 `Select<E>` 后调用本函数，
+/// 不再各自复制「num_items_and_pages + fetch_page」这一段。
+///
+/// - `select`：已带过滤条件的查询（`Entity::find().filter(...)` 的结果）
+/// - `page_index`：0-based（由 `PageQuery::page_index()` 转换）
+/// - `page_size`：1..=100（`PageQuery::page_size()` 已 clamp）
+pub async fn paginate<E>(
+    select: Select<E>,
+    db: &DatabaseConnection,
+    page_index: u64,
+    page_size: u64,
+) -> anyhow::Result<PageData<E::Model>>
+where
+    E: EntityTrait,
+    E::Model: FromQueryResult + Sized + Send + Sync,
+{
+    // paginate / num_items_and_pages / fetch_page 来自 PaginatorTrait
+    let paginator = select.paginate(db, page_size);
+    let items_and_pages = paginator.num_items_and_pages().await?;
+    let items = paginator.fetch_page(page_index).await?;
+
+    Ok(PageData {
+        total: items_and_pages.number_of_items,
+        total_pages: items_and_pages.number_of_pages,
+        items,
+    })
 }

@@ -30,6 +30,9 @@ pub async fn find_permission_codes_by_user_id(
         .into_iter()
         .map(|role_menu| role_menu.menu_id)
         .collect::<Vec<_>>();
+    if menu_ids.is_empty() {
+        return Ok(Vec::new());
+    }
 
     let menus = sys_menu::Entity::find()
         .filter(sys_menu::Column::Id.is_in(menu_ids))

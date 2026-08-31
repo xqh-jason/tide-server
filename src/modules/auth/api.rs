@@ -26,8 +26,9 @@ pub async fn login(depot: &mut Depot, body: JsonBody<LoginReq>) -> ApiResult<Log
 pub async fn logout(depot: &mut Depot, req: &mut Request) -> ApiResult<()> {
     let state = AppState::from_depot(depot)?;
     let token = bearer_token(req).ok_or_else(|| AppError::Biz("unauthorized".into()))?;
-    // 黑名单保留时间对齐 token 生命周期，避免黑名单表无限增长
-    let ttl = Duration::from_secs(state.config.jwt.ttl_seconds.max(0) as u64);
+    // 黑名单保留时间对齐 token 生命周期，避免黑名单表无限增长；
+    // 下限 1 秒防御 ttl=0 时 Duration::ZERO 导致黑名单写入被忽略。
+    let ttl = Duration::from_secs(state.config.jwt.ttl_seconds.max(1) as u64);
     state
         .cache
         .set(&format!("jwt:blacklist:{token}"), "1".into(), ttl);

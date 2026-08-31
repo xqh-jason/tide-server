@@ -17,8 +17,16 @@ pub async fn login(
         .await?
         .ok_or_else(|| AppError::Biz("用户名或密码错误".into()))?;
 
+    if user.status != 1 {
+        return Err(AppError::Biz("用户已被禁用".into()));
+    }
+
     // 密码校验失败与用户不存在返回同一提示，避免账号枚举
     if !crypt::verify_password(&req.password, &user.password) {
+        return Err(AppError::Biz("用户名或密码错误".into()));
+    }
+    // 禁用用户同样拒绝登录（提示保持一致，不泄露账号状态）
+    if user.status != 1 {
         return Err(AppError::Biz("用户名或密码错误".into()));
     }
 
@@ -176,5 +184,43 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, AppError::Biz(_)));
+    }
+
+    /// 禁用用户（status=0）即使密码正确也不允许登录，且与用户不存在返回同一提示（防枚举）。
+    #[tokio::test]
+    async fn login_disabled_user_returns_biz_error() {
+        let db = test_db().await;
+        let username = unique_name("login_disabled");
+        let user = sys_user::ActiveModel {
+            username: Set(username.clone()),
+            password: Set(crypt::hash_password("pass123").unwrap()),
+            nickname: Set("禁用登录测试".to_string()),
+            status: Set(0),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let err = login(
+            &db,
+            &test_jwt_cfg(),
+            LoginReq {
+                username,
+                password: "pass123".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        sys_user::Entity::delete_by_id(user.id)
+            .exec(&db)
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(err, AppError::Biz(_)),
+            "禁用用户登录应返回 Biz 业务错误，实际：{err:?}"
+        );
     }
 }

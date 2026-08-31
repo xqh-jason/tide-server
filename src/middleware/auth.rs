@@ -18,7 +18,6 @@ use crate::utils::response::ApiResponse;
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: u64,
-    pub username: String,
     pub roles: Vec<String>,
 }
 
@@ -27,7 +26,8 @@ impl AuthUser {
     pub fn from_depot(depot: &Depot) -> Result<Self, AppError> {
         depot
             .get_typed::<AuthUser>()
-            .map_err(|_| AppError::Biz("unauthorized".into()))
+            // 受保护路由必过 AuthRequired，缺失属于内部故障而非业务校验失败
+            .map_err(|_| AppError::Internal(anyhow::anyhow!("auth user not found")))
             .cloned()
     }
 }
@@ -88,7 +88,6 @@ impl Handler for AuthRequired {
                 Ok(true) => {
                     depot.insert_typed(AuthUser {
                         user_id: claims.user_id,
-                        username: claims.username,
                         roles: claims.roles,
                     });
                 }

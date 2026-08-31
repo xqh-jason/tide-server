@@ -27,10 +27,13 @@ pub struct Jwt {
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
-        let cfg = config::Config::builder()
+        let cfg: Config = config::Config::builder()
             .add_source(config::File::with_name("config"))
             .build()?
             .try_deserialize()?;
+        if cfg.jwt.ttl_seconds <= 0 {
+            anyhow::bail!("config.jwt.ttl_seconds 必须大于 0");
+        }
         Ok(cfg)
     }
 }

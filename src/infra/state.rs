@@ -28,7 +28,8 @@ impl AppState {
     pub fn from_depot(depot: &Depot) -> Result<Self, AppError> {
         depot
             .get_typed::<AppState>()
-            .map_err(|_| AppError::Biz("app state not found".into()))
+            // 状态缺失属于内部故障（正常路径由 InjectState 保证），不是业务校验失败
+            .map_err(|_| AppError::Internal(anyhow::anyhow!("app state not found")))
             .cloned()
     }
 }

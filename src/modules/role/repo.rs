@@ -46,7 +46,7 @@ pub async fn find_page(
     status: Option<i8>,
     page_index: u64,
     page_size: u64,
-) -> anyhow::Result<(u64, u64, Vec<sys_role::Model>)> {
+) -> anyhow::Result<crate::utils::PageData<sys_role::Model>> {
     let mut cond = Condition::all();
 
     if let Some(status) = status {
@@ -60,18 +60,10 @@ pub async fn find_page(
         cond = cond.add(kw_cond);
     }
 
-    let paginator = sys_role::Entity::find()
+    let select = sys_role::Entity::find()
         .filter(cond)
-        .filter(sys_role::Column::DeletedAt.is_null())
-        .paginate(db, page_size);
-    // 使用 num_items_and_pages 一次性获取总数和总页数
-    let items_and_pages = paginator.num_items_and_pages().await?;
-    let total = items_and_pages.number_of_items;
-    let total_pages = items_and_pages.number_of_pages;
-
-    // 获取指定页的数据
-    let items = paginator.fetch_page(page_index).await?;
-    Ok((total, total_pages, items))
+        .filter(sys_role::Column::DeletedAt.is_null());
+    crate::utils::paginate(select, db, page_index, page_size).await
 }
 
 /// 事务写入角色并维护菜单/API 关联（关系表硬删除，只插不判软删）。
@@ -506,21 +498,19 @@ mod tests {
         )
         .await;
 
-        let (total_all, _total_pages, items_all) =
-            find_page(&db, Some(keyword.clone()), None, 0, 10)
-                .await
-                .unwrap();
-        let (total_enabled, _total_pages, items_enabled) =
-            find_page(&db, Some(keyword.clone()), Some(1), 0, 10)
-                .await
-                .unwrap();
+        let data_all = find_page(&db, Some(keyword.clone()), None, 0, 10)
+            .await
+            .unwrap();
+        let data_enabled = find_page(&db, Some(keyword.clone()), Some(1), 0, 10)
+            .await
+            .unwrap();
 
         cleanup(&db, &[live.id, disabled.id, deleted.id], &[], &[]).await;
 
-        assert_eq!(total_all, 2, "软删除角色不应进入分页");
-        assert_eq!(items_all.len(), 2);
-        assert_eq!(total_enabled, 1, "status 过滤应只保留启用角色");
-        assert_eq!(items_enabled[0].id, live.id);
+        assert_eq!(data_all.total, 2, "软删除角色不应进入分页");
+        assert_eq!(data_all.items.len(), 2);
+        assert_eq!(data_enabled.total, 1, "status 过滤应只保留启用角色");
+        assert_eq!(data_enabled.items[0].id, live.id);
     }
 
     #[tokio::test]

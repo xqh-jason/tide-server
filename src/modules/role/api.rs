@@ -15,9 +15,9 @@ pub async fn list_roles(
 ) -> ApiResult<PageResult<RoleResp>> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let (total, total_pages, items) = role_service::page_roles(&state.db, &req).await?;
+    let data = role_service::page_roles(&state.db, &req).await?;
 
-    Ok(ApiResponse::ok((total, total_pages, items).into()))
+    Ok(ApiResponse::ok(data.into()))
 }
 
 #[endpoint]
@@ -26,20 +26,6 @@ pub async fn create_role(depot: &mut Depot, body: JsonBody<CreateRoleReq>) -> Ap
     let req = body.into_inner();
     let role = role_service::create_role(&state.db, &req).await?;
     Ok(ApiResponse::ok(RoleResp::from(role)))
-}
-
-#[endpoint]
-pub async fn delete_role(depot: &mut Depot, body: JsonBody<RoleIdReq>) -> ApiResult<()> {
-    let state = AppState::from_depot(depot)?;
-    let req = body.into_inner();
-    let role = role_service::find_by_id(&state.db, req.id).await?;
-    if let Some(_) = role {
-        role_service::delete_role_by_id(&state.db, req.id).await?;
-    } else {
-        return Err(AppError::Biz("角色不存在".to_string()));
-    }
-
-    Ok(ApiResponse::ok(()))
 }
 
 #[endpoint]
@@ -59,4 +45,18 @@ pub async fn get_role(depot: &mut Depot, body: JsonBody<RoleIdReq>) -> ApiResult
     } else {
         Err(AppError::Biz("角色不存在".to_string()))
     }
+}
+
+#[endpoint]
+pub async fn delete_role(depot: &mut Depot, body: JsonBody<RoleIdReq>) -> ApiResult<()> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let role = role_service::find_by_id(&state.db, req.id).await?;
+    if let Some(_) = role {
+        role_service::delete_role_by_id(&state.db, req.id).await?;
+    } else {
+        return Err(AppError::Biz("角色不存在".to_string()));
+    }
+
+    Ok(ApiResponse::ok(()))
 }

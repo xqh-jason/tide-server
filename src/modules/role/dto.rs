@@ -4,7 +4,7 @@ use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::entity::sys_role;
-use crate::utils::{PageQuery, PageResult};
+use crate::utils::PageQuery;
 
 /// 角色响应体。
 #[derive(Debug, Serialize, ToSchema)]
@@ -27,17 +27,6 @@ impl From<sys_role::Model> for RoleResp {
             status: m.status,
             remark: m.remark,
         }
-    }
-}
-
-/// 角色域特有转换：repo 的 `(total, total_pages, Vec<Model>)` → 通用分页响应。
-impl From<(u64, u64, Vec<sys_role::Model>)> for PageResult<RoleResp> {
-    fn from((total, total_pages, items): (u64, u64, Vec<sys_role::Model>)) -> Self {
-        PageResult::new(
-            total,
-            total_pages,
-            items.into_iter().map(RoleResp::from).collect(),
-        )
     }
 }
 

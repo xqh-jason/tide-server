@@ -8,6 +8,19 @@ use crate::modules::user::dto::{CreateUserReq, UserInfoResp, UserListReq, UserRe
 use crate::modules::user::service as user_service;
 use crate::utils::{ApiResponse, ApiResult, PageResult};
 
+/// 用户列表（POST + JSON body）。分页字段（PageQuery）与过滤字段（keyword/status）
+/// 通过 `#[serde(flatten)]` 合并为单个 `UserListReq`，一个 `JsonBody` 提取器取全部。
+#[endpoint]
+pub async fn list_users(
+    depot: &mut Depot,
+    body: JsonBody<UserListReq>,
+) -> ApiResult<PageResult<UserResp>> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let data = user_service::page_users(&state.db, &req).await?;
+    Ok(ApiResponse::ok(data.into()))
+}
+
 /// 按用户名查询用户（POST + JSON body：`{ "username": "..." }`）。
 ///
 /// 说明：`ApiResult<T>` = `Result<ApiResponse<T>, AppError>`，Ok/Err 都实现 `Writer`，
@@ -20,26 +33,6 @@ pub async fn get_by_username(
     let state = AppState::from_depot(depot)?;
     let user = user_service::get_by_username(&state.db, &body.username).await?;
     Ok(ApiResponse::ok(user.map(UserResp::from)))
-}
-
-/// 用户列表（POST + JSON body）。分页字段（PageQuery）与过滤字段（keyword/status）
-/// 通过 `#[serde(flatten)]` 合并为单个 `UserListReq`，一个 `JsonBody` 提取器取全部。
-#[endpoint]
-pub async fn list_users(
-    depot: &mut Depot,
-    body: JsonBody<UserListReq>,
-) -> ApiResult<PageResult<UserResp>> {
-    let state = AppState::from_depot(depot)?;
-    let req = body.into_inner();
-    let (total, total_pages, items) = user_service::page_users(
-        &state.db,
-        req.keyword,
-        req.status,
-        req.page.page_index(),
-        req.page.page_size(),
-    )
-    .await?;
-    Ok(ApiResponse::ok((total, total_pages, items).into()))
 }
 
 /// 当前登录用户信息（契约 §3.2）。认证中间件已注入 `AuthUser`。

@@ -2,7 +2,7 @@ use crate::entity::sys_user::Model;
 use crate::entity::{sys_role, sys_user, sys_user_role};
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, PaginatorTrait, TransactionTrait};
+use sea_orm::{Condition, DatabaseConnection, TransactionTrait};
 
 pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
     Ok(sys_user::Entity::find_by_id(id)
@@ -60,14 +60,14 @@ pub async fn find_roles_by_user_id(
 /// 分页 + 动态过滤查询（列表接口核心）：
 /// - 过滤条件用 `Condition` 动态拼接（有值才 add，无值跳过）
 /// - 分页用 `PaginatorTrait::paginate`，`page_index` 为 0-based
-/// 返回 `(总条数, 总页数, 当前页数据)`。
+/// 返回 `PageData<Model>`（总条数 / 总页数 / 当前页数据）。
 pub async fn find_page(
     db: &DatabaseConnection,
     keyword: Option<String>,
     status: Option<i8>,
     page_index: u64,
     page_size: u64,
-) -> anyhow::Result<(u64, u64, Vec<Model>)> {
+) -> anyhow::Result<crate::utils::PageData<Model>> {
     let mut cond = Condition::all();
     if let Some(kw) = keyword {
         cond = cond.add(sys_user::Column::Username.like(format!("%{kw}%")));
@@ -76,15 +76,10 @@ pub async fn find_page(
         cond = cond.add(sys_user::Column::Status.eq(s));
     }
 
-    let paginator = sys_user::Entity::find()
+    let select = sys_user::Entity::find()
         .filter(cond)
-        .filter(sys_user::Column::DeletedAt.is_null())
-        .paginate(db, page_size);
-    let items_and_pages = paginator.num_items_and_pages().await?;
-    let total = items_and_pages.number_of_items;
-    let total_pages = items_and_pages.number_of_pages;
-    let items = paginator.fetch_page(page_index).await?;
-    Ok((total, total_pages, items))
+        .filter(sys_user::Column::DeletedAt.is_null());
+    crate::utils::paginate(select, db, page_index, page_size).await
 }
 
 pub async fn create_user_with_roles(
@@ -117,6 +112,18 @@ pub async fn create_user_with_roles(
 mod tests {
     use super::*;
     use sea_orm::{ActiveModelTrait, Database, Set};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 唯一命名：`<prefix>_<pid>_<seq>`，避免并行测试冲突。
+    fn unique_name(prefix: &str) -> String {
+        format!(
+            "{prefix}_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        )
+    }
 
     /// 测试数据库连接：读 config.toml 连真库（需 MySQL 运行：docker compose up -d）
     async fn test_db() -> sea_orm::DatabaseConnection {
@@ -127,7 +134,7 @@ mod tests {
     #[tokio::test]
     async fn test_find_by_username_found() {
         let db = test_db().await;
-        let username = format!("test_user_{}", std::process::id()); // 唯一名，避免并行冲突
+        let username = unique_name("test_user");
 
         // 1. 插入测试数据（ActiveModel 写入，NotSet 字段保持默认）
         let model = sys_user::ActiveModel {
@@ -162,7 +169,7 @@ mod tests {
     #[tokio::test]
     async fn test_find_page() {
         let db = test_db().await;
-        let username = format!("page_user_{}", std::process::id()); // 唯一名
+        let username = unique_name("page_user");
 
         let model = sys_user::ActiveModel {
             username: Set(username.clone()),
@@ -173,18 +180,17 @@ mod tests {
         let inserted = model.insert(&db).await.unwrap();
 
         // 关键词命中 + 0-based 第 0 页
-        let (total, total_page, items) = find_page(&db, Some(username.clone()), None, 0, 10)
+        let data = find_page(&db, Some(username.clone()), None, 0, 10)
             .await
             .unwrap();
-        assert!(total >= 1);
-        assert!(items.iter().any(|u| u.username == username));
+        assert!(data.total >= 1);
+        assert!(data.items.iter().any(|u| u.username == username));
 
         // 关键词不命中
-        let (total, total_page, _) =
-            find_page(&db, Some("no_such_keyword_xyz".to_string()), None, 0, 10)
-                .await
-                .unwrap();
-        assert_eq!(total, 0);
+        let data = find_page(&db, Some("no_such_keyword_xyz".to_string()), None, 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(data.total, 0);
 
         sys_user::Entity::delete_by_id(inserted.id)
             .exec(&db)
@@ -195,7 +201,7 @@ mod tests {
     #[tokio::test]
     async fn create_user_with_roles_supports_empty_role_ids() {
         let db = test_db().await;
-        let username = format!("create_user_empty_roles_{}", std::process::id());
+        let username = unique_name("create_user_empty_roles");
 
         let created = create_user_with_roles(
             &db,
@@ -306,11 +312,14 @@ mod tests {
             .await
             .unwrap();
 
-        let (total, total_page, items) = result.unwrap();
-        assert_eq!(total, 1);
-        assert!(items.iter().any(|user| user.username == live_username));
+        let data = result.unwrap();
+        assert_eq!(data.total, 1);
+        assert!(data.items.iter().any(|user| user.username == live_username));
         assert!(
-            !items.iter().any(|user| user.username == deleted_username),
+            !data
+                .items
+                .iter()
+                .any(|user| user.username == deleted_username),
             "用户分页不应包含软删除记录"
         );
     }

@@ -1,3 +1,4 @@
+use crate::utils::PageData;
 use crate::{
     modules::role::{
         dto::{CreateRoleReq, RoleListReq, UpdateRoleReq},
@@ -12,16 +13,15 @@ use crate::entity::sys_role;
 pub async fn page_roles(
     db: &DatabaseConnection,
     req: &RoleListReq,
-) -> anyhow::Result<(u64, u64, Vec<sys_role::Model>)> {
-    let (total, count, roles) = role_repo::find_page(
+) -> anyhow::Result<PageData<sys_role::Model>> {
+    role_repo::find_page(
         db,
         req.keyword.clone(),
         req.status,
-        req.page.page_index().clone(),
-        req.page.page_size().clone(),
+        req.page.page_index(),
+        req.page.page_size(),
     )
-    .await?;
-    Ok((total, count, roles))
+    .await
 }
 
 pub async fn find_by_ids(

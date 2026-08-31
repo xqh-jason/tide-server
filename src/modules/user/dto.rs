@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::entity::sys_user;
 use crate::middleware::auth::AuthUser;
-use crate::utils::{PageQuery, PageResult};
+use crate::utils::PageQuery;
 
 /// 用户响应体（不含密码等敏感字段）。
 #[derive(Debug, Serialize, ToSchema)]
@@ -60,17 +60,6 @@ impl UserInfoResp {
             user_info: UserResp::from(user),
             roles: auth.roles.clone(),
         }
-    }
-}
-
-/// 用户域特有转换：repo 的 `(total, total_pages, Vec<Model>)` → 通用分页响应。
-impl From<(u64, u64, Vec<sys_user::Model>)> for PageResult<UserResp> {
-    fn from((total, total_pages, items): (u64, u64, Vec<sys_user::Model>)) -> Self {
-        PageResult::new(
-            total,
-            total_pages,
-            items.into_iter().map(UserResp::from).collect(),
-        )
     }
 }
 
