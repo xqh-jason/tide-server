@@ -54,6 +54,265 @@ fn render_entity_field(f: &FieldDef) -> String {
     }
 }
 
+/// repo 文件模板：数据访问 + 分页 + 软删 + 唯一查重 + 集成测试。
+pub fn render_repo(def: &DomainDef) -> String {
+    let entity = def.entity_ident();
+    let filter = format!("{}Filter", def.camel());
+    let unique_finders = render_unique_finders(def);
+    let tests = render_repo_tests(def);
+    format!(
+        r#"//! {comment}数据访问（codegen 生成）。
+
+use sea_orm::ActiveValue::Set;
+use sea_orm::entity::prelude::*;
+use sea_orm::{{Condition, DatabaseConnection}};
+
+use crate::entity::{entity};
+use crate::modules::{domain}::dto::{filter};
+
+/// 查询单个有效记录（排除软删除）。
+pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {{
+    let m = {entity}::Entity::find()
+        .filter({entity}::Column::Id.eq(id))
+        .filter({entity}::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+    Ok(m)
+}}
+
+/// 分页 + 动态过滤查询（过滤条件由域定义驱动）。
+pub async fn find_page(
+    db: &DatabaseConnection,
+    filter: &{filter},
+    page_index: u64,
+    page_size: u64,
+) -> anyhow::Result<crate::utils::PageData<Model>> {{
+    let mut cond = Condition::all();
+{filter_conds}
+    let select = {entity}::Entity::find()
+        .filter(cond)
+        .filter({entity}::Column::DeletedAt.is_null());
+    crate::utils::paginate(select, db, page_index, page_size).await
+}}
+
+/// 创建记录。
+pub async fn create(db: &DatabaseConnection, model: {entity}::ActiveModel) -> anyhow::Result<Model> {{
+    Ok(model.insert(db).await?)
+}}
+
+/// 更新记录（主键必须已设置）。
+pub async fn update(db: &DatabaseConnection, model: {entity}::ActiveModel) -> anyhow::Result<Model> {{
+    Ok(model.update(db).await?)
+}}
+
+/// 软删除：`deleted_at` 置为当前时间。
+pub async fn soft_delete(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {{
+    let Some(model) = find_by_id(db, id).await? else {{
+        return Ok(false);
+    }};
+    let mut model: {entity}::ActiveModel = model.into();
+    model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
+    model.update(db).await?;
+    Ok(true)
+}}
+
+{unique_finders}{tests}"#,
+        comment = def.comment,
+        entity = entity,
+        domain = def.domain,
+        filter = filter,
+        filter_conds = render_filter_conditions(def),
+    )
+}
+
+/// find_page 的过滤条件拼接代码（exact 精确 / keyword 模糊）。
+fn render_filter_conditions(def: &DomainDef) -> String {
+    let entity = def.entity_ident();
+    let mut out = String::new();
+    for f in &def.filters {
+        let column = format!("{entity}::Column::{}", crate::typing::column_ident(&f.field));
+        let op = if f.kind == "keyword" {
+            format!("like(format!(\"%{{v}}%\"))")
+        } else {
+            "eq(v)".to_string()
+        };
+        out.push_str(&format!(
+            "    if let Some(v) = &filter.{field} {{\n        cond = cond.add({column}.{op});\n    }}\n",
+            field = f.field,
+            column = column,
+            op = op,
+        ));
+    }
+    out
+}
+
+/// 唯一字段查重辅助：每个唯一字段生成 find_by_<field>_include_deleted。
+fn render_unique_finders(def: &DomainDef) -> String {
+    let entity = def.entity_ident();
+    def.unique_field_names()
+        .iter()
+        .map(|field| {
+            let column = format!("{entity}::Column::{}", crate::typing::column_ident(field));
+            let fdef = def.fields.iter().find(|f| &f.name == field).unwrap();
+            let param = crate::typing::finder_param_type(&fdef.rust_type);
+            format!(
+                r#"/// 查重辅助：{field} 唯一（含软删占位）。
+pub async fn find_by_{field}_include_deleted(
+    db: &DatabaseConnection,
+    {field}: {param},
+) -> anyhow::Result<Option<Model>> {{
+    let m = {entity}::Entity::find()
+        .filter({column}.eq({field}))
+        .one(db)
+        .await?;
+    Ok(m)
+}}
+
+"#,
+                field = field,
+                column = column,
+                param = param,
+                entity = entity,
+            )
+        })
+        .collect()
+}
+
+/// repo 尾部集成测试：软删过滤、soft_delete、分页过滤（唯一命名 + 断言前 cleanup）。
+fn render_repo_tests(def: &DomainDef) -> String {
+    let entity = def.entity_ident();
+    let seed_fields = render_seed_fields(def);
+    let filter_fields = render_filter_none_fields(def);
+    format!(
+        r#"
+#[cfg(test)]
+mod tests {{
+    use super::*;
+    use crate::entity::{entity};
+    use sea_orm::{{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set}};
+    use std::sync::atomic::{{AtomicU64, Ordering}};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn unique(prefix: &str) -> String {{
+        format!(
+            "{{prefix}}_{{}}_{{}}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        )
+    }}
+
+    async fn test_db() -> DatabaseConnection {{
+        let config = crate::infra::config::Config::load().unwrap();
+        Database::connect(&config.database.url).await.unwrap()
+    }}
+
+    async fn seed(db: &DatabaseConnection, deleted_at: Option<chrono::NaiveDateTime>) -> {entity}::Model {{
+        {entity}::ActiveModel {{
+{seed_fields}
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }}
+        .insert(db)
+        .await
+        .unwrap()
+    }}
+
+    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {{
+        {entity}::Entity::delete_many()
+            .filter({entity}::Column::Id.is_in(ids.iter().copied()))
+            .exec(db)
+            .await
+            .unwrap();
+    }}
+
+    #[tokio::test]
+    async fn find_by_id_excludes_soft_deleted() {{
+        let db = test_db().await;
+        let live = seed(&db, None).await;
+        let deleted = seed(&db, Some(chrono::Utc::now().naive_utc())).await;
+
+        let found_live = find_by_id(&db, live.id).await.unwrap();
+        let found_deleted = find_by_id(&db, deleted.id).await.unwrap();
+
+        cleanup(&db, &[live.id, deleted.id]).await;
+
+        assert_eq!(found_live.as_ref().map(|m| m.id), Some(live.id));
+        assert!(found_deleted.is_none(), "软删记录不应被 find_by_id 查到");
+    }}
+
+    #[tokio::test]
+    async fn soft_delete_sets_deleted_at() {{
+        let db = test_db().await;
+        let m = seed(&db, None).await;
+
+        let deleted = soft_delete(&db, m.id).await.unwrap();
+        let after = find_by_id(&db, m.id).await.unwrap();
+
+        cleanup(&db, &[m.id]).await;
+
+        assert!(deleted);
+        assert!(after.is_none(), "软删后不应再查到");
+    }}
+
+    #[tokio::test]
+    async fn find_page_filters_and_excludes_deleted() {{
+        let db = test_db().await;
+        let live = seed(&db, None).await;
+        let deleted = seed(&db, Some(chrono::Utc::now().naive_utc())).await;
+
+        let data = find_page(
+            &db,
+            &crate::modules::{domain}::dto::{filter} {{
+{filter_fields}
+            }},
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+
+        cleanup(&db, &[live.id, deleted.id]).await;
+
+        assert_eq!(data.total, 1, "软删记录不应进入分页");
+        assert_eq!(data.items[0].id, live.id);
+    }}
+}}
+"#,
+        entity = entity,
+        domain = def.domain,
+        filter = format!("{}Filter", def.camel()),
+    )
+}
+
+/// 生成测试 seed 的 ActiveModel 字段（非 primary 非 readonly 字段）。
+fn render_seed_fields(def: &DomainDef) -> String {
+    def.fields
+        .iter()
+        .filter(|f| !f.primary && !f.readonly)
+        .map(|f| match f.rust_type.as_str() {
+            "String" | "Text" => format!(
+                "            {}: Set(unique(\"{}\")),",
+                f.name, f.name
+            ),
+            "u64" | "i64" | "i32" => format!("            {}: Set(0),", f.name),
+            "i8" => format!("            {}: Set(1),", f.name),
+            "bool" => format!("            {}: Set(false),", f.name),
+            other => format!("            {}: Set({}),", f.name, other),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 生成测试中 Filter 构造的 None 字段。
+fn render_filter_none_fields(def: &DomainDef) -> String {
+    def.filters
+        .iter()
+        .map(|f| format!("                {}: None,", f.field))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,8 +325,15 @@ mod tests {
                 "fields": [
                     { "name": "id", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "primary": true, "auto_increment": true },
                     { "name": "type_code", "rust_type": "String", "sql_type": "VARCHAR(64)", "unique": true },
+                    { "name": "label", "rust_type": "String", "sql_type": "VARCHAR(255)" },
                     { "name": "status", "rust_type": "i8", "sql_type": "TINYINT", "optional": true, "default": 1 },
                     { "name": "deleted_at", "rust_type": "Option<DateTime>", "sql_type": "DATETIME", "readonly": true, "soft_delete": true }
+                ],
+                "unique_fields": ["type_code"],
+                "filters": [
+                    { "field": "type_code", "kind": "exact" },
+                    { "field": "label", "kind": "keyword" },
+                    { "field": "status", "kind": "exact" }
                 ]
             }"#,
         )
@@ -84,5 +350,21 @@ mod tests {
         assert!(out.contains("pub deleted_at: Option<DateTime>"));
         assert!(out.contains("DeriveRelation"));
         assert!(out.contains("ActiveModelBehavior"));
+    }
+
+    #[test]
+    fn repo_template_has_core_functions() {
+        let out = render_repo(&def());
+        assert!(out.contains("pub async fn find_by_id"));
+        assert!(out.contains("pub async fn find_page"));
+        assert!(out.contains("crate::utils::paginate"));
+        assert!(out.contains("pub async fn create"));
+        assert!(out.contains("pub async fn update"));
+        assert!(out.contains("pub async fn soft_delete"));
+        assert!(out.contains("pub async fn find_by_type_code_include_deleted"));
+        assert!(out.contains("DeletedAt.is_null()"));
+        assert!(out.contains("TypeCode.eq"));
+        assert!(out.contains("Label.like"));
+        assert!(out.contains("#[cfg(test)]"), "应输出生成的集成测试");
     }
 }
