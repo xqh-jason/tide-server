@@ -34,14 +34,6 @@ pub async fn find_by_ids(
     Ok(roles)
 }
 
-pub async fn find_by_id(
-    db: &DatabaseConnection,
-    id: u64,
-) -> anyhow::Result<Option<sys_role::Model>> {
-    let role = role_repo::find_by_id(db, id).await?;
-    Ok(role)
-}
-
 /// 创建角色
 pub async fn create_role(
     db: &DatabaseConnection,
@@ -73,7 +65,19 @@ pub async fn create_role(
     Ok(model)
 }
 
-pub async fn delete_role_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<()> {
+/// 查询单个角色详情（排除软删除）；不存在返回业务错误。
+pub async fn get_role(db: &DatabaseConnection, id: u64) -> Result<sys_role::Model, AppError> {
+    let Some(role) = role_repo::find_by_id(db, id).await? else {
+        return Err(AppError::Biz(format!("角色不存在：{id}")));
+    };
+    Ok(role)
+}
+
+/// 删除角色：判存在后软删并物理清空菜单/API 关联。
+pub async fn delete_role(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
+    let Some(_) = role_repo::find_by_id(db, id).await? else {
+        return Err(AppError::Biz(format!("角色不存在：{id}")));
+    };
     role_repo::soft_delete_role(db, id).await?;
     Ok(())
 }

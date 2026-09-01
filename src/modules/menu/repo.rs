@@ -18,6 +18,7 @@ pub async fn find_all_menus(db: &DatabaseConnection) -> anyhow::Result<Vec<Model
         .await?)
 }
 
+/// 分页 + 动态过滤查询（keyword 匹配 name，status/menu_type 精确，排除软删）。
 pub async fn find_page(
     db: &DatabaseConnection,
     filter: &MenuFilter,
@@ -45,6 +46,7 @@ pub async fn find_page(
     crate::utils::paginate(select, db, page_index, page_size).await
 }
 
+/// 查询单个有效菜单（排除软删除）。
 pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
     let menu = sys_menu::Entity::find()
         .filter(sys_menu::Column::Id.eq(id))
@@ -54,6 +56,7 @@ pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Opti
     Ok(menu)
 }
 
+/// 创建菜单（ActiveModel 入参，默认值由 service 层负责）。
 pub async fn create_menu(
     db: &DatabaseConnection,
     model: sys_menu::ActiveModel,
@@ -62,6 +65,7 @@ pub async fn create_menu(
     Ok(model)
 }
 
+/// 更新菜单（主键必须已设置，全量覆盖语义）。
 pub async fn update_menu(
     db: &DatabaseConnection,
     model: sys_menu::ActiveModel,
@@ -118,6 +122,7 @@ pub async fn soft_delete_menu(db: &DatabaseConnection, id: u64) -> anyhow::Resul
     Ok(true)
 }
 
+/// 查重辅助：菜单 name 唯一（含软删占位）。
 pub async fn find_by_name_include_deleted(
     db: &DatabaseConnection,
     name: &str,
@@ -129,6 +134,7 @@ pub async fn find_by_name_include_deleted(
     Ok(menu)
 }
 
+/// 普通用户可见菜单：有效角色 → sys_role_menu → 启用且未软删的菜单。
 pub async fn find_menus_by_user_id(
     db: &DatabaseConnection,
     user_id: u64,

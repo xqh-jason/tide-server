@@ -42,7 +42,7 @@ pub async fn find_page(
 }
 
 /// 创建记录。
-pub async fn create(
+pub async fn create_dict(
     db: &DatabaseConnection,
     model: sys_dict::ActiveModel,
 ) -> anyhow::Result<Model> {
@@ -50,7 +50,7 @@ pub async fn create(
 }
 
 /// 更新记录（主键必须已设置）。
-pub async fn update(
+pub async fn update_dict(
     db: &DatabaseConnection,
     model: sys_dict::ActiveModel,
 ) -> anyhow::Result<Model> {
@@ -58,7 +58,7 @@ pub async fn update(
 }
 
 /// 软删除：`deleted_at` 置为当前时间。
-pub async fn soft_delete(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
+pub async fn soft_delete_dict(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
     let Some(model) = find_by_id(db, id).await? else {
         return Ok(false);
     };
@@ -154,7 +154,7 @@ mod tests {
         let db = test_db().await;
         let m = seed(&db, &unique("soft"), None).await;
 
-        let deleted = soft_delete(&db, m.id).await.unwrap();
+        let deleted = soft_delete_dict(&db, m.id).await.unwrap();
         let after = find_by_id(&db, m.id).await.unwrap();
 
         cleanup(&db, &[m.id]).await;

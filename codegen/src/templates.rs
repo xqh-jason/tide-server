@@ -96,7 +96,7 @@ pub async fn find_page(
 }}
 
 /// 创建记录。
-pub async fn create(
+pub async fn create_{domain}(
     db: &DatabaseConnection,
     model: {entity}::ActiveModel,
 ) -> anyhow::Result<Model> {{
@@ -104,7 +104,7 @@ pub async fn create(
 }}
 
 /// 更新记录（主键必须已设置）。
-pub async fn update(
+pub async fn update_{domain}(
     db: &DatabaseConnection,
     model: {entity}::ActiveModel,
 ) -> anyhow::Result<Model> {{
@@ -112,7 +112,7 @@ pub async fn update(
 }}
 
 /// 软删除：`deleted_at` 置为当前时间。
-pub async fn soft_delete(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {{
+pub async fn soft_delete_{domain}(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {{
     let Some(model) = find_by_id(db, id).await? else {{
         return Ok(false);
     }};
@@ -272,7 +272,7 @@ mod tests {{
         let db = test_db().await;
         let m = seed(&db, &unique("soft"), None).await;
 
-        let deleted = soft_delete(&db, m.id).await.unwrap();
+        let deleted = soft_delete_{domain}(&db, m.id).await.unwrap();
         let after = find_by_id(&db, m.id).await.unwrap();
 
         cleanup(&db, &[m.id]).await;
@@ -392,7 +392,7 @@ pub async fn create_{singular}(
 {create_fields}
         ..Default::default()
     }};
-    let model = {domain}_repo::create(db, model).await?;
+    let model = {domain}_repo::create_{domain}(db, model).await?;
     Ok(model)
 }}
 
@@ -409,7 +409,7 @@ pub async fn update_{singular}(
 {update_fields}
         ..Default::default()
     }};
-    let model = {domain}_repo::update(db, model).await?;
+    let model = {domain}_repo::update_{domain}(db, model).await?;
     Ok(model)
 }}
 
@@ -426,7 +426,7 @@ pub async fn delete_{singular}(db: &DatabaseConnection, id: u64) -> Result<(), A
     let Some(_) = {domain}_repo::find_by_id(db, id).await? else {{
         return Err(AppError::Biz(format!("{comment}不存在：{{id}}")));
     }};
-    {domain}_repo::soft_delete(db, id).await?;
+    {domain}_repo::soft_delete_{domain}(db, id).await?;
     Ok(())
 }}
 
@@ -999,6 +999,7 @@ pub mod dto;
 pub mod repo;
 pub mod service;
 
+/// {comment} CRUD 端点：`POST /api/v1/{domain}/{{list,create,update,get,delete}}`。
 pub fn routes() -> Router {{
     Router::new()
         .push(Router::with_path("list").post(api::list_{domain}s))
@@ -1058,9 +1059,9 @@ mod tests {
         assert!(out.contains("pub async fn find_by_id"));
         assert!(out.contains("pub async fn find_page"));
         assert!(out.contains("crate::utils::paginate"));
-        assert!(out.contains("pub async fn create"));
-        assert!(out.contains("pub async fn update"));
-        assert!(out.contains("pub async fn soft_delete"));
+        assert!(out.contains("pub async fn create_dict"));
+        assert!(out.contains("pub async fn update_dict"));
+        assert!(out.contains("pub async fn soft_delete_dict"));
         assert!(out.contains("pub async fn find_by_type_code_include_deleted"));
         assert!(out.contains("DeletedAt.is_null()"));
         assert!(out.contains("TypeCode.eq"));

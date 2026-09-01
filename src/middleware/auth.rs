@@ -107,7 +107,7 @@ impl Handler for AuthRequired {
 /// 渲染统一 401 响应（HTTP 401 + code 0）并跳过后续 handler。
 fn unauthorized(res: &mut Response, ctrl: &mut FlowCtrl) {
     res.status_code(StatusCode::UNAUTHORIZED);
-    res.render(Json(ApiResponse::<()>::fail("unauthorized")));
+    res.render(Json(ApiResponse::<()>::fail("未登录或登录已过期")));
     ctrl.skip_rest();
 }
 

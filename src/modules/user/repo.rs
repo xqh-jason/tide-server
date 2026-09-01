@@ -5,6 +5,7 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, DatabaseConnection, TransactionTrait};
 
+/// 查询单个有效用户（排除软删除）。
 pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
     Ok(sys_user::Entity::find_by_id(id)
         .filter(sys_user::Column::DeletedAt.is_null())
@@ -12,6 +13,7 @@ pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Opti
         .await?)
 }
 
+/// 按用户名查询有效用户（登录用，排除软删除）。
 pub async fn find_by_username(
     db: &DatabaseConnection,
     username: &str,
@@ -25,6 +27,7 @@ pub async fn find_by_username(
     Ok(user)
 }
 
+/// 按用户名查询（含软删占位，创建用户查重用）。
 pub async fn find_by_username_include_deleted(
     db: &DatabaseConnection,
     username: &str,

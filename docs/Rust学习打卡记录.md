@@ -181,3 +181,26 @@ static GLOBAL: Jemalloc = Jemalloc;
     改为 `with_roles` 版本并删除绕过路径。
 - 明日：W4 代码生成器——复用通用 `paginate` / `PageData` / `*Filter` 模式，
   从域定义生成 entity + 四件套，并用它产出 W5/W6 模块骨架。
+
+---
+
+## 2026-09-01（W4 代码生成器）
+
+- 目标：完成代码生成器 CLI，并用它产出数据字典（dict）域验证。
+- 完成：
+  - `codegen/` 独立 crate：JSON 域定义（表/字段元信息/唯一键/过滤声明）→
+    生成 entity + api/service/repo/dto + mod.rs 共 6 个文件，模板字符串无外部引擎。
+  - 定义校验（必填/主键/引用完整性/过滤类型）；生成物复用通用
+    `paginate` / `PageData` / `*Filter`，命名与路由顺序遵循既有约定。
+  - 生成器连集成测试一起输出（唯一查重含软删、更新排除自身、不存在 Biz、分页过滤）。
+  - 用生成器产出 dict 域：sys_dict 迁移 + `/api/v1/dict/{list,create,update,get,delete}`，
+    主项目 90/90、codegen 13/13 全绿，`cargo fmt --check` 双项目通过。
+- 卡点：
+  - 生成路径漏 `src/` 前缀 → 误建项目根 `entity/`、`modules/` 目录。
+  - 生成的代码要与 rustfmt 逐处对齐（签名单/多行、链式调用、空行）——
+    模板输出本身必须可过 `fmt --check`，否则每次生成都产生 diff。
+  - 唯一索引含软删占位：正常与软删 seed 不能用同一唯一值（DB 唯一索引不区分软删）。
+  - 数值过滤 `Column.eq(v)` 需解引用 `eq(*v)`；service 模板 create/update
+    返回值未捕获会返回 ActiveModel 而非 Model。
+- 明日：W5 通用模块（操作日志/登录日志/数据字典/系统配置等）用生成器批量产出，
+  生成器只写迁移 + JSON 定义。

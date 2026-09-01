@@ -18,6 +18,7 @@ pub async fn find_by_id(
     Ok(role)
 }
 
+/// 查重辅助：role_key 唯一（含软删占位）。
 pub async fn find_by_role_key_include_deleted(
     db: &DatabaseConnection,
     role_key: &str,
@@ -29,6 +30,7 @@ pub async fn find_by_role_key_include_deleted(
     Ok(role)
 }
 
+/// 查重辅助：role_name 唯一（含软删占位）。
 pub async fn find_by_role_name_include_deleted(
     db: &DatabaseConnection,
     role_name: &str,

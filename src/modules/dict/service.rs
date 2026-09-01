@@ -48,7 +48,7 @@ pub async fn create_dict(
         remark: Set(req.remark.clone().unwrap_or_default()),
         ..Default::default()
     };
-    let model = dict_repo::create(db, model).await?;
+    let model = dict_repo::create_dict(db, model).await?;
     Ok(model)
 }
 
@@ -80,7 +80,7 @@ pub async fn update_dict(
         remark: Set(req.remark.clone()),
         ..Default::default()
     };
-    let model = dict_repo::update(db, model).await?;
+    let model = dict_repo::update_dict(db, model).await?;
     Ok(model)
 }
 
@@ -97,7 +97,7 @@ pub async fn delete_dict(db: &DatabaseConnection, id: u64) -> Result<(), AppErro
     let Some(_) = dict_repo::find_by_id(db, id).await? else {
         return Err(AppError::Biz(format!("数据字典不存在：{id}")));
     };
-    dict_repo::soft_delete(db, id).await?;
+    dict_repo::soft_delete_dict(db, id).await?;
     Ok(())
 }
 
