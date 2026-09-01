@@ -21,6 +21,9 @@
 - 模板：Rust 模板字符串 + `format!`，**不引入**外部模板引擎（学习点落在类型映射与字符串生成）
 - 类型映射：定义文件中的 `rust_type` 直接映射 SeaORM `ColumnType`
 
+> 表结构迁移（migrations/）由人工维护，生成器不生成迁移；
+> 第一版仅对已存在表（已执行迁移）的域生成业务代码。
+
 ## 3. 域定义格式（JSON）
 
 ```json
@@ -59,6 +62,14 @@
 | `unique` | 唯一约束；生成 `find_by_<field>_include_deleted` 查重辅助与 service 查重逻辑 |
 | `filters` | 分页过滤声明：`exact` 精确 / `keyword` 模糊，生成 `<Domain>Filter` |
 
+定义校验规则（生成器启动时报错）：
+
+- `domain` / `table` / `fields` 必填，字段名唯一
+- 必须存在 `primary` 字段
+- `unique_fields` 与 `filters[].field` 引用的字段必须存在于 `fields`
+- `filter` 的 `kind` 只能是 `exact` / `keyword`
+- 默认值类型与 `rust_type` 匹配（数值 / 字符串）
+
 ## 4. 生成内容
 
 ### 4.1 entity
@@ -84,7 +95,7 @@
 
 ### 4.4 dto
 
-- `<Domain>Resp`（`From<Model>`，排除 readonly 外的字段）
+- `<Domain>Resp`（`From<Model>`，只含非 readonly 字段：主键 + 业务字段）
 - `<Domain>ListReq`（`#[serde(flatten)] PageQuery` + filters）
 - `<Domain>Filter`（repo 入参，过滤字段与分页分离）
 - `Create<Domain>Req`（非 readonly 字段，`optional` 为 `Option<T>`）
@@ -98,16 +109,19 @@
 
 ## 5. 类型映射表
 
-| `rust_type` | Rust 类型 | 生成默认值表达式 |
+| `rust_type` | Rust 类型 | SeaORM ColumnType |
 |---|---|---|
-| `u64` | `u64` | `0` |
-| `i64` | `i64` | `0` |
-| `i32` | `i32` | `0` |
-| `i8` | `i8` | `1`（status 类） |
-| `bool` | `bool` | `false` |
-| `String` | `String` | `String::new()` |
-| `Text` | `String` | `String::new()` |
-| `DateTime` | `chrono::NaiveDateTime` | （只读，不生成默认） |
+| `u64` | `u64` | `BigUnsigned` |
+| `i64` | `i64` | `BigInt` |
+| `i32` | `i32` | `Integer` |
+| `i8` | `i8` | `TinyInteger` |
+| `bool` | `bool` | `Boolean` |
+| `String` | `String` | `String(长度)`（定义时给 `len` 或默认 255） |
+| `Text` | `String` | `Text` |
+| `DateTime` | `chrono::NaiveDateTime` | `DateTime` |
+
+Create/Update 的默认值统一来自字段 `default` 属性（`0` / `1` / `""` 等），
+不按类型推断；无 `default` 的 `optional` 字段生成 `Option<T>`。
 
 ## 6. CLI
 
@@ -138,3 +152,4 @@ cd codegen && cargo run -- generate ../codegen/defs/dict.json
 - 前端 TS 类型 / API 客户端生成
 - 菜单 + 权限码自动注册
 - 生成器的幂等覆盖/增量更新（第一版仅支持新域生成）
+- 迁移文件生成（表结构由 migrations 人工维护）
