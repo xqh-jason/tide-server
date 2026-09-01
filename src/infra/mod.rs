@@ -4,4 +4,5 @@
 pub mod app;
 pub mod config;
 pub mod router;
+pub mod seed;
 pub mod state;

@@ -9,6 +9,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let addr = format!("{}:{}", config.server.host, config.server.port);
     // 连接 MySQL 连接池（SeaORM DatabaseConnection 内部是 sqlx 连接池，Clone 共享）。
     let db = sea_orm::Database::connect(&config.database.url).await?;
+    // 开发种子数据（幂等）：admin / super / 默认菜单与 RBAC 关联
+    crate::infra::seed::ensure_seed(&db).await?;
     let state =
         crate::infra::state::AppState::new(config, db, std::sync::Arc::new(MemoryCache::new()));
 

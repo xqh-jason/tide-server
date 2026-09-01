@@ -157,3 +157,27 @@ static GLOBAL: Jemalloc = Jemalloc;
     `#[from] anyhow::Error` 自动把技术错误归为 `Internal`；业务校验放 service，否则会被吞成 500。
 - 明日：菜单域 CRUD——保留 `/user/menus` 契约，新增菜单管理端点，补普通用户按 `sys_role_menu`
   过滤菜单树（当前 TODO），按钮权限码同源生效。
+
+---
+
+## 2026-09-01（W3 收尾：菜单/API 权限域 + 种子数据，M3 达成）
+
+- 目标：完成 W3 剩余菜单域、API 权限域与种子数据，达成 M3（MVP）。
+- 完成：
+  - 菜单域四件套 + `POST /api/v1/menu/{list,create,update,get,delete}`；`/user/menus` 普通用户
+    按 `sys_role_menu` 实时过滤（超管全量）；删除菜单级联软删全部子孙。
+  - API 权限域四件套 + `POST /api/v1/sys-api/{list,create,update,get,delete}`，
+    创建/更新在同一事务维护 `sys_role_api` 授权（全量替换）；`path + method` 查重含软删。
+  - 分页过滤统一为域 `*Filter` 结构体（UserFilter / RoleFilter / MenuFilter / ApiFilter），
+    repo 签名不再随过滤条件变化。
+  - 种子数据 `ensure_seed`：admin（admin123）/ super 角色 / 17 条默认菜单树 /
+    12 个按钮权限码 / RBAC 绑定，启动幂等执行；数据库测试残留已清理。
+  - 测试 84/84 全绿，`cargo fmt --check` 通过。
+- 卡点：
+  - 种子"先查后插"在测试并发下不幂等（TOCTOU）→ `OnceLock<tokio::sync::Mutex>` 串行化。
+  - 菜单 `get_menu` 曾把菜单 id 当 user_id 调 `get_menus`（返回菜单树而非详情）——
+    review 抓到后改为 `service::get_menu`。
+  - API 域曾走裸 `create_api/update_api`（只写主表），`role_ids` 授权被静默丢弃；
+    改为 `with_roles` 版本并删除绕过路径。
+- 明日：W4 代码生成器——复用通用 `paginate` / `PageData` / `*Filter` 模式，
+  从域定义生成 entity + 四件套，并用它产出 W5/W6 模块骨架。
