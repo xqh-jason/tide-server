@@ -30,6 +30,11 @@ pub fn build(state: AppState) -> Router {
                     Router::with_path("role")
                         .hoop(AuthRequired)
                         .push(crate::modules::role::routes()),
+                )
+                .push(
+                    Router::with_path("sys-api")
+                        .hoop(AuthRequired)
+                        .push(crate::modules::sys_api::routes()),
                 ),
         )
 }
