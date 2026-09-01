@@ -39,6 +39,13 @@ pub struct RoleListReq {
     pub status: Option<i8>,
 }
 
+/// 角色分页过滤条件（repo 层入参）：过滤字段与分页参数分离。
+#[derive(Debug, Clone, Default)]
+pub struct RoleFilter {
+    pub keyword: Option<String>,
+    pub status: Option<i8>,
+}
+
 /// 创建角色请求：`menu_ids` / `api_ids` 为 `Some` 时全量替换关联，`None` 表示不设置。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateRoleReq {

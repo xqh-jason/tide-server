@@ -40,6 +40,14 @@ pub struct UserListReq {
     pub status: Option<i8>,
 }
 
+/// 用户分页过滤条件（repo 层入参）：过滤字段与分页参数分离，
+/// 以后加过滤条件只改这里，repo 签名与调用点不变。
+#[derive(Debug, Clone, Default)]
+pub struct UserFilter {
+    pub keyword: Option<String>,
+    pub status: Option<i8>,
+}
+
 /// 按用户名查询请求（JSON body 源）：`{ "username": "..." }`。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UsernameReq {

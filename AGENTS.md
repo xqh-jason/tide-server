@@ -30,6 +30,10 @@
 - handler 返回 `ApiResult<T>`；业务错误用 `AppError`；repo 层一律 `?` 传播错误，禁止 `unwrap`
 - 软删除约定：主表查询默认过滤 `deleted_at IS NULL`，关系表（`sys_role_menu` 等）硬删除
 - 权限码、超管角色键等魔法字符串集中为常量（`SYSTEM_USER_CREATE`、`SUPER_ROLE_KEY`）
+- 接口命名按层统一：repo 分页用 `find_page`；service 分页用 `page_<实体>`（如 `page_users`）；
+  handler 端点用 `list_<实体>`；CRUD 函数统一 `create_/update_/get_/delete_<实体>`
+- 同一域内 `api.rs` 函数顺序 = `mod.rs` 路由挂载顺序 = `list → create → update → get → delete`，
+  特殊契约端点（`info`、`access-codes`、`menus` 等）排在 CRUD 之后
 
 ## 测试规范
 

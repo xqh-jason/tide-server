@@ -1,7 +1,7 @@
 use crate::utils::PageData;
 use crate::{
     modules::role::{
-        dto::{CreateRoleReq, RoleListReq, UpdateRoleReq},
+        dto::{CreateRoleReq, RoleFilter, RoleListReq, UpdateRoleReq},
         repo as role_repo,
     },
     utils::error::AppError,
@@ -16,8 +16,10 @@ pub async fn page_roles(
 ) -> anyhow::Result<PageData<sys_role::Model>> {
     role_repo::find_page(
         db,
-        req.keyword.clone(),
-        req.status,
+        &RoleFilter {
+            keyword: req.keyword.clone(),
+            status: req.status,
+        },
         req.page.page_index(),
         req.page.page_size(),
     )

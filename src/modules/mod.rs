@@ -20,6 +20,21 @@
 //! 必须同时作为前端按钮权限码和 `create_user` 接口的授权依据。
 //! `sys_api` 与 `sys_role_api` 仅保留表结构，不作为 W3 第一版的主授权数据源；
 //! 后续如需接口级集中授权，再引入接口与权限码的正式映射。
+//!
+//! # 接口命名约定（按层统一）
+//!
+//! | 层 | 分页 | CRUD |
+//! |---|---|---|
+//! | repo（数据访问） | `find_page` | `find_by_id` / `create_*` / `update_*` / `soft_delete_*` / `find_by_*_include_deleted` |
+//! | service（业务） | `page_<实体>` | `create_<实体>` / `update_<实体>` / `get_<实体>` / `delete_<实体>` |
+//! | handler（端点） | `list_<实体>` | `create_<实体>` / `update_<实体>` / `get_<实体>` / `delete_<实体>` |
+//!
+//! 同一域内 `api.rs` 函数顺序 = `mod.rs` 路由挂载顺序 = `list → create → update → get → delete`；
+//! 特殊契约端点（`info`、`access-codes`、`menus` 等）排在 CRUD 之后。
+//!
+//! repo 分页查询的过滤参数统一打包为域 `*Filter` 结构体（如 `UserFilter` / `RoleFilter` /
+//! `MenuFilter`），与分页参数（`page_index` / `page_size`）分离；加过滤条件只改 Filter，
+//! repo 签名与调用点不变。Filter 定义在对应域 `dto.rs`。
 
 pub mod auth;
 pub mod menu;

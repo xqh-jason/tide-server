@@ -8,7 +8,7 @@ use crate::modules::permission::{
     SUPER_ROLE_KEY, SYSTEM_USER_CREATE, service as permission_service,
 };
 use crate::modules::role::service as role_service;
-use crate::modules::user::dto::{CreateUserReq, UserInfoResp, UserListReq, UserResp};
+use crate::modules::user::dto::{CreateUserReq, UserFilter, UserInfoResp, UserListReq, UserResp};
 use crate::modules::user::repo as user_repo;
 use crate::utils::PageData;
 use crate::utils::crypt;
@@ -30,8 +30,10 @@ pub async fn page_users(
 ) -> anyhow::Result<PageData<sys_user::Model>> {
     user_repo::find_page(
         db,
-        req.keyword.clone(),
-        req.status,
+        &UserFilter {
+            keyword: req.keyword.clone(),
+            status: req.status,
+        },
         req.page.page_index(),
         req.page.page_size(),
     )

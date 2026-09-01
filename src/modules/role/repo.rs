@@ -3,6 +3,7 @@ use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, DatabaseConnection, TransactionTrait};
 
 use crate::entity::{sys_role, sys_role_api, sys_role_menu};
+use crate::modules::role::dto::RoleFilter;
 
 /// 查询单个有效角色（排除软删除）。
 pub async fn find_by_id(
@@ -42,17 +43,16 @@ pub async fn find_by_role_name_include_deleted(
 /// 分页 + 动态过滤查询角色（keyword 模糊匹配 role_name/role_key，status 精确）。
 pub async fn find_page(
     db: &DatabaseConnection,
-    keyword: Option<String>,
-    status: Option<i8>,
+    filter: &RoleFilter,
     page_index: u64,
     page_size: u64,
 ) -> anyhow::Result<crate::utils::PageData<sys_role::Model>> {
     let mut cond = Condition::all();
 
-    if let Some(status) = status {
+    if let Some(status) = filter.status {
         cond = cond.add(sys_role::Column::Status.eq(status));
     }
-    if let Some(kw) = keyword {
+    if let Some(kw) = &filter.keyword {
         // keyword 命中角色名或角色键任一即可（OR 语义）
         let kw_cond = Condition::any()
             .add(sys_role::Column::RoleName.like(format!("%{kw}%")))
@@ -498,12 +498,28 @@ mod tests {
         )
         .await;
 
-        let data_all = find_page(&db, Some(keyword.clone()), None, 0, 10)
-            .await
-            .unwrap();
-        let data_enabled = find_page(&db, Some(keyword.clone()), Some(1), 0, 10)
-            .await
-            .unwrap();
+        let data_all = find_page(
+            &db,
+            &RoleFilter {
+                keyword: Some(keyword.clone()),
+                status: None,
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        let data_enabled = find_page(
+            &db,
+            &RoleFilter {
+                keyword: Some(keyword.clone()),
+                status: Some(1),
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
 
         cleanup(&db, &[live.id, disabled.id, deleted.id], &[], &[]).await;
 

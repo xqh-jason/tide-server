@@ -18,6 +18,12 @@ pub fn build(state: AppState) -> Router {
                         .hoop(AuthRequired)
                         .push(crate::modules::user::routes())
                         // 菜单契约端点：POST /api/v1/user/menus（业务在 menu 域）
+                        .push(crate::modules::menu::user_routes()),
+                )
+                // 菜单管理 CRUD：POST /api/v1/menu/{list,create,update,get,delete}
+                .push(
+                    Router::with_path("menu")
+                        .hoop(AuthRequired)
                         .push(crate::modules::menu::routes()),
                 )
                 .push(

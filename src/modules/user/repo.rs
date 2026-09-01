@@ -1,5 +1,6 @@
 use crate::entity::sys_user::Model;
 use crate::entity::{sys_role, sys_user, sys_user_role};
+use crate::modules::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, DatabaseConnection, TransactionTrait};
@@ -63,16 +64,15 @@ pub async fn find_roles_by_user_id(
 /// 返回 `PageData<Model>`（总条数 / 总页数 / 当前页数据）。
 pub async fn find_page(
     db: &DatabaseConnection,
-    keyword: Option<String>,
-    status: Option<i8>,
+    filter: &UserFilter,
     page_index: u64,
     page_size: u64,
 ) -> anyhow::Result<crate::utils::PageData<Model>> {
     let mut cond = Condition::all();
-    if let Some(kw) = keyword {
+    if let Some(kw) = &filter.keyword {
         cond = cond.add(sys_user::Column::Username.like(format!("%{kw}%")));
     }
-    if let Some(s) = status {
+    if let Some(s) = filter.status {
         cond = cond.add(sys_user::Column::Status.eq(s));
     }
 
@@ -180,16 +180,32 @@ mod tests {
         let inserted = model.insert(&db).await.unwrap();
 
         // 关键词命中 + 0-based 第 0 页
-        let data = find_page(&db, Some(username.clone()), None, 0, 10)
-            .await
-            .unwrap();
+        let data = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(username.clone()),
+                status: None,
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
         assert!(data.total >= 1);
         assert!(data.items.iter().any(|u| u.username == username));
 
         // 关键词不命中
-        let data = find_page(&db, Some("no_such_keyword_xyz".to_string()), None, 0, 10)
-            .await
-            .unwrap();
+        let data = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some("no_such_keyword_xyz".to_string()),
+                status: None,
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
         assert_eq!(data.total, 0);
 
         sys_user::Entity::delete_by_id(inserted.id)
@@ -301,7 +317,16 @@ mod tests {
         mark_deleted.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
         mark_deleted.update(&db).await.unwrap();
 
-        let result = find_page(&db, Some(keyword), None, 0, 10).await;
+        let result = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(keyword),
+                status: None,
+            },
+            0,
+            10,
+        )
+        .await;
 
         sys_user::Entity::delete_by_id(live.id)
             .exec(&db)
