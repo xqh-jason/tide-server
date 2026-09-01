@@ -26,6 +26,12 @@ pub fn build(state: AppState) -> Router {
                         .hoop(AuthRequired)
                         .push(crate::modules::menu::routes()),
                 )
+                // 数据字典管理：POST /api/v1/dict/{list,create,update,get,delete}（codegen 生成域）
+                .push(
+                    Router::with_path("dict")
+                        .hoop(AuthRequired)
+                        .push(crate::modules::dict::routes()),
+                )
                 .push(
                     Router::with_path("role")
                         .hoop(AuthRequired)

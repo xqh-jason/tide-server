@@ -20,8 +20,8 @@ fn main() -> anyhow::Result<()> {
         println!("生成: {f}");
     }
     println!(
-        "提示: src/modules/mod.rs 加 `pub mod {};`，src/infra/router.rs 挂 /{} 路由（AuthRequired）",
-        def.domain, def.domain
+        "提示: src/entity/mod.rs 加 `pub mod {};`；src/modules/mod.rs 加 `pub mod {};`；src/infra/router.rs 挂 /{} 路由（AuthRequired）",
+        def.table, def.domain, def.domain
     );
     Ok(())
 }

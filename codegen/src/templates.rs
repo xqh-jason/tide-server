@@ -67,7 +67,7 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{{Condition, DatabaseConnection}};
 
-use crate::entity::{entity};
+use crate::entity::{{{entity}, {entity}::Model}};
 use crate::modules::{domain}::dto::{filter};
 
 /// 查询单个有效记录（排除软删除）。
@@ -131,8 +131,16 @@ fn render_filter_conditions(def: &DomainDef) -> String {
     let mut out = String::new();
     for f in &def.filters {
         let column = format!("{entity}::Column::{}", crate::typing::column_ident(&f.field));
+        let fty = def
+            .fields
+            .iter()
+            .find(|fd| fd.name == f.field)
+            .map(|fd| fd.rust_type.as_str())
+            .unwrap_or("String");
         let op = if f.kind == "keyword" {
             format!("like(format!(\"%{{v}}%\"))")
+        } else if matches!(fty, "u64" | "i64" | "i32" | "i8" | "bool") {
+            "eq(*v)".to_string()
         } else {
             "eq(v)".to_string()
         };
@@ -181,8 +189,8 @@ pub async fn find_by_{field}_include_deleted(
 /// repo 尾部集成测试：软删过滤、soft_delete、分页过滤（唯一命名 + 断言前 cleanup）。
 fn render_repo_tests(def: &DomainDef) -> String {
     let entity = def.entity_ident();
-    let seed_fields = render_seed_fields(def);
-    let filter_fields = render_filter_none_fields(def);
+    let seed_fields = render_seed_fields(def, &def.unique_field_names());
+    let filter_fields = render_filter_none_fields(def, &def.unique_field_names());
     format!(
         r#"
 #[cfg(test)]
@@ -207,8 +215,9 @@ mod tests {{
         Database::connect(&config.database.url).await.unwrap()
     }}
 
-    async fn seed(db: &DatabaseConnection, deleted_at: Option<chrono::NaiveDateTime>) -> {entity}::Model {{
+    async fn seed(db: &DatabaseConnection, type_code: &str, deleted_at: Option<chrono::NaiveDateTime>) -> {entity}::Model {{
         {entity}::ActiveModel {{
+            type_code: Set(type_code.to_string()),
 {seed_fields}
             deleted_at: Set(deleted_at),
             ..Default::default()
@@ -229,8 +238,8 @@ mod tests {{
     #[tokio::test]
     async fn find_by_id_excludes_soft_deleted() {{
         let db = test_db().await;
-        let live = seed(&db, None).await;
-        let deleted = seed(&db, Some(chrono::Utc::now().naive_utc())).await;
+        let live = seed(&db, &unique("live"), None).await;
+        let deleted = seed(&db, &unique("deleted"), Some(chrono::Utc::now().naive_utc())).await;
 
         let found_live = find_by_id(&db, live.id).await.unwrap();
         let found_deleted = find_by_id(&db, deleted.id).await.unwrap();
@@ -244,7 +253,7 @@ mod tests {{
     #[tokio::test]
     async fn soft_delete_sets_deleted_at() {{
         let db = test_db().await;
-        let m = seed(&db, None).await;
+        let m = seed(&db, &unique("soft"), None).await;
 
         let deleted = soft_delete(&db, m.id).await.unwrap();
         let after = find_by_id(&db, m.id).await.unwrap();
@@ -258,12 +267,16 @@ mod tests {{
     #[tokio::test]
     async fn find_page_filters_and_excludes_deleted() {{
         let db = test_db().await;
-        let live = seed(&db, None).await;
-        let deleted = seed(&db, Some(chrono::Utc::now().naive_utc())).await;
+        // 唯一索引含软删占位：正常与软删记录必须使用不同 type_code
+        let kw_live = unique("page_live");
+        let kw_deleted = unique("page_deleted");
+        let live = seed(&db, &kw_live, None).await;
+        let deleted = seed(&db, &kw_deleted, Some(chrono::Utc::now().naive_utc())).await;
 
         let data = find_page(
             &db,
             &crate::modules::{domain}::dto::{filter} {{
+                type_code: Some(kw_live.clone()),
 {filter_fields}
             }},
             0,
@@ -285,11 +298,11 @@ mod tests {{
     )
 }
 
-/// 生成测试 seed 的 ActiveModel 字段（非 primary 非 readonly 字段）。
-fn render_seed_fields(def: &DomainDef) -> String {
+/// 生成测试 seed 的 ActiveModel 字段（非 primary 非 readonly 字段，可排除唯一字段）。
+fn render_seed_fields(def: &DomainDef, exclude: &[String]) -> String {
     def.fields
         .iter()
-        .filter(|f| !f.primary && !f.readonly)
+        .filter(|f| !f.primary && !f.readonly && !exclude.contains(&f.name))
         .map(|f| match f.rust_type.as_str() {
             "String" | "Text" => format!(
                 "            {}: Set(unique(\"{}\")),",
@@ -304,10 +317,11 @@ fn render_seed_fields(def: &DomainDef) -> String {
         .join("\n")
 }
 
-/// 生成测试中 Filter 构造的 None 字段。
-fn render_filter_none_fields(def: &DomainDef) -> String {
+/// 生成测试中 Filter 构造的 None 字段（可排除显式设置的字段）。
+fn render_filter_none_fields(def: &DomainDef, exclude: &[String]) -> String {
     def.filters
         .iter()
+        .filter(|f| !exclude.contains(&f.field))
         .map(|f| format!("                {}: None,", f.field))
         .collect::<Vec<_>>()
         .join("\n")
@@ -364,7 +378,7 @@ pub async fn create_{singular}(
 {create_fields}
         ..Default::default()
     }};
-    {domain}_repo::create(db, model).await?;
+    let model = {domain}_repo::create(db, model).await?;
     Ok(model)
 }}
 
@@ -381,7 +395,7 @@ pub async fn update_{singular}(
 {update_fields}
         ..Default::default()
     }};
-    {domain}_repo::update(db, model).await?;
+    let model = {domain}_repo::update(db, model).await?;
     Ok(model)
 }}
 
@@ -424,7 +438,12 @@ pub async fn delete_{singular}(db: &DatabaseConnection, id: u64) -> Result<(), A
 fn render_unique_checks(def: &DomainDef, exclude_self: bool) -> String {
     let mut out = String::new();
     for field in def.unique_field_names() {
-        let label = format!("{}{}", def.comment, field_label(&field));
+        let label = def
+            .fields
+            .iter()
+            .find(|fd| fd.name == field)
+            .and_then(|fd| fd.comment.clone())
+            .unwrap_or_else(|| field_label(&field));
         if exclude_self {
             out.push_str(&format!(
                 "    if let Some(existing) = {domain}_repo::find_by_{field}_include_deleted(db, &req.{field}).await? {{\n        if existing.id != req.id {{\n            return Err(AppError::Biz(format!(\"{label}已存在：{{}}\", existing.{field})));\n        }}\n    }}\n",
@@ -659,7 +678,7 @@ mod tests {{
         update_req = update_req,
         singular = singular,
         unique_field = unique_field,
-        seed_fields = render_seed_fields(def),
+        seed_fields = render_seed_fields(def, &[]),
         create_req_fields = create_req_fields,
         update_req_fields = update_req_fields,
     )

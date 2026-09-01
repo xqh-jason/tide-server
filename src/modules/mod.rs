@@ -37,6 +37,7 @@
 //! repo 签名与调用点不变。Filter 定义在对应域 `dto.rs`。
 
 pub mod auth;
+pub mod dict;
 pub mod menu;
 pub mod permission;
 pub mod role;
