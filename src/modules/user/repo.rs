@@ -85,7 +85,7 @@ pub async fn find_page(
     crate::utils::paginate(select, db, page_index, page_size).await
 }
 
-pub async fn create_user_with_roles(
+pub async fn create_user_with_links(
     db: &DatabaseConnection,
     user: sys_user::ActiveModel,
     role_ids: Vec<u64>,
@@ -218,11 +218,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_user_with_roles_supports_empty_role_ids() {
+    async fn create_user_with_links_supports_empty_role_ids() {
         let db = test_db().await;
         let username = unique_name("create_user_empty_roles");
 
-        let created = create_user_with_roles(
+        let created = create_user_with_links(
             &db,
             sys_user::ActiveModel {
                 username: Set(username.clone()),

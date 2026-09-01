@@ -7,6 +7,7 @@ use crate::modules::sys_api::repo as api_repo;
 use crate::utils::PageData;
 use crate::{entity::sys_api, modules::sys_api::dto::CreateApiReq, utils::error::AppError};
 
+/// 创建 API：path + method 查重（含软删占位）→ 写入主表并维护角色授权关联。
 pub async fn create_api(
     db: &DatabaseConnection,
     req: &CreateApiReq,
@@ -29,17 +30,17 @@ pub async fn create_api(
         status: Set(req.status.unwrap_or(1)),
         ..Default::default()
     };
-    let model = api_repo::create_api_with_roles(db, model, req.role_ids.clone()).await?;
+    let model = api_repo::create_api_with_links(db, model, req.role_ids.clone()).await?;
     Ok(model)
 }
 
+/// 更新 API：判存在 → path + method 查重排除自身 → 全量覆盖并重建角色授权。
 pub async fn update_api(
     db: &DatabaseConnection,
     req: &UpdateApiReq,
 ) -> Result<sys_api::Model, AppError> {
     // 检查 API 是否存在
-    let api = api_repo::find_by_id(db, req.id).await?;
-    let Some(_) = api else {
+    let Some(_) = api_repo::find_by_id(db, req.id).await? else {
         return Err(AppError::Biz(format!("API 不存在：{}", req.id)));
     };
     // path + method 查重（含软删），排除自身
@@ -61,10 +62,11 @@ pub async fn update_api(
         status: Set(req.status),
         ..Default::default()
     };
-    let model = api_repo::update_api_with_roles(db, model, req.role_ids.clone()).await?;
+    let model = api_repo::update_api_with_links(db, model, req.role_ids.clone()).await?;
     Ok(model)
 }
 
+/// 分页查询 API（keyword 匹配 path/description/api_group，status/method 精确）。
 pub async fn page_apis(
     db: &DatabaseConnection,
     req: &ApiListReq,

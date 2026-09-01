@@ -126,7 +126,7 @@ pub async fn create_user(
         }
     }
 
-    let model = user_repo::create_user_with_roles(
+    let model = user_repo::create_user_with_links(
         db,
         sys_user::ActiveModel {
             username: Set(req.username),

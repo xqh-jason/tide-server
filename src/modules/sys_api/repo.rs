@@ -46,7 +46,7 @@ pub async fn find_page(
 }
 
 /// 事务写入 API 并维护角色授权关联（关系表硬删除，只插不判软删）。
-pub async fn create_api_with_roles(
+pub async fn create_api_with_links(
     db: &DatabaseConnection,
     api: sys_api::ActiveModel,
     role_ids: Vec<u64>,
@@ -70,7 +70,7 @@ pub async fn create_api_with_roles(
 }
 
 /// 事务更新 API 并重建角色授权关联（先删旧关联，再插新关联）。
-pub async fn update_api_with_roles(
+pub async fn update_api_with_links(
     db: &DatabaseConnection,
     api: sys_api::ActiveModel,
     role_ids: Vec<u64>,
@@ -208,13 +208,13 @@ mod tests {
 
     /// 创建 API：事务写入主表 + 角色授权关联。
     #[tokio::test]
-    async fn create_api_with_roles_persists_api_and_links() {
+    async fn create_api_with_links_persists_api_and_links() {
         let db = test_db().await;
         let role_a = seed_role(&db).await;
         let role_b = seed_role(&db).await;
         let path = format!("/api/v1/{}/list", unique("create"));
 
-        let created = create_api_with_roles(
+        let created = create_api_with_links(
             &db,
             sys_api::ActiveModel {
                 path: Set(path.clone()),
@@ -243,9 +243,9 @@ mod tests {
 
     /// 空角色列表也能创建 API（不触发无效 SQL）。
     #[tokio::test]
-    async fn create_api_with_roles_supports_empty_role_ids() {
+    async fn create_api_with_links_supports_empty_role_ids() {
         let db = test_db().await;
-        let created = create_api_with_roles(
+        let created = create_api_with_links(
             &db,
             sys_api::ActiveModel {
                 path: Set(format!("/api/v1/{}/empty", unique("create"))),
@@ -338,11 +338,11 @@ mod tests {
 
     /// 更新 API：事务内重建角色授权关联（旧关联清空、新关联落库）。
     #[tokio::test]
-    async fn update_api_with_roles_rebuilds_links_in_transaction() {
+    async fn update_api_with_links_rebuilds_links_in_transaction() {
         let db = test_db().await;
         let role_old = seed_role(&db).await;
         let role_new = seed_role(&db).await;
-        let created = create_api_with_roles(
+        let created = create_api_with_links(
             &db,
             sys_api::ActiveModel {
                 path: Set(format!("/api/v1/{}/update", unique("update"))),
@@ -359,7 +359,7 @@ mod tests {
 
         let mut model: sys_api::ActiveModel = created.clone().into();
         model.description = Set("更新后描述".to_string());
-        let updated = update_api_with_roles(&db, model, vec![role_new.id])
+        let updated = update_api_with_links(&db, model, vec![role_new.id])
             .await
             .unwrap();
 
@@ -381,7 +381,7 @@ mod tests {
     async fn soft_delete_api_removes_links_and_excludes_api() {
         let db = test_db().await;
         let role = seed_role(&db).await;
-        let created = create_api_with_roles(
+        let created = create_api_with_links(
             &db,
             sys_api::ActiveModel {
                 path: Set(format!("/api/v1/{}/delete", unique("delete"))),

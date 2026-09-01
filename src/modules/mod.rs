@@ -35,6 +35,9 @@
 //! repo 分页查询的过滤参数统一打包为域 `*Filter` 结构体（如 `UserFilter` / `RoleFilter` /
 //! `MenuFilter`），与分页参数（`page_index` / `page_size`）分离；加过滤条件只改 Filter，
 //! repo 签名与调用点不变。Filter 定义在对应域 `dto.rs`。
+//!
+//! 涉及关联表写入的 repo 函数统一使用 `<动词>_<实体>_with_links` 后缀
+//! （如 `create_role_with_links` / `create_api_with_links`），无关联直接 `<动词>_<实体>`。
 
 pub mod auth;
 pub mod dict;
