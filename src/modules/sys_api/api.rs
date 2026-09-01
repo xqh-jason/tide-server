@@ -5,7 +5,6 @@ use salvo::{
 };
 
 use crate::modules::sys_api::dto::{ApiIdReq, CreateApiReq, UpdateApiReq};
-use crate::utils::error::AppError;
 use crate::{
     infra::state::AppState,
     modules::sys_api::dto::{ApiListReq, ApiResp},

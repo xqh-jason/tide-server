@@ -38,7 +38,6 @@ pub struct ApiListReq {
     pub keyword: Option<String>,
     pub status: Option<i8>,
     pub method: Option<String>,
-    pub(crate) path: (),
 }
 
 /// API 分页过滤条件（repo 层入参）：过滤字段与分页参数分离。

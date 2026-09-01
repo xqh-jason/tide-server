@@ -96,12 +96,18 @@ pub async fn find_page(
 }}
 
 /// 创建记录。
-pub async fn create(db: &DatabaseConnection, model: {entity}::ActiveModel) -> anyhow::Result<Model> {{
+pub async fn create(
+    db: &DatabaseConnection,
+    model: {entity}::ActiveModel,
+) -> anyhow::Result<Model> {{
     Ok(model.insert(db).await?)
 }}
 
 /// 更新记录（主键必须已设置）。
-pub async fn update(db: &DatabaseConnection, model: {entity}::ActiveModel) -> anyhow::Result<Model> {{
+pub async fn update(
+    db: &DatabaseConnection,
+    model: {entity}::ActiveModel,
+) -> anyhow::Result<Model> {{
     Ok(model.update(db).await?)
 }}
 
@@ -130,7 +136,10 @@ fn render_filter_conditions(def: &DomainDef) -> String {
     let entity = def.entity_ident();
     let mut out = String::new();
     for f in &def.filters {
-        let column = format!("{entity}::Column::{}", crate::typing::column_ident(&f.field));
+        let column = format!(
+            "{entity}::Column::{}",
+            crate::typing::column_ident(&f.field)
+        );
         let fty = def
             .fields
             .iter()
@@ -175,7 +184,6 @@ pub async fn find_by_{field}_include_deleted(
         .await?;
     Ok(m)
 }}
-
 "#,
                 field = field,
                 column = column,
@@ -183,7 +191,8 @@ pub async fn find_by_{field}_include_deleted(
                 entity = entity,
             )
         })
-        .collect()
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// repo 尾部集成测试：软删过滤、soft_delete、分页过滤（唯一命名 + 断言前 cleanup）。
@@ -192,8 +201,7 @@ fn render_repo_tests(def: &DomainDef) -> String {
     let seed_fields = render_seed_fields(def, &def.unique_field_names());
     let filter_fields = render_filter_none_fields(def, &def.unique_field_names());
     format!(
-        r#"
-#[cfg(test)]
+        r#"#[cfg(test)]
 mod tests {{
     use super::*;
     use crate::entity::{entity};
@@ -215,7 +223,11 @@ mod tests {{
         Database::connect(&config.database.url).await.unwrap()
     }}
 
-    async fn seed(db: &DatabaseConnection, type_code: &str, deleted_at: Option<chrono::NaiveDateTime>) -> {entity}::Model {{
+    async fn seed(
+        db: &DatabaseConnection,
+        type_code: &str,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> {entity}::Model {{
         {entity}::ActiveModel {{
             type_code: Set(type_code.to_string()),
 {seed_fields}
@@ -239,7 +251,12 @@ mod tests {{
     async fn find_by_id_excludes_soft_deleted() {{
         let db = test_db().await;
         let live = seed(&db, &unique("live"), None).await;
-        let deleted = seed(&db, &unique("deleted"), Some(chrono::Utc::now().naive_utc())).await;
+        let deleted = seed(
+            &db,
+            &unique("deleted"),
+            Some(chrono::Utc::now().naive_utc()),
+        )
+        .await;
 
         let found_live = find_by_id(&db, live.id).await.unwrap();
         let found_deleted = find_by_id(&db, deleted.id).await.unwrap();
@@ -304,10 +321,7 @@ fn render_seed_fields(def: &DomainDef, exclude: &[String]) -> String {
         .iter()
         .filter(|f| !f.primary && !f.readonly && !exclude.contains(&f.name))
         .map(|f| match f.rust_type.as_str() {
-            "String" | "Text" => format!(
-                "            {}: Set(unique(\"{}\")),",
-                f.name, f.name
-            ),
+            "String" | "Text" => format!("            {}: Set(unique(\"{}\")),", f.name, f.name),
             "u64" | "i64" | "i32" => format!("            {}: Set(0),", f.name),
             "i8" => format!("            {}: Set(1),", f.name),
             "bool" => format!("            {}: Set(false),", f.name),
@@ -446,14 +460,14 @@ fn render_unique_checks(def: &DomainDef, exclude_self: bool) -> String {
             .unwrap_or_else(|| field_label(&field));
         if exclude_self {
             out.push_str(&format!(
-                "    if let Some(existing) = {domain}_repo::find_by_{field}_include_deleted(db, &req.{field}).await? {{\n        if existing.id != req.id {{\n            return Err(AppError::Biz(format!(\"{label}已存在：{{}}\", existing.{field})));\n        }}\n    }}\n",
+                "    if let Some(existing) = {domain}_repo::find_by_{field}_include_deleted(db, &req.{field}).await?\n    {{\n        if existing.id != req.id {{\n            return Err(AppError::Biz(format!(\n                \"{label}已存在：{{}}\",\n                existing.{field}\n            )));\n        }}\n    }}\n",
                 domain = def.domain,
                 field = field,
                 label = label,
             ));
         } else {
             out.push_str(&format!(
-                "    if let Some(existing) = {domain}_repo::find_by_{field}_include_deleted(db, &req.{field}).await? {{\n        return Err(AppError::Biz(format!(\"{label}已存在：{{}}\", existing.{field})));\n    }}\n",
+                "    if let Some(existing) = {domain}_repo::find_by_{field}_include_deleted(db, &req.{field}).await?\n    {{\n        return Err(AppError::Biz(format!(\n            \"{label}已存在：{{}}\",\n            existing.{field}\n        )));\n    }}\n",
                 domain = def.domain,
                 field = field,
                 label = label,
@@ -502,9 +516,10 @@ fn render_update_model_fields(def: &DomainDef) -> String {
     let mut fields = format!("        id: Set(req.id),");
     for f in def.fields.iter().filter(|f| !f.primary && !f.readonly) {
         match f.rust_type.as_str() {
-            "String" | "Text" => {
-                fields.push_str(&format!("\n        {}: Set(req.{}.clone()),", f.name, f.name))
-            }
+            "String" | "Text" => fields.push_str(&format!(
+                "\n        {}: Set(req.{}.clone()),",
+                f.name, f.name
+            )),
             _ => fields.push_str(&format!("\n        {}: Set(req.{}),", f.name, f.name)),
         }
     }
@@ -554,12 +569,15 @@ fn render_service_tests(def: &DomainDef) -> String {
     let create_req = format!("Create{camel}Req");
     let update_req = format!("Update{camel}Req");
     let singular = def.domain.clone();
-    let unique_field = def.unique_field_names().first().cloned().unwrap_or_default();
+    let unique_field = def
+        .unique_field_names()
+        .first()
+        .cloned()
+        .unwrap_or_default();
     let create_req_fields = render_create_req_fields(def, &unique_field);
     let update_req_fields = render_update_req_fields(def, &unique_field);
     format!(
-        r#"
-#[cfg(test)]
+        r#"#[cfg(test)]
 mod tests {{
     use super::*;
     use crate::entity::{entity};
@@ -583,7 +601,10 @@ mod tests {{
         Database::connect(&config.database.url).await.unwrap()
     }}
 
-    async fn seed(db: &DatabaseConnection, deleted_at: Option<chrono::NaiveDateTime>) -> {entity}::Model {{
+    async fn seed(
+        db: &DatabaseConnection,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> {entity}::Model {{
         {entity}::ActiveModel {{
 {seed_fields}
             deleted_at: Set(deleted_at),
@@ -923,10 +944,7 @@ pub async fn list_{plural}(
 
 /// 创建{comment}（POST + JSON body）。
 #[endpoint]
-pub async fn create_{singular}(
-    depot: &mut Depot,
-    body: JsonBody<Create{camel}Req>,
-) -> ApiResult<{camel}Resp> {{
+pub async fn create_{singular}(depot: &mut Depot, body: JsonBody<Create{camel}Req>) -> ApiResult<{camel}Resp> {{
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = {domain}_service::create_{singular}(&state.db, &req).await?;
@@ -935,10 +953,7 @@ pub async fn create_{singular}(
 
 /// 更新{comment}（POST + JSON body）。
 #[endpoint]
-pub async fn update_{singular}(
-    depot: &mut Depot,
-    body: JsonBody<Update{camel}Req>,
-) -> ApiResult<{camel}Resp> {{
+pub async fn update_{singular}(depot: &mut Depot, body: JsonBody<Update{camel}Req>) -> ApiResult<{camel}Resp> {{
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = {domain}_service::update_{singular}(&state.db, &req).await?;
@@ -947,10 +962,7 @@ pub async fn update_{singular}(
 
 /// {comment}详情（POST + JSON body：`{{ "id": ... }}`）。
 #[endpoint]
-pub async fn get_{singular}(
-    depot: &mut Depot,
-    body: JsonBody<{camel}IdReq>,
-) -> ApiResult<{camel}Resp> {{
+pub async fn get_{singular}(depot: &mut Depot, body: JsonBody<{camel}IdReq>) -> ApiResult<{camel}Resp> {{
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = {domain}_service::get_{singular}(&state.db, req.id).await?;
@@ -959,10 +971,7 @@ pub async fn get_{singular}(
 
 /// 删除{comment}（POST + JSON body：`{{ "id": ... }}`）。
 #[endpoint]
-pub async fn delete_{singular}(
-    depot: &mut Depot,
-    body: JsonBody<{camel}IdReq>,
-) -> ApiResult<()> {{
+pub async fn delete_{singular}(depot: &mut Depot, body: JsonBody<{camel}IdReq>) -> ApiResult<()> {{
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     {domain}_service::delete_{singular}(&state.db, req.id).await?;

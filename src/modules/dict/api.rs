@@ -23,10 +23,7 @@ pub async fn list_dicts(
 
 /// 创建数据字典（POST + JSON body）。
 #[endpoint]
-pub async fn create_dict(
-    depot: &mut Depot,
-    body: JsonBody<CreateDictReq>,
-) -> ApiResult<DictResp> {
+pub async fn create_dict(depot: &mut Depot, body: JsonBody<CreateDictReq>) -> ApiResult<DictResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = dict_service::create_dict(&state.db, &req).await?;
@@ -35,10 +32,7 @@ pub async fn create_dict(
 
 /// 更新数据字典（POST + JSON body）。
 #[endpoint]
-pub async fn update_dict(
-    depot: &mut Depot,
-    body: JsonBody<UpdateDictReq>,
-) -> ApiResult<DictResp> {
+pub async fn update_dict(depot: &mut Depot, body: JsonBody<UpdateDictReq>) -> ApiResult<DictResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = dict_service::update_dict(&state.db, &req).await?;
@@ -47,10 +41,7 @@ pub async fn update_dict(
 
 /// 数据字典详情（POST + JSON body：`{ "id": ... }`）。
 #[endpoint]
-pub async fn get_dict(
-    depot: &mut Depot,
-    body: JsonBody<DictIdReq>,
-) -> ApiResult<DictResp> {
+pub async fn get_dict(depot: &mut Depot, body: JsonBody<DictIdReq>) -> ApiResult<DictResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = dict_service::get_dict(&state.db, req.id).await?;
@@ -59,10 +50,7 @@ pub async fn get_dict(
 
 /// 删除数据字典（POST + JSON body：`{ "id": ... }`）。
 #[endpoint]
-pub async fn delete_dict(
-    depot: &mut Depot,
-    body: JsonBody<DictIdReq>,
-) -> ApiResult<()> {
+pub async fn delete_dict(depot: &mut Depot, body: JsonBody<DictIdReq>) -> ApiResult<()> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     dict_service::delete_dict(&state.db, req.id).await?;

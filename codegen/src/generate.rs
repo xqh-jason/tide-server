@@ -18,7 +18,10 @@ pub fn write_all(def: &DomainDef, root: &Path) -> anyhow::Result<Vec<String>> {
     files.push(entity_path.display().to_string());
 
     for (name, render) in [
-        ("api.rs", crate::templates::render_api as fn(&DomainDef) -> String),
+        (
+            "api.rs",
+            crate::templates::render_api as fn(&DomainDef) -> String,
+        ),
         ("service.rs", crate::templates::render_service),
         ("repo.rs", crate::templates::render_repo),
         ("dto.rs", crate::templates::render_dto),

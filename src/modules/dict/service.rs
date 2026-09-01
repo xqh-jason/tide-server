@@ -31,8 +31,12 @@ pub async fn create_dict(
     db: &DatabaseConnection,
     req: &CreateDictReq,
 ) -> Result<sys_dict::Model, AppError> {
-    if let Some(existing) = dict_repo::find_by_type_code_include_deleted(db, &req.type_code).await? {
-        return Err(AppError::Biz(format!("字典类型编码已存在：{}", existing.type_code)));
+    if let Some(existing) = dict_repo::find_by_type_code_include_deleted(db, &req.type_code).await?
+    {
+        return Err(AppError::Biz(format!(
+            "字典类型编码已存在：{}",
+            existing.type_code
+        )));
     }
 
     let model = sys_dict::ActiveModel {
@@ -56,9 +60,13 @@ pub async fn update_dict(
     let Some(_) = dict_repo::find_by_id(db, req.id).await? else {
         return Err(AppError::Biz(format!("数据字典不存在：{}", req.id)));
     };
-    if let Some(existing) = dict_repo::find_by_type_code_include_deleted(db, &req.type_code).await? {
+    if let Some(existing) = dict_repo::find_by_type_code_include_deleted(db, &req.type_code).await?
+    {
         if existing.id != req.id {
-            return Err(AppError::Biz(format!("字典类型编码已存在：{}", existing.type_code)));
+            return Err(AppError::Biz(format!(
+                "字典类型编码已存在：{}",
+                existing.type_code
+            )));
         }
     }
 
@@ -93,7 +101,6 @@ pub async fn delete_dict(db: &DatabaseConnection, id: u64) -> Result<(), AppErro
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,7 +125,10 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
-    async fn seed(db: &DatabaseConnection, deleted_at: Option<chrono::NaiveDateTime>) -> sys_dict::Model {
+    async fn seed(
+        db: &DatabaseConnection,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_dict::Model {
         sys_dict::ActiveModel {
             type_code: Set(unique("type_code")),
             label: Set(unique("label")),

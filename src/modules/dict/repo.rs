@@ -42,12 +42,18 @@ pub async fn find_page(
 }
 
 /// 创建记录。
-pub async fn create(db: &DatabaseConnection, model: sys_dict::ActiveModel) -> anyhow::Result<Model> {
+pub async fn create(
+    db: &DatabaseConnection,
+    model: sys_dict::ActiveModel,
+) -> anyhow::Result<Model> {
     Ok(model.insert(db).await?)
 }
 
 /// 更新记录（主键必须已设置）。
-pub async fn update(db: &DatabaseConnection, model: sys_dict::ActiveModel) -> anyhow::Result<Model> {
+pub async fn update(
+    db: &DatabaseConnection,
+    model: sys_dict::ActiveModel,
+) -> anyhow::Result<Model> {
     Ok(model.update(db).await?)
 }
 
@@ -73,8 +79,6 @@ pub async fn find_by_type_code_include_deleted(
         .await?;
     Ok(m)
 }
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,7 +101,11 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
-    async fn seed(db: &DatabaseConnection, type_code: &str, deleted_at: Option<chrono::NaiveDateTime>) -> sys_dict::Model {
+    async fn seed(
+        db: &DatabaseConnection,
+        type_code: &str,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_dict::Model {
         sys_dict::ActiveModel {
             type_code: Set(type_code.to_string()),
             label: Set(unique("label")),
@@ -125,7 +133,12 @@ mod tests {
     async fn find_by_id_excludes_soft_deleted() {
         let db = test_db().await;
         let live = seed(&db, &unique("live"), None).await;
-        let deleted = seed(&db, &unique("deleted"), Some(chrono::Utc::now().naive_utc())).await;
+        let deleted = seed(
+            &db,
+            &unique("deleted"),
+            Some(chrono::Utc::now().naive_utc()),
+        )
+        .await;
 
         let found_live = find_by_id(&db, live.id).await.unwrap();
         let found_deleted = find_by_id(&db, deleted.id).await.unwrap();
