@@ -313,6 +313,410 @@ fn render_filter_none_fields(def: &DomainDef) -> String {
         .join("\n")
 }
 
+/// service 文件模板：分页 / 创建（唯一查重）/ 更新（排除自身）/ 查询 / 删除 + 集成测试。
+pub fn render_service(def: &DomainDef) -> String {
+    let entity = def.entity_ident();
+    let camel = def.camel();
+    let filter = format!("{camel}Filter");
+    let list_req = format!("{camel}ListReq");
+    let create_req = format!("Create{camel}Req");
+    let update_req = format!("Update{camel}Req");
+    let plural = format!("{}s", def.domain);
+    let singular = def.domain.clone();
+    let create_fields = render_create_model_fields(def);
+    let update_fields = render_update_model_fields(def);
+    let filter_fields = render_filter_construct_fields(def);
+    let tests = render_service_tests(def);
+    format!(
+        r#"//! {comment}业务（codegen 生成）。
+
+use sea_orm::{{ActiveValue::Set, DatabaseConnection}};
+
+use crate::entity::{entity};
+use crate::modules::{domain}::dto::{{{create_req}, {filter}, {list_req}, {update_req}}};
+use crate::modules::{domain}::repo as {domain}_repo;
+use crate::utils::PageData;
+use crate::utils::error::AppError;
+
+/// 分页查询。
+pub async fn page_{plural}(
+    db: &DatabaseConnection,
+    req: &{list_req},
+) -> anyhow::Result<PageData<{entity}::Model>> {{
+    {domain}_repo::find_page(
+        db,
+        &{filter} {{
+{filter_fields}
+        }},
+        req.page.page_index(),
+        req.page.page_size(),
+    )
+    .await
+}}
+
+/// 创建：唯一字段查重（含软删占位）→ 构造 ActiveModel → 落库。
+pub async fn create_{singular}(
+    db: &DatabaseConnection,
+    req: &{create_req},
+) -> Result<{entity}::Model, AppError> {{
+{create_checks}
+    let model = {entity}::ActiveModel {{
+{create_fields}
+        ..Default::default()
+    }};
+    {domain}_repo::create(db, model).await?;
+    Ok(model)
+}}
+
+/// 更新：判存在 → 唯一字段查重排除自身 → 全量覆盖。
+pub async fn update_{singular}(
+    db: &DatabaseConnection,
+    req: &{update_req},
+) -> Result<{entity}::Model, AppError> {{
+    let Some(_) = {domain}_repo::find_by_id(db, req.id).await? else {{
+        return Err(AppError::Biz(format!("{comment}不存在：{{}}", req.id)));
+    }};
+{update_checks}
+    let model = {entity}::ActiveModel {{
+{update_fields}
+        ..Default::default()
+    }};
+    {domain}_repo::update(db, model).await?;
+    Ok(model)
+}}
+
+/// 查询单个详情（排除软删除）。
+pub async fn get_{singular}(db: &DatabaseConnection, id: u64) -> Result<{entity}::Model, AppError> {{
+    let Some(model) = {domain}_repo::find_by_id(db, id).await? else {{
+        return Err(AppError::Biz(format!("{comment}不存在：{{id}}")));
+    }};
+    Ok(model)
+}}
+
+/// 删除：判存在后软删。
+pub async fn delete_{singular}(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {{
+    let Some(_) = {domain}_repo::find_by_id(db, id).await? else {{
+        return Err(AppError::Biz(format!("{comment}不存在：{{id}}")));
+    }};
+    {domain}_repo::soft_delete(db, id).await?;
+    Ok(())
+}}
+
+{tests}"#,
+        comment = def.comment,
+        entity = entity,
+        domain = def.domain,
+        create_req = create_req,
+        filter = filter,
+        list_req = list_req,
+        update_req = update_req,
+        plural = plural,
+        singular = singular,
+        create_fields = create_fields,
+        update_fields = update_fields,
+        filter_fields = filter_fields,
+        create_checks = render_unique_checks(def, false),
+        update_checks = render_unique_checks(def, true),
+    )
+}
+
+/// 唯一字段查重代码：create 不含排除自身，update 含 `existing.id != req.id`。
+fn render_unique_checks(def: &DomainDef, exclude_self: bool) -> String {
+    let mut out = String::new();
+    for field in def.unique_field_names() {
+        let label = format!("{}{}", def.comment, field_label(&field));
+        if exclude_self {
+            out.push_str(&format!(
+                "    if let Some(existing) = {domain}_repo::find_by_{field}_include_deleted(db, &req.{field}).await? {{\n        if existing.id != req.id {{\n            return Err(AppError::Biz(format!(\"{label}已存在：{{}}\", existing.{field})));\n        }}\n    }}\n",
+                domain = def.domain,
+                field = field,
+                label = label,
+            ));
+        } else {
+            out.push_str(&format!(
+                "    if let Some(existing) = {domain}_repo::find_by_{field}_include_deleted(db, &req.{field}).await? {{\n        return Err(AppError::Biz(format!(\"{label}已存在：{{}}\", existing.{field})));\n    }}\n",
+                domain = def.domain,
+                field = field,
+                label = label,
+            ));
+        }
+    }
+    out
+}
+
+/// Create ActiveModel 字段（非 primary 非 readonly）。
+fn render_create_model_fields(def: &DomainDef) -> String {
+    def.fields
+        .iter()
+        .filter(|f| !f.primary && !f.readonly)
+        .map(|f| {
+            if f.optional {
+                match f.rust_type.as_str() {
+                    "String" | "Text" => format!(
+                        "        {}: Set(req.{}.clone().unwrap_or_default()),",
+                        f.name, f.name
+                    ),
+                    _ => {
+                        let d = f
+                            .default
+                            .as_ref()
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| default_literal(&f.rust_type));
+                        format!("        {}: Set(req.{}.unwrap_or({d})),", f.name, f.name)
+                    }
+                }
+            } else {
+                match f.rust_type.as_str() {
+                    "String" | "Text" => {
+                        format!("        {}: Set(req.{}.clone()),", f.name, f.name)
+                    }
+                    _ => format!("        {}: Set(req.{}),", f.name, f.name),
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Update ActiveModel 字段（id + 非 readonly 全量）。
+fn render_update_model_fields(def: &DomainDef) -> String {
+    let mut fields = format!("        id: Set(req.id),");
+    for f in def.fields.iter().filter(|f| !f.primary && !f.readonly) {
+        match f.rust_type.as_str() {
+            "String" | "Text" => {
+                fields.push_str(&format!("\n        {}: Set(req.{}.clone()),", f.name, f.name))
+            }
+            _ => fields.push_str(&format!("\n        {}: Set(req.{}),", f.name, f.name)),
+        }
+    }
+    fields
+}
+
+/// service 中 Filter 构造字段（从 ListReq 取）。
+fn render_filter_construct_fields(def: &DomainDef) -> String {
+    def.filters
+        .iter()
+        .map(|f| {
+            let ty = def
+                .fields
+                .iter()
+                .find(|fd| fd.name == f.field)
+                .map(|fd| fd.rust_type.as_str())
+                .unwrap_or("String");
+            if ty == "String" || ty == "Text" {
+                format!("            {}: req.{}.clone(),", f.field, f.field)
+            } else {
+                format!("            {}: req.{},", f.field, f.field)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 字段名转提示标签（type_code → 字典类型编码？第一版直接用小写字段名）。
+fn field_label(field: &str) -> String {
+    field.replace('_', " ")
+}
+
+/// 无 default 时的默认值字面量。
+fn default_literal(rust_type: &str) -> String {
+    match rust_type {
+        "u64" | "i64" | "i32" => "0".to_string(),
+        "i8" => "1".to_string(),
+        "bool" => "false".to_string(),
+        _ => "\"\"".to_string(),
+    }
+}
+
+/// service 尾部集成测试：唯一查重（含软删）、更新排除自身、不存在 Biz。
+fn render_service_tests(def: &DomainDef) -> String {
+    let entity = def.entity_ident();
+    let camel = def.camel();
+    let create_req = format!("Create{camel}Req");
+    let update_req = format!("Update{camel}Req");
+    let singular = def.domain.clone();
+    let unique_field = def.unique_field_names().first().cloned().unwrap_or_default();
+    let create_req_fields = render_create_req_fields(def, &unique_field);
+    let update_req_fields = render_update_req_fields(def, &unique_field);
+    format!(
+        r#"
+#[cfg(test)]
+mod tests {{
+    use super::*;
+    use crate::entity::{entity};
+    use crate::modules::{domain}::dto::{{{create_req}, {update_req}}};
+    use crate::utils::error::AppError;
+    use sea_orm::{{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set}};
+    use std::sync::atomic::{{AtomicU64, Ordering}};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn unique(prefix: &str) -> String {{
+        format!(
+            "{{prefix}}_{{}}_{{}}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        )
+    }}
+
+    async fn test_db() -> DatabaseConnection {{
+        let config = crate::infra::config::Config::load().unwrap();
+        Database::connect(&config.database.url).await.unwrap()
+    }}
+
+    async fn seed(db: &DatabaseConnection, deleted_at: Option<chrono::NaiveDateTime>) -> {entity}::Model {{
+        {entity}::ActiveModel {{
+{seed_fields}
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }}
+        .insert(db)
+        .await
+        .unwrap()
+    }}
+
+    fn create_req({unique_field}: String) -> {create_req} {{
+        {create_req} {{
+{create_req_fields}
+        }}
+    }}
+
+    fn update_req(id: u64, {unique_field}: String) -> {update_req} {{
+        {update_req} {{
+            id,
+{update_req_fields}
+        }}
+    }}
+
+    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {{
+        {entity}::Entity::delete_many()
+            .filter({entity}::Column::Id.is_in(ids.iter().copied()))
+            .exec(db)
+            .await
+            .unwrap();
+    }}
+
+    #[tokio::test]
+    async fn create_rejects_duplicate_{unique_field}_including_soft_deleted() {{
+        let db = test_db().await;
+        let live = seed(&db, None).await;
+        let deleted = seed(&db, Some(chrono::Utc::now().naive_utc())).await;
+
+        let result_live = create_{singular}(&db, &create_req(live.{unique_field}.clone())).await;
+        let result_deleted = create_{singular}(&db, &create_req(deleted.{unique_field}.clone())).await;
+
+        cleanup(&db, &[live.id, deleted.id]).await;
+
+        assert!(
+            matches!(result_live, Err(AppError::Biz(_))),
+            "正常占位应拒绝重复，实际：{{result_live:?}}"
+        );
+        assert!(
+            matches!(result_deleted, Err(AppError::Biz(_))),
+            "软删占位应拒绝重复，实际：{{result_deleted:?}}"
+        );
+    }}
+
+    #[tokio::test]
+    async fn update_rejects_duplicate_{unique_field}_excluding_self() {{
+        let db = test_db().await;
+        let a = seed(&db, None).await;
+        let b = seed(&db, None).await;
+
+        let dup = update_{singular}(&db, &update_req(b.id, a.{unique_field}.clone())).await;
+        let keep_self = update_{singular}(&db, &update_req(b.id, b.{unique_field}.clone())).await;
+
+        cleanup(&db, &[a.id, b.id]).await;
+
+        assert!(
+            matches!(dup, Err(AppError::Biz(_))),
+            "占用他人唯一值应拒绝，实际：{{dup:?}}"
+        );
+        keep_self.expect("保留自身唯一值应更新成功");
+    }}
+
+    #[tokio::test]
+    async fn update_and_delete_return_biz_error_when_missing() {{
+        let db = test_db().await;
+
+        let missing = update_{singular}(&db, &update_req(9_999_999_999, unique("missing"))).await;
+        let delete_missing = delete_{singular}(&db, 9_999_999_999).await;
+
+        assert!(
+            matches!(missing, Err(AppError::Biz(_))),
+            "更新不存在应返回 Biz，实际：{{missing:?}}"
+        );
+        assert!(
+            matches!(delete_missing, Err(AppError::Biz(_))),
+            "删除不存在应返回 Biz，实际：{{delete_missing:?}}"
+        );
+    }}
+}}
+"#,
+        entity = entity,
+        domain = def.domain,
+        create_req = create_req,
+        update_req = update_req,
+        singular = singular,
+        unique_field = unique_field,
+        seed_fields = render_seed_fields(def),
+        create_req_fields = create_req_fields,
+        update_req_fields = update_req_fields,
+    )
+}
+
+/// 测试 create_req 构造字段（唯一字段用参数，其余唯一值/默认值）。
+fn render_create_req_fields(def: &DomainDef, unique_field: &str) -> String {
+    def.fields
+        .iter()
+        .filter(|f| !f.primary && !f.readonly)
+        .map(|f| {
+            if f.name == unique_field {
+                return format!("            {},", f.name);
+            }
+            if f.optional {
+                match f.rust_type.as_str() {
+                    "String" | "Text" => format!("            {}: None,", f.name),
+                    _ => {
+                        let d = f
+                            .default
+                            .as_ref()
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| default_literal(&f.rust_type));
+                        format!("            {}: Some({d}),", f.name)
+                    }
+                }
+            } else {
+                match f.rust_type.as_str() {
+                    "String" | "Text" => {
+                        format!("            {}: unique(\"{}\"),", f.name, f.name)
+                    }
+                    _ => format!("            {}: 0,", f.name),
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 测试 update_req 构造字段（全量必填）。
+fn render_update_req_fields(def: &DomainDef, unique_field: &str) -> String {
+    def.fields
+        .iter()
+        .filter(|f| !f.primary && !f.readonly)
+        .map(|f| {
+            if f.name == unique_field {
+                return format!("            {},", f.name);
+            }
+            match f.rust_type.as_str() {
+                "String" | "Text" => format!("            {}: unique(\"{}\"),", f.name, f.name),
+                _ => format!("            {}: 0,", f.name),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +769,24 @@ mod tests {
         assert!(out.contains("DeletedAt.is_null()"));
         assert!(out.contains("TypeCode.eq"));
         assert!(out.contains("Label.like"));
+        assert!(out.contains("#[cfg(test)]"), "应输出生成的集成测试");
+    }
+
+    #[test]
+    fn service_template_has_business_rules() {
+        let out = render_service(&def());
+        for needle in [
+            "pub async fn page_dicts",
+            "pub async fn create_dict",
+            "pub async fn update_dict",
+            "pub async fn get_dict",
+            "pub async fn delete_dict",
+            "DictFilter",
+            "find_by_type_code_include_deleted",
+            "existing.id != req.id",
+        ] {
+            assert!(out.contains(needle), "缺少 {needle}");
+        }
         assert!(out.contains("#[cfg(test)]"), "应输出生成的集成测试");
     }
 }
