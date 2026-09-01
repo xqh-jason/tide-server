@@ -717,6 +717,274 @@ fn render_update_req_fields(def: &DomainDef, unique_field: &str) -> String {
         .join("\n")
 }
 
+/// dto 文件模板：Resp / ListReq / Filter / CreateReq / UpdateReq / IdReq。
+pub fn render_dto(def: &DomainDef) -> String {
+    let camel = def.camel();
+    let entity = def.entity_ident();
+    let resp_fields = render_resp_fields(def);
+    let resp_from_fields = render_resp_from_fields(def);
+    let list_req_fields = render_list_req_fields(def);
+    let filter_fields = render_filter_fields(def);
+    let create_fields = render_dto_create_fields(def);
+    let update_fields = render_dto_update_fields(def);
+    format!(
+        r#"//! {comment} DTO（codegen 生成）：entity 不直接暴露给接口，经 From 转换。
+
+use salvo::oapi::ToSchema;
+use serde::{{Deserialize, Serialize}};
+
+use crate::entity::{entity};
+use crate::utils::PageQuery;
+
+/// {comment}响应体。
+#[derive(Debug, Serialize, ToSchema)]
+pub struct {camel}Resp {{
+{resp_fields}}}
+
+impl From<{entity}::Model> for {camel}Resp {{
+    fn from(m: {entity}::Model) -> Self {{
+        Self {{
+{resp_from_fields}        }}
+    }}
+}}
+
+/// {comment}列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct {camel}ListReq {{
+    #[serde(flatten)]
+    pub page: PageQuery,
+{list_req_fields}}}
+
+/// {comment}分页过滤条件（repo 层入参）。
+#[derive(Debug, Clone, Default)]
+pub struct {camel}Filter {{
+{filter_fields}}}
+
+/// 创建{comment}请求。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct Create{camel}Req {{
+{create_fields}}}
+
+/// 更新{comment}请求（编辑表单全量提交）。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct Update{camel}Req {{
+    pub id: u64,
+{update_fields}}}
+
+/// 按 id 查询 / 删除{comment}请求。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct {camel}IdReq {{
+    pub id: u64,
+}}
+"#,
+        comment = def.comment,
+        camel = camel,
+        entity = entity,
+        resp_fields = resp_fields,
+        resp_from_fields = resp_from_fields,
+        list_req_fields = list_req_fields,
+        filter_fields = filter_fields,
+        create_fields = create_fields,
+        update_fields = update_fields,
+    )
+}
+
+/// Resp 字段（primary + 非 readonly 业务字段）。
+fn render_resp_fields(def: &DomainDef) -> String {
+    def.fields
+        .iter()
+        .filter(|f| f.primary || !f.readonly)
+        .map(|f| format!("    pub {}: {},\n", f.name, field_rust_type(f)))
+        .collect()
+}
+
+/// Resp::from 字段赋值。
+fn render_resp_from_fields(def: &DomainDef) -> String {
+    def.fields
+        .iter()
+        .filter(|f| f.primary || !f.readonly)
+        .map(|f| format!("            {}: m.{},\n", f.name, f.name))
+        .collect()
+}
+
+/// ListReq 过滤字段（filters 声明，Option 类型）。
+fn render_list_req_fields(def: &DomainDef) -> String {
+    def.filters
+        .iter()
+        .map(|f| {
+            let ty = def
+                .fields
+                .iter()
+                .find(|fd| fd.name == f.field)
+                .map(|fd| field_rust_type(fd))
+                .unwrap_or_else(|| "String".to_string());
+            format!("    pub {}: Option<{ty}>,\n", f.field)
+        })
+        .collect()
+}
+
+/// Filter 字段（与 ListReq 过滤项一致）。
+fn render_filter_fields(def: &DomainDef) -> String {
+    def.filters
+        .iter()
+        .map(|f| {
+            let ty = def
+                .fields
+                .iter()
+                .find(|fd| fd.name == f.field)
+                .map(|fd| field_rust_type(fd))
+                .unwrap_or_else(|| "String".to_string());
+            format!("    pub {}: Option<{ty}>,\n", f.field)
+        })
+        .collect()
+}
+
+/// Create 请求字段（非 primary 非 readonly；optional → Option<T>）。
+fn render_dto_create_fields(def: &DomainDef) -> String {
+    def.fields
+        .iter()
+        .filter(|f| !f.primary && !f.readonly)
+        .map(|f| {
+            let ty = field_rust_type(f);
+            if f.optional {
+                format!("    pub {}: Option<{ty}>,\n", f.name)
+            } else {
+                format!("    pub {}: {ty},\n", f.name)
+            }
+        })
+        .collect()
+}
+
+/// Update 请求字段（非 primary 非 readonly 全量必填）。
+fn render_dto_update_fields(def: &DomainDef) -> String {
+    def.fields
+        .iter()
+        .filter(|f| !f.primary && !f.readonly)
+        .map(|f| format!("    pub {}: {},\n", f.name, field_rust_type(f)))
+        .collect()
+}
+
+/// 字段 Rust 类型（dto 中 String/Text → String，其余原样）。
+fn field_rust_type(f: &FieldDef) -> String {
+    match f.rust_type.as_str() {
+        "Text" => "String".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// api 文件模板：五端点，顺序 list → create → update → get → delete。
+pub fn render_api(def: &DomainDef) -> String {
+    let camel = def.camel();
+    let domain = def.domain.clone();
+    let plural = format!("{domain}s");
+    let singular = domain.clone();
+    format!(
+        r#"//! {comment} handler（codegen 生成）。
+
+use salvo::oapi::endpoint;
+use salvo::oapi::extract::JsonBody;
+use salvo::prelude::*;
+
+use crate::infra::state::AppState;
+use crate::modules::{domain}::dto::{{Create{camel}Req, {camel}IdReq, {camel}ListReq, {camel}Resp, Update{camel}Req}};
+use crate::modules::{domain}::service as {domain}_service;
+use crate::utils::{{ApiResponse, ApiResult, PageResult}};
+
+/// {comment}列表（POST + JSON body）。
+#[endpoint]
+pub async fn list_{plural}(
+    depot: &mut Depot,
+    body: JsonBody<{camel}ListReq>,
+) -> ApiResult<PageResult<{camel}Resp>> {{
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let data = {domain}_service::page_{plural}(&state.db, &req).await?;
+    Ok(ApiResponse::ok(data.into()))
+}}
+
+/// 创建{comment}（POST + JSON body）。
+#[endpoint]
+pub async fn create_{singular}(
+    depot: &mut Depot,
+    body: JsonBody<Create{camel}Req>,
+) -> ApiResult<{camel}Resp> {{
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let model = {domain}_service::create_{singular}(&state.db, &req).await?;
+    Ok(ApiResponse::ok(model.into()))
+}}
+
+/// 更新{comment}（POST + JSON body）。
+#[endpoint]
+pub async fn update_{singular}(
+    depot: &mut Depot,
+    body: JsonBody<Update{camel}Req>,
+) -> ApiResult<{camel}Resp> {{
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let model = {domain}_service::update_{singular}(&state.db, &req).await?;
+    Ok(ApiResponse::ok(model.into()))
+}}
+
+/// {comment}详情（POST + JSON body：`{{ "id": ... }}`）。
+#[endpoint]
+pub async fn get_{singular}(
+    depot: &mut Depot,
+    body: JsonBody<{camel}IdReq>,
+) -> ApiResult<{camel}Resp> {{
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let model = {domain}_service::get_{singular}(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(model.into()))
+}}
+
+/// 删除{comment}（POST + JSON body：`{{ "id": ... }}`）。
+#[endpoint]
+pub async fn delete_{singular}(
+    depot: &mut Depot,
+    body: JsonBody<{camel}IdReq>,
+) -> ApiResult<()> {{
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    {domain}_service::delete_{singular}(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(()))
+}}
+"#,
+        comment = def.comment,
+        camel = camel,
+        domain = domain,
+        plural = plural,
+        singular = singular,
+    )
+}
+
+/// mod 文件模板：模块声明 + 路由（顺序 list → create → update → get → delete）。
+pub fn render_mod(def: &DomainDef) -> String {
+    let domain = def.domain.clone();
+    format!(
+        r#"//! {comment}域（codegen 生成）。
+
+use salvo::prelude::*;
+
+pub mod api;
+pub mod dto;
+pub mod repo;
+pub mod service;
+
+pub fn routes() -> Router {{
+    Router::new()
+        .push(Router::with_path("list").post(api::list_{domain}s))
+        .push(Router::with_path("create").post(api::create_{domain}))
+        .push(Router::with_path("update").post(api::update_{domain}))
+        .push(Router::with_path("get").post(api::get_{domain}))
+        .push(Router::with_path("delete").post(api::delete_{domain}))
+}}
+"#,
+        comment = def.comment,
+        domain = domain,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,5 +1056,43 @@ mod tests {
             assert!(out.contains(needle), "缺少 {needle}");
         }
         assert!(out.contains("#[cfg(test)]"), "应输出生成的集成测试");
+    }
+
+    #[test]
+    fn dto_template_has_all_types() {
+        let out = render_dto(&def());
+        for needle in [
+            "DictResp",
+            "DictListReq",
+            "DictFilter",
+            "CreateDictReq",
+            "UpdateDictReq",
+            "DictIdReq",
+            "serde(flatten)",
+        ] {
+            assert!(out.contains(needle), "缺少 {needle}");
+        }
+    }
+
+    #[test]
+    fn api_template_has_five_endpoints_in_order() {
+        let out = render_api(&def());
+        let list = out.find("list_dicts").unwrap();
+        let create = out.find("create_dict").unwrap();
+        let update = out.find("update_dict").unwrap();
+        let get = out.find("get_dict").unwrap();
+        let delete = out.find("delete_dict").unwrap();
+        assert!(list < create && create < update && update < get && get < delete);
+    }
+
+    #[test]
+    fn mod_template_has_routes_in_order() {
+        let out = render_mod(&def());
+        let list = out.find("\"list\"").unwrap();
+        let create = out.find("\"create\"").unwrap();
+        let update = out.find("\"update\"").unwrap();
+        let get = out.find("\"get\"").unwrap();
+        let delete = out.find("\"delete\"").unwrap();
+        assert!(list < create && create < update && update < get && get < delete);
     }
 }
