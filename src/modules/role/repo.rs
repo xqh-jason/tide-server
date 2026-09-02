@@ -193,6 +193,7 @@ pub async fn soft_delete_role(db: &DatabaseConnection, id: u64) -> anyhow::Resul
     Ok(true)
 }
 
+/// 批量按 id 查询有效角色（排除软删除）；无匹配时返回空数组。
 pub async fn find_by_ids(
     db: &DatabaseConnection,
     ids: Vec<u64>,

@@ -10,6 +10,7 @@ use sea_orm::{ActiveValue::Set, DatabaseConnection};
 
 use crate::entity::sys_role;
 
+/// 分页查询角色（keyword 模糊匹配 role_name / role_key，status 精确），排除软删除。
 pub async fn page_roles(
     db: &DatabaseConnection,
     req: &RoleListReq,
@@ -26,6 +27,7 @@ pub async fn page_roles(
     .await
 }
 
+/// 批量按 id 查询有效角色（排除软删除），供权限模块等按 id 集合取角色。
 pub async fn find_by_ids(
     db: &DatabaseConnection,
     ids: Vec<u64>,
@@ -82,6 +84,7 @@ pub async fn delete_role(db: &DatabaseConnection, id: u64) -> Result<(), AppErro
     Ok(())
 }
 
+/// 更新角色：判存在后键查重（排除自身），事务内全量重建菜单 / API 关联。
 pub async fn update_role(
     db: &DatabaseConnection,
     req: &UpdateRoleReq,
