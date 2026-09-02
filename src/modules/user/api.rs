@@ -4,9 +4,7 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
-use crate::modules::user::dto::{
-    CreateUserReq, UpdateUserReq, UserInfoResp, UserListReq, UserResp, UsernameReq,
-};
+use crate::modules::user::dto::*;
 use crate::modules::user::service as user_service;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
@@ -83,5 +81,16 @@ pub async fn update_user(depot: &mut Depot, body: JsonBody<UpdateUserReq>) -> Ap
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let resp = user_service::update_user_with_links(&state.db, auth.user_id, req).await?;
+    Ok(ApiResponse::ok(resp))
+}
+
+#[endpoint]
+pub async fn update_user_status(
+    depot: &mut Depot,
+    body: JsonBody<UpdateUserStatusReq>,
+) -> ApiResult<bool> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let resp = user_service::update_user_status(&state.db, req.id, req.status).await?;
     Ok(ApiResponse::ok(resp))
 }

@@ -19,4 +19,5 @@ pub fn routes() -> Router {
         .push(Router::with_path("create").post(api::create_user))
         .push(Router::with_path("update").post(api::update_user))
         .push(Router::with_path("get").post(api::get_user))
+        .push(Router::with_path("update-status").post(api::update_user_status))
 }

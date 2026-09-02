@@ -144,6 +144,14 @@ pub async fn update_user_with_links(
     Ok(user)
 }
 
+pub async fn update_user(
+    db: &DatabaseConnection,
+    model: sys_user::ActiveModel,
+) -> anyhow::Result<bool> {
+    model.update(db).await?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
