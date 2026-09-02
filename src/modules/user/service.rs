@@ -146,6 +146,15 @@ pub async fn create_user(
     Ok(UserResp::from(model))
 }
 
+pub async fn get_user(db: &DatabaseConnection, user_id: u64) -> Result<UserResp, AppError> {
+    let user = user_repo::find_by_id(db, user_id).await?;
+
+    if user.is_none() {
+        return Err(AppError::Biz("用户不存在".into()));
+    }
+    Ok(UserResp::from(user.unwrap()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

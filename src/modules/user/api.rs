@@ -6,7 +6,7 @@ use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
 use crate::modules::user::dto::{CreateUserReq, UserInfoResp, UserListReq, UserResp, UsernameReq};
 use crate::modules::user::service as user_service;
-use crate::utils::{ApiResponse, ApiResult, PageResult};
+use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 /// 用户列表（POST + JSON body）。分页字段（PageQuery）与过滤字段（keyword/status）
 /// 通过 `#[serde(flatten)]` 合并为单个 `UserListReq`，一个 `JsonBody` 提取器取全部。
@@ -61,5 +61,14 @@ pub async fn create_user(depot: &mut Depot, body: JsonBody<CreateUserReq>) -> Ap
     let auth = AuthUser::from_depot(depot)?;
 
     let resp = user_service::create_user(&state.db, auth.user_id, req).await?;
+    Ok(ApiResponse::ok(resp))
+}
+
+/// 获取用户详情（POST + JSON body：`{ "id": ... }`）。
+#[endpoint]
+pub async fn get_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<UserResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let resp = user_service::get_user(&state.db, req.id).await?;
     Ok(ApiResponse::ok(resp))
 }
