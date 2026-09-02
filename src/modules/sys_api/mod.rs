@@ -4,6 +4,7 @@
 //! 接口级集中授权（path/method → 角色映射）留待后续引入。
 
 use salvo::Router;
+use salvo::oapi::RouterExt;
 
 pub mod api;
 pub mod dto;
@@ -12,6 +13,7 @@ pub mod service;
 
 pub fn routes() -> Router {
     Router::new()
+        .oapi_tags(["接口权限"])
         .push(Router::with_path("list").post(api::list_apis))
         .push(Router::with_path("create").post(api::create_api))
         .push(Router::with_path("update").post(api::update_api))

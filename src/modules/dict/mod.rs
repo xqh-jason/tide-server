@@ -1,5 +1,6 @@
 //! 数据字典域（codegen 生成）。
 
+use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
 pub mod api;
@@ -10,6 +11,7 @@ pub mod service;
 /// 数据字典 CRUD 端点：`POST /api/v1/dict/{list,create,update,get,delete}`。
 pub fn routes() -> Router {
     Router::new()
+        .oapi_tags(["字典"])
         .push(Router::with_path("list").post(api::list_dicts))
         .push(Router::with_path("create").post(api::create_dict))
         .push(Router::with_path("update").post(api::update_dict))

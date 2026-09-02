@@ -4,6 +4,7 @@
 //! - `user_routes()`：`POST /api/v1/user/menus`（vben 动态路由契约，挂在 user 组下）
 //! - `routes()`：`POST /api/v1/menu/{list,create,update,get,delete}`（管理端点，挂在 menu 组下）
 
+use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
 pub mod api;
@@ -14,6 +15,7 @@ pub mod service;
 /// 菜单管理 CRUD 端点：`POST /api/v1/menu/{list,create,update,get,delete}`。
 pub fn routes() -> Router {
     Router::new()
+        .oapi_tags(["菜单"])
         .push(Router::with_path("list").post(api::list_menus))
         .push(Router::with_path("create").post(api::create_menu))
         .push(Router::with_path("update").post(api::update_menu))
@@ -23,5 +25,7 @@ pub fn routes() -> Router {
 
 /// vben 菜单树契约端点：`POST /api/v1/user/menus`（由 router.rs 挂在 user 组下）。
 pub fn user_routes() -> Router {
-    Router::with_path("menus").post(api::menus)
+    Router::with_path("menus")
+        .oapi_tags(["用户"])
+        .post(api::menus)
 }

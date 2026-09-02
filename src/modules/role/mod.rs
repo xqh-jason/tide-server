@@ -4,10 +4,12 @@ pub mod dto;
 pub mod repo;
 pub mod service;
 
+use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
 pub fn routes() -> Router {
     Router::new()
+        .oapi_tags(["角色"])
         .push(Router::with_path("list").post(api::list_roles))
         .push(Router::with_path("create").post(api::create_role))
         .push(Router::with_path("update").post(api::update_role))
