@@ -14,8 +14,8 @@ use crate::entity::sys_role;
 pub async fn page_roles(
     db: &DatabaseConnection,
     req: &RoleListReq,
-) -> anyhow::Result<PageData<sys_role::Model>> {
-    role_repo::find_page(
+) -> Result<PageData<sys_role::Model>, AppError> {
+    let model = role_repo::find_page(
         db,
         &RoleFilter {
             keyword: req.keyword.clone(),
@@ -24,14 +24,15 @@ pub async fn page_roles(
         req.page.page_index(),
         req.page.page_size(),
     )
-    .await
+    .await?;
+    Ok(model)
 }
 
 /// 批量按 id 查询有效角色（排除软删除），供权限模块等按 id 集合取角色。
 pub async fn find_by_ids(
     db: &DatabaseConnection,
     ids: Vec<u64>,
-) -> anyhow::Result<Vec<sys_role::Model>> {
+) -> Result<Vec<sys_role::Model>, AppError> {
     let roles = role_repo::find_by_ids(db, ids).await?;
     Ok(roles)
 }

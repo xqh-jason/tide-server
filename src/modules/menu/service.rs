@@ -79,8 +79,8 @@ fn build_menu_tree(menus: Vec<sys_menu::Model>) -> Vec<VbenMenuItem> {
 pub async fn page_menus(
     db: &DatabaseConnection,
     req: &MenuListReq,
-) -> anyhow::Result<PageData<sys_menu::Model>> {
-    menu_repo::find_page(
+) -> Result<PageData<sys_menu::Model>, AppError> {
+    let model = menu_repo::find_page(
         db,
         &MenuFilter {
             keyword: req.keyword.clone(),
@@ -90,7 +90,8 @@ pub async fn page_menus(
         req.page.page_index(),
         req.page.page_size(),
     )
-    .await
+    .await?;
+    Ok(model)
 }
 
 pub async fn create_menu(

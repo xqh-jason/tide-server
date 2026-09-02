@@ -3,6 +3,7 @@
 use crate::modules::permission::SUPER_ROLE_KEY;
 use crate::modules::permission::repo as permission_repo;
 use crate::modules::user::repo as user_repo;
+use crate::utils::error::AppError;
 use sea_orm::DatabaseConnection;
 
 /// 判断用户是否拥有指定操作权限。
@@ -12,7 +13,7 @@ pub async fn has_permission(
     db: &DatabaseConnection,
     user_id: u64,
     permission_code: &str,
-) -> anyhow::Result<bool> {
+) -> Result<bool, AppError> {
     let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
     let role_keys = roles
         .into_iter()

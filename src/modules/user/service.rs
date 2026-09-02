@@ -17,7 +17,7 @@ use crate::utils::error::AppError;
 pub async fn get_by_username(
     db: &sea_orm::DatabaseConnection,
     username: &str,
-) -> anyhow::Result<Option<sys_user::Model>> {
+) -> Result<Option<sys_user::Model>, AppError> {
     let user = user_repo::find_by_username(db, username).await?;
 
     Ok(user)
@@ -27,8 +27,8 @@ pub async fn get_by_username(
 pub async fn page_users(
     db: &sea_orm::DatabaseConnection,
     req: &UserListReq,
-) -> anyhow::Result<PageData<sys_user::Model>> {
-    user_repo::find_page(
+) -> Result<PageData<sys_user::Model>, AppError> {
+    let model = user_repo::find_page(
         db,
         &UserFilter {
             keyword: req.keyword.clone(),
@@ -37,7 +37,8 @@ pub async fn page_users(
         req.page.page_index(),
         req.page.page_size(),
     )
-    .await
+    .await?;
+    Ok(model)
 }
 
 /// 当前登录用户完整信息（契约 §3.2 的 `/user/info`）。
@@ -56,7 +57,7 @@ pub async fn get_user_info(
 pub async fn get_access_codes(
     db: &DatabaseConnection,
     user_id: u64,
-) -> anyhow::Result<Vec<String>> {
+) -> Result<Vec<String>, AppError> {
     let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
     if roles.iter().any(|role| role.role_key == SUPER_ROLE_KEY) {
         return Ok(vec![SUPER_ROLE_KEY.to_string()]);

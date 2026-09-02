@@ -12,8 +12,8 @@ use crate::utils::error::AppError;
 pub async fn page_dicts(
     db: &DatabaseConnection,
     req: &DictListReq,
-) -> anyhow::Result<PageData<sys_dict::Model>> {
-    dict_repo::find_page(
+) -> Result<PageData<sys_dict::Model>, AppError> {
+    let model = dict_repo::find_page(
         db,
         &DictFilter {
             type_code: req.type_code.clone(),
@@ -23,7 +23,8 @@ pub async fn page_dicts(
         req.page.page_index(),
         req.page.page_size(),
     )
-    .await
+    .await?;
+    Ok(model)
 }
 
 /// 创建：唯一字段查重（含软删占位）→ 构造 ActiveModel → 落库。

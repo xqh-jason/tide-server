@@ -70,7 +70,7 @@ pub async fn update_api(
 pub async fn page_apis(
     db: &DatabaseConnection,
     req: &ApiListReq,
-) -> anyhow::Result<PageData<sys_api::Model>> {
+) -> Result<PageData<sys_api::Model>, AppError> {
     let model = api_repo::find_page(
         db,
         &ApiFilter {
