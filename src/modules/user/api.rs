@@ -4,7 +4,9 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
-use crate::modules::user::dto::{CreateUserReq, UserInfoResp, UserListReq, UserResp, UsernameReq};
+use crate::modules::user::dto::{
+    CreateUserReq, UpdateUserReq, UserInfoResp, UserListReq, UserResp, UsernameReq,
+};
 use crate::modules::user::service as user_service;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
@@ -70,5 +72,16 @@ pub async fn get_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<Use
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let resp = user_service::get_user(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(resp))
+}
+
+/// 更新用户（POST + JSON body）。发起人需拥有 `system:user:update` 权限；
+/// 内置超管 admin 不允许被编辑。
+#[endpoint]
+pub async fn update_user(depot: &mut Depot, body: JsonBody<UpdateUserReq>) -> ApiResult<UserResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let auth = AuthUser::from_depot(depot)?;
+    let resp = user_service::update_user_with_links(&state.db, auth.user_id, req).await?;
     Ok(ApiResponse::ok(resp))
 }

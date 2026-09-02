@@ -79,11 +79,23 @@ impl UserInfoResp {
 pub struct CreateUserReq {
     pub username: String,
     pub password: String,
-    /// 工号；员工编号（可选，缺省为空字符串）。
-    pub emp_no: Option<String>,
+    pub emp_no: String,
     pub nickname: String,
     pub phone: Option<String>,
     pub email: Option<String>,
     pub status: Option<i8>,
+    pub role_ids: Vec<u64>, // 角色 ID列表 ，允许空
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateUserReq {
+    pub id: u64,
+    pub username: String,
+    pub password: String,
+    pub emp_no: String,
+    pub nickname: String,
+    pub phone: String,
+    pub email: String,
+    pub status: i8,
     pub role_ids: Vec<u64>, // 角色 ID列表 ，允许空
 }

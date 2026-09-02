@@ -111,6 +111,39 @@ pub async fn create_user_with_links(
     Ok(user)
 }
 
+pub async fn update_user_with_links(
+    db: &DatabaseConnection,
+    user: sys_user::ActiveModel,
+    role_ids: Vec<u64>,
+) -> anyhow::Result<sys_user::Model> {
+    let txn = db.begin().await?;
+    let user = user.update(&txn).await?;
+
+    if !role_ids.is_empty() {
+        // 先删除旧角色关联
+        sys_user_role::Entity::delete_many()
+            .filter(sys_user_role::Column::UserId.eq(user.id))
+            .exec(&txn)
+            .await?;
+
+        // 再插入新角色关联
+        let user_role_ids = role_ids
+            .into_iter()
+            .map(|role_id| sys_user_role::ActiveModel {
+                user_id: Set(user.id),
+                role_id: Set(role_id),
+            });
+
+        sys_user_role::Entity::insert_many(user_role_ids)
+            .exec(&txn)
+            .await?;
+    }
+
+    txn.commit().await?;
+
+    Ok(user)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
