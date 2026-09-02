@@ -7,10 +7,10 @@ use salvo::prelude::*;
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
 use crate::modules::menu::dto::{
-    CreateMenuReq, MenuIdReq, MenuListReq, MenuResp, UpdateMenuReq, VbenMenuItem,
+    CreateMenuReq, MenuListReq, MenuResp, UpdateMenuReq, VbenMenuItem,
 };
 use crate::modules::menu::service as menu_service;
-use crate::utils::{ApiResponse, ApiResult, PageResult};
+use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 /// vben 菜单树（契约 §3.2），vben `fetchMenuListAsync` 消费后动态注册路由。
 /// 挂载路径仍为 `POST /api/v1/user/menus`（router.rs 组装），
@@ -56,7 +56,7 @@ pub async fn update_menu(depot: &mut Depot, req: JsonBody<UpdateMenuReq>) -> Api
 
 /// 菜单详情（POST + JSON body：`{ "id": ... }`）：按 id 查询单个菜单，不存在返回业务错误。
 #[endpoint]
-pub async fn get_menu(depot: &mut Depot, req: JsonBody<MenuIdReq>) -> ApiResult<MenuResp> {
+pub async fn get_menu(depot: &mut Depot, req: JsonBody<IdReq>) -> ApiResult<MenuResp> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     let menu = menu_service::get_menu(&state.db, req.id).await?;
@@ -65,7 +65,7 @@ pub async fn get_menu(depot: &mut Depot, req: JsonBody<MenuIdReq>) -> ApiResult<
 
 /// 删除菜单（POST + JSON body：`{ "id": ... }`）：级联软删全部子孙菜单并清空角色关联。
 #[endpoint]
-pub async fn delete_menu(depot: &mut Depot, req: JsonBody<MenuIdReq>) -> ApiResult<()> {
+pub async fn delete_menu(depot: &mut Depot, req: JsonBody<IdReq>) -> ApiResult<()> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     menu_service::delete_menu(&state.db, req.id).await?;

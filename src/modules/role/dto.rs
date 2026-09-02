@@ -71,9 +71,3 @@ pub struct UpdateRoleReq {
     pub menu_ids: Vec<u64>,
     pub api_ids: Vec<u64>,
 }
-
-/// 按 id 查询 / 删除角色请求。
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct RoleIdReq {
-    pub id: u64,
-}

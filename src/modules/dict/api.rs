@@ -5,9 +5,9 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
-use crate::modules::dict::dto::{CreateDictReq, DictIdReq, DictListReq, DictResp, UpdateDictReq};
+use crate::modules::dict::dto::{CreateDictReq, DictListReq, DictResp, UpdateDictReq};
 use crate::modules::dict::service as dict_service;
-use crate::utils::{ApiResponse, ApiResult, PageResult};
+use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 /// 数据字典列表（POST + JSON body）。
 #[endpoint]
@@ -41,7 +41,7 @@ pub async fn update_dict(depot: &mut Depot, body: JsonBody<UpdateDictReq>) -> Ap
 
 /// 数据字典详情（POST + JSON body：`{ "id": ... }`）。
 #[endpoint]
-pub async fn get_dict(depot: &mut Depot, body: JsonBody<DictIdReq>) -> ApiResult<DictResp> {
+pub async fn get_dict(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<DictResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = dict_service::get_dict(&state.db, req.id).await?;
@@ -50,7 +50,7 @@ pub async fn get_dict(depot: &mut Depot, body: JsonBody<DictIdReq>) -> ApiResult
 
 /// 删除数据字典（POST + JSON body：`{ "id": ... }`）。
 #[endpoint]
-pub async fn delete_dict(depot: &mut Depot, body: JsonBody<DictIdReq>) -> ApiResult<()> {
+pub async fn delete_dict(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<()> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     dict_service::delete_dict(&state.db, req.id).await?;

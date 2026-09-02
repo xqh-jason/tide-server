@@ -757,7 +757,7 @@ fn render_update_req_fields(def: &DomainDef, unique_field: &str) -> String {
         .join("\n")
 }
 
-/// dto 文件模板：Resp / ListReq / Filter / CreateReq / UpdateReq / IdReq。
+/// dto 文件模板：Resp / ListReq / Filter / CreateReq / UpdateReq（通用 IdReq 在 utils 共享）。
 pub fn render_dto(def: &DomainDef) -> String {
     let camel = def.camel();
     let entity = def.entity_ident();
@@ -811,11 +811,6 @@ pub struct Update{camel}Req {{
     pub id: u64,
 {update_fields}}}
 
-/// 按 id 查询 / 删除{comment}请求。
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct {camel}IdReq {{
-    pub id: u64,
-}}
 "#,
         comment = def.comment,
         camel = camel,
@@ -926,9 +921,9 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
-use crate::modules::{domain}::dto::{{Create{camel}Req, {camel}IdReq, {camel}ListReq, {camel}Resp, Update{camel}Req}};
+use crate::modules::{domain}::dto::{{Create{camel}Req, {camel}ListReq, {camel}Resp, Update{camel}Req}};
 use crate::modules::{domain}::service as {domain}_service;
-use crate::utils::{{ApiResponse, ApiResult, PageResult}};
+use crate::utils::{{ApiResponse, ApiResult, IdReq, PageResult}};
 
 /// {comment}列表（POST + JSON body）。
 #[endpoint]
@@ -962,7 +957,7 @@ pub async fn update_{singular}(depot: &mut Depot, body: JsonBody<Update{camel}Re
 
 /// {comment}详情（POST + JSON body：`{{ "id": ... }}`）。
 #[endpoint]
-pub async fn get_{singular}(depot: &mut Depot, body: JsonBody<{camel}IdReq>) -> ApiResult<{camel}Resp> {{
+pub async fn get_{singular}(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<{camel}Resp> {{
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = {domain}_service::get_{singular}(&state.db, req.id).await?;
@@ -971,7 +966,7 @@ pub async fn get_{singular}(depot: &mut Depot, body: JsonBody<{camel}IdReq>) -> 
 
 /// 删除{comment}（POST + JSON body：`{{ "id": ... }}`）。
 #[endpoint]
-pub async fn delete_{singular}(depot: &mut Depot, body: JsonBody<{camel}IdReq>) -> ApiResult<()> {{
+pub async fn delete_{singular}(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<()> {{
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     {domain}_service::delete_{singular}(&state.db, req.id).await?;
@@ -1096,7 +1091,6 @@ mod tests {
             "DictFilter",
             "CreateDictReq",
             "UpdateDictReq",
-            "DictIdReq",
             "serde(flatten)",
         ] {
             assert!(out.contains(needle), "缺少 {needle}");

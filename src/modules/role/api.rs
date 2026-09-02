@@ -3,9 +3,9 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
-use crate::modules::role::dto::{CreateRoleReq, RoleIdReq, RoleListReq, RoleResp, UpdateRoleReq};
+use crate::modules::role::dto::{CreateRoleReq, RoleListReq, RoleResp, UpdateRoleReq};
 use crate::modules::role::service as role_service;
-use crate::utils::{ApiResponse, ApiResult, PageResult};
+use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 /// 角色列表（POST + JSON body）：分页 + keyword / status 过滤，排除软删除。
 #[endpoint]
@@ -41,7 +41,7 @@ pub async fn update_role(depot: &mut Depot, body: JsonBody<UpdateRoleReq>) -> Ap
 
 /// 角色详情（POST + JSON body：`{ "id": ... }`）：按 id 查询单个角色，不存在返回业务错误。
 #[endpoint]
-pub async fn get_role(depot: &mut Depot, body: JsonBody<RoleIdReq>) -> ApiResult<RoleResp> {
+pub async fn get_role(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<RoleResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let role = role_service::get_role(&state.db, req.id).await?;
@@ -50,7 +50,7 @@ pub async fn get_role(depot: &mut Depot, body: JsonBody<RoleIdReq>) -> ApiResult
 
 /// 删除角色（POST + JSON body：`{ "id": ... }`）：判存在后软删并物理清空菜单 / API 关联。
 #[endpoint]
-pub async fn delete_role(depot: &mut Depot, body: JsonBody<RoleIdReq>) -> ApiResult<()> {
+pub async fn delete_role(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<()> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     role_service::delete_role(&state.db, req.id).await?;

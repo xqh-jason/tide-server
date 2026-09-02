@@ -72,9 +72,3 @@ pub struct UpdateDictReq {
     pub status: i8,
     pub remark: String,
 }
-
-/// 按 id 查询 / 删除数据字典请求。
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct DictIdReq {
-    pub id: u64,
-}

@@ -119,9 +119,3 @@ pub struct UpdateMenuReq {
     pub permission: String,
     pub status: i8,
 }
-
-/// 按 id 查询 / 删除菜单请求。
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct MenuIdReq {
-    pub id: u64,
-}

@@ -1,10 +1,12 @@
 pub mod cache;
 pub mod crypt;
 pub mod error;
+pub mod id_req;
 pub mod jwt;
 pub mod page;
 pub mod response;
 
+pub use id_req::IdReq;
 pub use page::{PageData, PageQuery, PageResult, paginate};
 pub use response::ApiResponse;
 

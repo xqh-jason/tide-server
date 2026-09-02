@@ -70,9 +70,3 @@ pub struct UpdateApiReq {
     pub status: i8,
     pub role_ids: Vec<u64>,
 }
-
-/// 按 id 查询 / 删除 API 请求。
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct ApiIdReq {
-    pub id: u64,
-}

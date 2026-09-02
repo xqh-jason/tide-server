@@ -4,11 +4,11 @@ use salvo::{
     oapi::{endpoint, extract::JsonBody},
 };
 
-use crate::modules::sys_api::dto::{ApiIdReq, CreateApiReq, UpdateApiReq};
+use crate::modules::sys_api::dto::{CreateApiReq, UpdateApiReq};
 use crate::{
     infra::state::AppState,
     modules::sys_api::dto::{ApiListReq, ApiResp},
-    utils::{ApiResult, PageResult},
+    utils::{ApiResult, IdReq, PageResult},
 };
 use crate::{modules::sys_api::service as api_service, utils::ApiResponse};
 
@@ -44,7 +44,7 @@ pub async fn update_api(depot: &mut Depot, req: JsonBody<UpdateApiReq>) -> ApiRe
 
 /// API 详情（POST + JSON body：`{ "id": ... }`）。
 #[endpoint]
-pub async fn get_api(depot: &mut Depot, req: JsonBody<ApiIdReq>) -> ApiResult<ApiResp> {
+pub async fn get_api(depot: &mut Depot, req: JsonBody<IdReq>) -> ApiResult<ApiResp> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     let model = api_service::get_api(&state.db, req.id).await?;
@@ -53,7 +53,7 @@ pub async fn get_api(depot: &mut Depot, req: JsonBody<ApiIdReq>) -> ApiResult<Ap
 
 /// 删除 API（POST + JSON body：`{ "id": ... }`）：级联清空角色授权并软删。
 #[endpoint]
-pub async fn delete_api(depot: &mut Depot, req: JsonBody<ApiIdReq>) -> ApiResult<()> {
+pub async fn delete_api(depot: &mut Depot, req: JsonBody<IdReq>) -> ApiResult<()> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     api_service::delete_api(&state.db, req.id).await?;
