@@ -12,6 +12,8 @@ use crate::utils::PageQuery;
 pub struct UserResp {
     pub id: u64,
     pub username: String,
+    /// 工号；员工编号，空字符串表示未设置。
+    pub emp_no: String,
     pub nickname: String,
     pub email: String,
     pub status: i8,
@@ -22,6 +24,7 @@ impl From<sys_user::Model> for UserResp {
         Self {
             id: m.id,
             username: m.username,
+            emp_no: m.emp_no,
             nickname: m.nickname,
             email: m.email,
             status: m.status,
@@ -76,6 +79,8 @@ impl UserInfoResp {
 pub struct CreateUserReq {
     pub username: String,
     pub password: String,
+    /// 工号；员工编号（可选，缺省为空字符串）。
+    pub emp_no: Option<String>,
     pub nickname: String,
     pub phone: Option<String>,
     pub email: Option<String>,

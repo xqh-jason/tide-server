@@ -251,6 +251,7 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         sys_user::ActiveModel {
             username: Set(SEED_ADMIN_USERNAME.to_string()),
             password: Set(password_hash),
+            emp_no: Set("admin".to_string()),
             nickname: Set("超级管理员".to_string()),
             status: Set(1),
             ..Default::default()

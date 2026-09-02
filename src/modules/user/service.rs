@@ -131,6 +131,7 @@ pub async fn create_user(
         sys_user::ActiveModel {
             username: Set(req.username),
             password: Set(crypt::hash_password(&req.password)?),
+            emp_no: Set(req.emp_no.unwrap_or_default()),
             nickname: Set(req.nickname),
             phone: Set(req.phone.unwrap_or_default()),
             email: Set(req.email.unwrap_or_default()),
@@ -171,6 +172,7 @@ mod tests {
         CreateUserReq {
             username,
             password: "pass123".to_string(),
+            emp_no: Some("T1001".to_string()),
             nickname: "创建用户测试".to_string(),
             phone: Some("13800138000".to_string()),
             email: Some("created@example.com".to_string()),
@@ -491,6 +493,7 @@ mod tests {
             .expect("用户应已保存");
         assert!(saved.password.starts_with("$argon2id$"));
         assert_eq!(saved.email, "created@example.com");
+        assert_eq!(saved.emp_no, "T1001", "创建用户时应写入工号");
 
         let links = sys_user_role::Entity::find()
             .filter(sys_user_role::Column::UserId.eq(created.id))

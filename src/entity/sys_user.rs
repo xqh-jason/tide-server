@@ -10,6 +10,8 @@ pub struct Model {
     #[sea_orm(unique)]
     pub username: String,
     pub password: String,
+    /// 工号；员工编号，空字符串表示未设置。
+    pub emp_no: String,
     pub nickname: String,
     pub phone: String,
     pub email: String,
