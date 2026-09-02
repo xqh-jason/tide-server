@@ -71,3 +71,10 @@ pub struct UpdateRoleReq {
     pub menu_ids: Vec<u64>,
     pub api_ids: Vec<u64>,
 }
+
+/// 更新角色状态请求：仅传 `id` / `status` 即可。
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateRoleStatusReq {
+    pub id: u64,
+    pub status: i8,
+}

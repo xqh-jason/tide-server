@@ -16,3 +16,6 @@ pub const SUPER_ROLE_KEY: &str = "super";
 
 /// 内置超管用户名（`seed` 启动时创建并固定重置密码，不允许被编辑）。
 pub const ADMIN_USERNAME: &str = "admin";
+
+/// 内置超管角色键（`seed` 启动时创建并固定重置密码，不允许被编辑）。
+pub const SUPER_ADMIN_ROLE_KEY: &str = "super";

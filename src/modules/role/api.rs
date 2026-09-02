@@ -3,7 +3,9 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
-use crate::modules::role::dto::{CreateRoleReq, RoleListReq, RoleResp, UpdateRoleReq};
+use crate::modules::role::dto::{
+    CreateRoleReq, RoleListReq, RoleResp, UpdateRoleReq, UpdateRoleStatusReq,
+};
 use crate::modules::role::service as role_service;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
@@ -37,6 +39,18 @@ pub async fn update_role(depot: &mut Depot, body: JsonBody<UpdateRoleReq>) -> Ap
     let req = body.into_inner();
     let role = role_service::update_role(&state.db, &req).await?;
     Ok(ApiResponse::ok(RoleResp::from(role)))
+}
+
+/// 更新角色状态（POST + JSON body：`{ "id": ... }`）：判存在后更新状态，不存在返回业务错误。
+#[endpoint]
+pub async fn update_role_status(
+    depot: &mut Depot,
+    body: JsonBody<UpdateRoleStatusReq>,
+) -> ApiResult<()> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    role_service::update_role_status(&state.db, &req).await?;
+    Ok(ApiResponse::ok(()))
 }
 
 /// 角色详情（POST + JSON body：`{ "id": ... }`）：按 id 查询单个角色，不存在返回业务错误。

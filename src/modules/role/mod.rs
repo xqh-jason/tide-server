@@ -15,4 +15,5 @@ pub fn routes() -> Router {
         .push(Router::with_path("update").post(api::update_role))
         .push(Router::with_path("get").post(api::get_role))
         .push(Router::with_path("delete").post(api::delete_role))
+        .push(Router::with_path("update-status").post(api::update_role_status))
 }

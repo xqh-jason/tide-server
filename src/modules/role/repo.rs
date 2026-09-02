@@ -206,6 +206,14 @@ pub async fn find_by_ids(
     Ok(roles)
 }
 
+pub async fn update_role(
+    db: &DatabaseConnection,
+    role: sys_role::ActiveModel,
+) -> anyhow::Result<bool> {
+    role.update(db).await?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

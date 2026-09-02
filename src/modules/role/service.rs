@@ -1,3 +1,5 @@
+use crate::modules::permission::SUPER_ADMIN_ROLE_KEY;
+use crate::modules::role::dto::UpdateRoleStatusReq;
 use crate::utils::PageData;
 use crate::{
     modules::role::{
@@ -94,6 +96,13 @@ pub async fn update_role(
         return Err(AppError::Biz("角色不存在".to_string()));
     };
 
+    // 内置超管不允许修改状态。
+    if req.role_key == SUPER_ADMIN_ROLE_KEY {
+        return Err(AppError::Biz(
+            "系统内置超级管理员角色不允许修改状态".to_string(),
+        ));
+    }
+
     // 检查角色键是否已存在
     let role = role_repo::find_by_role_key_include_deleted(db, req.role_key.as_str()).await?;
     if let Some(role) = role {
@@ -125,6 +134,31 @@ pub async fn update_role(
         role_repo::update_role_with_links(db, model, req.menu_ids.clone(), req.api_ids.clone())
             .await?;
     Ok(model)
+}
+
+pub async fn update_role_status(
+    db: &DatabaseConnection,
+    req: &UpdateRoleStatusReq,
+) -> Result<bool, AppError> {
+    let Some(role) = role_repo::find_by_id(db, req.id).await? else {
+        return Err(AppError::Biz("角色不存在".to_string()));
+    };
+
+    // 内置超管管理员不允许修改状态。
+    if role.role_key == SUPER_ADMIN_ROLE_KEY {
+        return Err(AppError::Biz(
+            "系统内置超级管理员角色不允许修改状态".to_string(),
+        ));
+    }
+
+    let model = sys_role::ActiveModel {
+        id: Set(req.id),
+        status: Set(req.status),
+        ..Default::default()
+    };
+    role_repo::update_role(db, model).await?;
+
+    Ok(true)
 }
 
 #[cfg(test)]
