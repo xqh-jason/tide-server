@@ -91,6 +91,7 @@ pub struct CreateMenuReq {
     pub parent_id: Option<u64>,
     pub path: String,
     pub name: String,
+    #[serde(default)]
     pub component: String,
     pub title: String,
     pub icon: Option<String>,

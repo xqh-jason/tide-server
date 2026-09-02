@@ -4,6 +4,7 @@ pub mod error;
 pub mod id_req;
 pub mod jwt;
 pub mod page;
+pub mod request;
 pub mod response;
 
 pub use id_req::IdReq;

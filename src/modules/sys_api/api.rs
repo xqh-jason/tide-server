@@ -1,8 +1,5 @@
 use salvo::prelude::*;
-use salvo::{
-    Depot,
-    oapi::{endpoint, extract::JsonBody},
-};
+use salvo::{Depot, oapi::endpoint};
 
 use crate::modules::sys_api::dto::{CreateApiReq, UpdateApiReq};
 use crate::{
@@ -10,7 +7,10 @@ use crate::{
     modules::sys_api::dto::{ApiListReq, ApiResp},
     utils::{ApiResult, IdReq, PageResult},
 };
-use crate::{modules::sys_api::service as api_service, utils::ApiResponse};
+use crate::{
+    modules::sys_api::service as api_service,
+    utils::{ApiResponse, request::JsonBody},
+};
 
 /// API 权限点列表（POST + JSON body）：分页 + keyword / status / method 过滤。
 #[endpoint]

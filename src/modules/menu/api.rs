@@ -1,7 +1,6 @@
 //! 菜单域 handler。
 
 use salvo::oapi::endpoint;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
@@ -10,6 +9,7 @@ use crate::modules::menu::dto::{
     CreateMenuReq, MenuListReq, MenuResp, UpdateMenuReq, VbenMenuItem,
 };
 use crate::modules::menu::service as menu_service;
+use crate::utils::request::JsonBody;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 /// vben 菜单树（契约 §3.2），vben `fetchMenuListAsync` 消费后动态注册路由。

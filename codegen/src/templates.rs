@@ -917,13 +917,13 @@ pub fn render_api(def: &DomainDef) -> String {
         r#"//! {comment} handler（codegen 生成）。
 
 use salvo::oapi::endpoint;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::modules::{domain}::dto::{{Create{camel}Req, {camel}ListReq, {camel}Resp, Update{camel}Req}};
 use crate::modules::{domain}::service as {domain}_service;
 use crate::utils::{{ApiResponse, ApiResult, IdReq, PageResult}};
+use crate::utils::request::JsonBody;
 
 /// {comment}列表（POST + JSON body）。
 #[endpoint]

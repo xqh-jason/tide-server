@@ -12,6 +12,8 @@ tokio = { version = "1.44.2", features = ["full"] }
 # 序列化
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 反序列化错误带字段路径（请求体校验提示定位具体字段）
+serde_path_to_error = "0.1"
 # 日志（W1 第一天引入，锁定安全版本）
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

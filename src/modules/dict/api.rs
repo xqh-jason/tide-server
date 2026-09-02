@@ -1,12 +1,12 @@
 //! 数据字典 handler（codegen 生成）。
 
 use salvo::oapi::endpoint;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::modules::dict::dto::{CreateDictReq, DictListReq, DictResp, UpdateDictReq};
 use crate::modules::dict::service as dict_service;
+use crate::utils::request::JsonBody;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 /// 数据字典列表（POST + JSON body）。

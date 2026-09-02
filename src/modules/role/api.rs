@@ -1,5 +1,4 @@
 use salvo::oapi::endpoint;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
@@ -7,6 +6,7 @@ use crate::modules::role::dto::{
     CreateRoleReq, RoleListReq, RoleResp, UpdateRoleReq, UpdateRoleStatusReq,
 };
 use crate::modules::role::service as role_service;
+use crate::utils::request::JsonBody;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 /// 角色列表（POST + JSON body）：分页 + keyword / status 过滤，排除软删除。

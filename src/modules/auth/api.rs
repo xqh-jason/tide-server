@@ -1,7 +1,6 @@
 //! 认证域 handler。
 
 use salvo::oapi::endpoint;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
@@ -9,6 +8,7 @@ use crate::middleware::auth::bearer_token;
 use crate::modules::auth::dto::{LoginReq, LoginResp};
 use crate::modules::auth::service as auth_service;
 use crate::utils::error::AppError;
+use crate::utils::request::JsonBody;
 use crate::utils::{ApiResponse, ApiResult};
 use std::time::Duration;
 

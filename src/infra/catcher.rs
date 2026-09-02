@@ -11,6 +11,7 @@
 use salvo::catcher::Catcher;
 use salvo::prelude::*;
 
+use crate::utils::request::ParamErrorDetail;
 use crate::utils::response::ApiResponse;
 
 /// 统一错误兜底 handler：将当前 4xx/5xx 响应改写为 HTTP 200 + 契约错误体。
@@ -38,6 +39,12 @@ fn extract_error_message(res: &Response) -> String {
 
     // 优先：body 中携带 StatusError（解析失败等），按状态码映射为中文提示。
     if let ResBody::Error(err) = &res.body {
+        // 自定义 JsonBody 提取器已把错误翻译成带字段的中文提示，原样透传。
+        // 用 downcast_origin 而不是解析 cause 字符串：origin 是我们在提取器里
+        // 自己放入的类型（ParamErrorDetail），可以精确还原，且不会误伤框架自身的错误。
+        if let Some(detail) = err.downcast_origin::<ParamErrorDetail>() {
+            return detail.message().to_string();
+        }
         return friendly_message(err.code);
     }
 

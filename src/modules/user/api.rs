@@ -1,11 +1,11 @@
 use salvo::oapi::endpoint;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
 use crate::modules::user::dto::*;
 use crate::modules::user::service as user_service;
+use crate::utils::request::JsonBody;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 /// 用户列表（POST + JSON body）。分页字段（PageQuery）与过滤字段（keyword/status）
