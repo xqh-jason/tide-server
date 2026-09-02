@@ -234,6 +234,10 @@ pub async fn update_user_with_links(
     } else {
         crypt::hash_password(&req.password)?
     };
+    // phone / email / status 缺省时沿用库中原值（前端编辑表单可能只带部分字段）。
+    let phone = req.phone.clone().unwrap_or_else(|| user.phone.clone());
+    let email = req.email.clone().unwrap_or_else(|| user.email.clone());
+    let status = req.status.unwrap_or(user.status);
 
     let model = user_repo::update_user_with_links(
         db,
@@ -243,9 +247,9 @@ pub async fn update_user_with_links(
             password: Set(password),
             emp_no: Set(req.emp_no),
             nickname: Set(req.nickname),
-            phone: Set(req.phone),
-            email: Set(req.email),
-            status: Set(req.status),
+            phone: Set(phone),
+            email: Set(email),
+            status: Set(status),
             ..Default::default()
         },
         req.role_ids,
@@ -300,9 +304,9 @@ mod tests {
             password: String::new(), // 空串表示不更新密码
             emp_no: "T2001".to_string(),
             nickname: "更新用户测试".to_string(),
-            phone: "13900139000".to_string(),
-            email: "updated@example.com".to_string(),
-            status: 1,
+            phone: Some("13900139000".to_string()),
+            email: Some("updated@example.com".to_string()),
+            status: Some(1),
             role_ids,
         }
     }

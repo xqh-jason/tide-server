@@ -2,6 +2,7 @@
 //! 与业务域（modules）分离，业务代码只依赖这里的 config/state。
 
 pub mod app;
+pub mod catcher;
 pub mod config;
 pub mod router;
 pub mod seed;

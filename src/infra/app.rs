@@ -25,6 +25,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     tracing::info!("server listening on http://{addr}");
     let acceptor = TcpListener::new(addr).bind().await;
-    Server::new(acceptor).serve(router).await;
+    // 统一错误兜底：框架级错误（解析失败/404/405/5xx）渲染为 HTTP 200 + 契约体。
+    let service = salvo::Service::new(router).catcher(crate::infra::catcher::build());
+    Server::new(acceptor).serve(service).await;
     Ok(())
 }
