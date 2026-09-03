@@ -1,7 +1,6 @@
 //! 数据字典数据访问：类型表（`sys_dictionary`）与字典项表（`sys_dictionary_detail`）。
 //!
-//! W5-3 脚手架：函数体为 `todo!()`，由用户按实现计划任务 5 补齐；
-//! 下方 `#[cfg(test)]` 测试由 AI 编写，实现完成后应全部转绿。
+//! 函数体按实现计划任务 5 补全；下方 `#[cfg(test)]` 集成测试直连 MySQL，由 AI 编写。
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;

@@ -116,7 +116,7 @@ JOIN sys_dictionary d ON d.type = s.type_code;
 | 端点 | 请求体 | 说明 |
 |---|---|---|
 | /list | `{ page, keyword?, status? }` | 分页；keyword 对 `name` / `type` 模糊；默认 `id` 倒序 |
-| /create | `{ name, type, status?, remark? }` | type 重复（含软删占位）返回 Biz 错误 |
+| /create | `{ name, type, status, remark? }` | type 重复（含软删占位）返回 Biz 错误 |
 | /update | `{ id, name, type, status, remark? }` | 全量覆盖；type 查重排除自身 |
 | /get | `{ id }` | 详情 |
 | /delete | `{ id }` | 软删类型 + 级联软删其下全部字典项 |
@@ -127,10 +127,13 @@ JOIN sys_dictionary d ON d.type = s.type_code;
 | 端点 | 请求体 | 说明 |
 |---|---|---|
 | /list | `{ page, dictionary_id?, keyword?, status? }` | 分页；keyword 对 `label` / `value` 模糊；默认 `sort` 升序、`id` 升序 |
-| /create | `{ dictionary_id, label, value, extend?, sort?, status? }` | 类型不存在返回 Biz；同类型活记录 value 重复返回 Biz |
+| /create | `{ dictionary_id, label, value, extend?, sort, status }` | 类型不存在返回 Biz；同类型活记录 value 重复返回 Biz |
 | /update | `{ id, dictionary_id, label, value, extend?, sort, status }` | 全量覆盖；value 查重排除自身 |
 | /get | `{ id }` | 详情 |
 | /delete | `{ id }` | 软删单条 |
+
+> 创建/更新均为编辑表单整体提交：`/create`（类型）的 `status`、`/create`（字典项）
+> 的 `sort` 与 `status` 为**必填**（不用 DB 默认值），与 DTO 实现及本表一致。
 
 ### 5.3 `get-by-type` 响应形状
 

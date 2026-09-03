@@ -190,7 +190,6 @@ mod tests {
     use crate::infra::state::AppState;
     use crate::middleware::auth::AuthUser;
     use crate::utils::request::CapturedBody;
-    use salvo::prelude::*;
     use sea_orm::{ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
