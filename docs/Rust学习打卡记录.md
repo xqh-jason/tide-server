@@ -204,3 +204,32 @@ static GLOBAL: Jemalloc = Jemalloc;
     返回值未捕获会返回 ActiveModel 而非 Model。
 - 明日：W5 通用模块（操作日志/登录日志/数据字典/系统配置等）用生成器批量产出，
   生成器只写迁移 + JSON 定义。
+
+---
+
+## 2026-09-03（W5-1 操作日志）
+
+- 目标：按学习计划顺序启动 W5 第一个通用模块「操作日志」：
+  中间件自动落库 + 管理端只读分页/详情/删除，语义对齐 gin-vue-admin
+  `sys_operation_records`（表名按本项目规范为 `sys_operation_log`）。
+- 完成：
+  - 规格与实现计划：`docs/superpowers/specs/2026-09-03-w5-operation-log-design.md`
+    + `docs/superpowers/plans/2026-09-03-w5-operation-log.md`；
+  - `sys_operation_log` 迁移（含 created_at / user_id 索引）并应用；
+  - codegen 域定义 + 六文件骨架，实体补 TEXT 列注解；
+  - repo / service / dto / api 裁剪为只读 + delete + delete-batch（列表不含
+    body/resp，详情含；keyword/user_id/status 过滤，created_at 倒序）；
+  - `OperationLog` 中间件：JsonBody 提取时把原始请求体写入 Depot
+    （`CapturedBody`），`call_next` 后捕获响应体再放回；password / token /
+    secret 递归脱敏为 `***`，body / resp 各截断 4 KB；落库失败不影响业务；
+  - 挂载到 user / menu / dict / role / sys-api / operation-log / logout；
+  - 种子菜单「操作日志」+ 删除权限码。
+- 验证：operation_log + middleware 6/6、infra::seed 3/3、codegen 13/13；
+  主项目全量两次，一次 116/117（user 既有并发互扰，单跑绿），复跑 117/117 全绿；
+  `cargo fmt --check` 双项目通过。
+- 卡点：
+  - codegen 测试模板假定域必有唯一字段，无唯一字段域会生成
+    `fn create_req(: String)` 坏参数 → 需修模板支持无 unique 域（W5 收尾）；
+  - repo 与 service 测试各有独立 `static SEQ`，并发时 keyword 前缀相撞导致
+    分页 total 翻倍 → 测试前缀按模块隔离（repo_/svc_）。
+- 明日：W5-2 登录日志（登录成功/失败自动落库，独立规格）。
