@@ -3,22 +3,22 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
-#[sea_orm(table_name = "sys_dict")]
+#[sea_orm(table_name = "sys_dictionary_detail")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: u64,
-    /// 字典类型编码
-    pub type_code: String,
-    /// 字典项标签
+    /// 所属字典类型 ID
+    pub dictionary_id: u64,
+    /// 展示值
     pub label: String,
-    /// 字典项值
+    /// 字典值
     pub value: String,
+    /// 扩展值
+    pub extend: String,
     /// 排序
     pub sort: i32,
     /// 状态
     pub status: i8,
-    /// 备注
-    pub remark: String,
     pub created_at: DateTime,
     pub updated_at: DateTime,
     pub deleted_at: Option<DateTime>,

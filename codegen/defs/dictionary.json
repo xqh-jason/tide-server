@@ -1,0 +1,19 @@
+{
+  "domain": "dictionary",
+  "table": "sys_dictionary",
+  "comment": "字典类型",
+  "fields": [
+    { "name": "id", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "primary": true, "auto_increment": true },
+    { "name": "name", "rust_type": "String", "sql_type": "VARCHAR(64)", "optional": true, "default": "", "comment": "字典名称" },
+    { "name": "type", "rust_type": "String", "sql_type": "VARCHAR(64)", "unique": true, "comment": "字典类型编码" },
+    { "name": "status", "rust_type": "i8", "sql_type": "TINYINT", "optional": true, "default": 1, "comment": "状态" },
+    { "name": "remark", "rust_type": "String", "sql_type": "VARCHAR(255)", "optional": true, "default": "", "comment": "备注" },
+    { "name": "created_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
+    { "name": "updated_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
+    { "name": "deleted_at", "rust_type": "Option<DateTime>", "sql_type": "DATETIME", "readonly": true, "soft_delete": true }
+  ],
+  "unique_fields": ["type"],
+  "filters": [
+    { "field": "status", "kind": "exact" }
+  ]
+}

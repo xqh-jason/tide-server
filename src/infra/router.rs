@@ -28,12 +28,19 @@ pub fn build(state: AppState) -> Router {
                         .hoop(OperationLog)
                         .push(crate::modules::menu::routes()),
                 )
-                // 数据字典管理：POST /api/v1/dict/{list,create,update,get,delete}（codegen 生成域）
+                // 数据字典类型：POST /api/v1/dictionary/{list,create,update,get,delete,get-by-type}
                 .push(
-                    Router::with_path("dict")
+                    Router::with_path("dictionary")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
-                        .push(crate::modules::dict::routes()),
+                        .push(crate::modules::dictionary::routes()),
+                )
+                // 数据字典项：POST /api/v1/dictionary-detail/{list,create,update,get,delete}
+                .push(
+                    Router::with_path("dictionary-detail")
+                        .hoop(AuthRequired)
+                        .hoop(OperationLog)
+                        .push(crate::modules::dictionary::detail_routes()),
                 )
                 .push(
                     Router::with_path("role")

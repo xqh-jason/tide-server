@@ -1,0 +1,149 @@
+//! 数据字典 handler（W5-3）。
+//!
+//! 函数顺序 = `mod.rs` 路由挂载顺序：类型组 CRUD → `get-by-type`（特殊契约
+//! 端点，排在 CRUD 之后）→ 字典项组 CRUD。
+
+use salvo::oapi::endpoint;
+use salvo::prelude::*;
+
+use crate::infra::state::AppState;
+use crate::modules::dictionary::dto::{
+    CreateDictionaryDetailReq, CreateDictionaryReq, DictionaryDetailListReq, DictionaryDetailResp,
+    DictionaryListReq, DictionaryOptionResp, DictionaryResp, DictionaryTypeReq,
+    UpdateDictionaryDetailReq, UpdateDictionaryReq,
+};
+use crate::modules::dictionary::service as dict_service;
+use crate::utils::request::JsonBody;
+use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
+
+// —— 字典类型 ——
+
+/// 字典类型列表（POST + JSON body）。
+#[endpoint]
+pub async fn list_dictionaries(
+    depot: &mut Depot,
+    body: JsonBody<DictionaryListReq>,
+) -> ApiResult<PageResult<DictionaryResp>> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let data = dict_service::page_dictionaries(&state.db, &req).await?;
+    Ok(ApiResponse::ok(data.into()))
+}
+
+/// 创建字典类型（POST + JSON body）。
+#[endpoint]
+pub async fn create_dictionary(
+    depot: &mut Depot,
+    body: JsonBody<CreateDictionaryReq>,
+) -> ApiResult<DictionaryResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let model = dict_service::create_dictionary(&state.db, &req).await?;
+    Ok(ApiResponse::ok(model.into()))
+}
+
+/// 更新字典类型（POST + JSON body）。
+#[endpoint]
+pub async fn update_dictionary(
+    depot: &mut Depot,
+    body: JsonBody<UpdateDictionaryReq>,
+) -> ApiResult<DictionaryResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let model = dict_service::update_dictionary(&state.db, &req).await?;
+    Ok(ApiResponse::ok(model.into()))
+}
+
+/// 字典类型详情（POST + JSON body：`{ "id": ... }`）。
+#[endpoint]
+pub async fn get_dictionary(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<DictionaryResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let model = dict_service::get_dictionary(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(model.into()))
+}
+
+/// 删除字典类型：级联软删其下字典项，返回删除数量。
+#[endpoint]
+pub async fn delete_dictionary(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<u64> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let removed = dict_service::delete_dictionary(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(removed))
+}
+
+/// 按类型编码取启用字典项（前端下拉契约，特殊端点）。
+#[endpoint]
+pub async fn get_dictionary_by_type(
+    depot: &mut Depot,
+    body: JsonBody<DictionaryTypeReq>,
+) -> ApiResult<DictionaryOptionResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let (model, details) = dict_service::get_dictionary_by_type(&state.db, &req.r#type).await?;
+    Ok(ApiResponse::ok(DictionaryOptionResp {
+        id: model.id,
+        name: model.name,
+        r#type: model.r#type,
+        details: details.into_iter().map(Into::into).collect(),
+    }))
+}
+
+// —— 字典项 ——
+
+/// 字典项列表（POST + JSON body）。
+#[endpoint]
+pub async fn list_dictionary_details(
+    depot: &mut Depot,
+    body: JsonBody<DictionaryDetailListReq>,
+) -> ApiResult<PageResult<DictionaryDetailResp>> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let data = dict_service::page_dictionary_details(&state.db, &req).await?;
+    Ok(ApiResponse::ok(data.into()))
+}
+
+/// 创建字典项（POST + JSON body）。
+#[endpoint]
+pub async fn create_dictionary_detail(
+    depot: &mut Depot,
+    body: JsonBody<CreateDictionaryDetailReq>,
+) -> ApiResult<DictionaryDetailResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let model = dict_service::create_dictionary_detail(&state.db, &req).await?;
+    Ok(ApiResponse::ok(model.into()))
+}
+
+/// 更新字典项（POST + JSON body）。
+#[endpoint]
+pub async fn update_dictionary_detail(
+    depot: &mut Depot,
+    body: JsonBody<UpdateDictionaryDetailReq>,
+) -> ApiResult<DictionaryDetailResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let model = dict_service::update_dictionary_detail(&state.db, &req).await?;
+    Ok(ApiResponse::ok(model.into()))
+}
+
+/// 字典项详情（POST + JSON body：`{ "id": ... }`）。
+#[endpoint]
+pub async fn get_dictionary_detail(
+    depot: &mut Depot,
+    body: JsonBody<IdReq>,
+) -> ApiResult<DictionaryDetailResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let model = dict_service::get_dictionary_detail(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(model.into()))
+}
+
+/// 删除字典项（POST + JSON body：`{ "id": ... }`）。
+#[endpoint]
+pub async fn delete_dictionary_detail(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<()> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    dict_service::delete_dictionary_detail(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(()))
+}

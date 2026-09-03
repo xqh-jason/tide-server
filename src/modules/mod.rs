@@ -40,7 +40,7 @@
 //! （如 `create_role_with_links` / `create_api_with_links`），无关联直接 `<动词>_<实体>`。
 
 pub mod auth;
-pub mod dict;
+pub mod dictionary;
 pub mod login_log;
 pub mod menu;
 pub mod operation_log;
