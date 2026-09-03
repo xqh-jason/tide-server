@@ -255,3 +255,33 @@ static GLOBAL: Jemalloc = Jemalloc;
 - 卡点：无（W5-1 留下的 codegen 无唯一域模板问题在本模块作为验证域闭环）。
 - 明日：W5-3 数据字典 gin-vue-admin 对齐
   （sys_dictionaries 类型 + sys_dictionary_details 字典项两级结构）。
+
+## 2026-09-03（W5-3 数据字典）
+
+- 目标：把 W4 codegen 验证用 `sys_dict` 单表改造为 gin-vue-admin 两级结构
+  `sys_dictionary`（类型）+ `sys_dictionary_detail`（字典项）：数据搬迁、
+  级联软删、前端下拉端点 `get-by-type`、种子菜单与 6 个权限码。
+- 完成：
+  - 规格与计划：`docs/superpowers/specs/2026-09-03-w5-dictionary-design.md`
+    + `docs/superpowers/plans/2026-09-03-w5-dictionary.md`；
+  - `sys_dictionary` / `sys_dictionary_detail` 迁移（type 唯一键含软删占位；
+    字典项 value 不加 DB 唯一键）+ 存量搬迁 + 退役 `sys_dict`；
+    codegen 两份域定义仅取 entity（生成器不支持一对多，四件套手写）；
+  - 退役 `dict` 域，`dictionary` 域两套 repo/service/api + 双路由组
+    `dictionary`（CRUD + `get-by-type`）与 `dictionary-detail`（CRUD）；
+  - 唯一性口径：type 查重走 `*_include_deleted`（软删行仍占位）；
+    value 仅活记录占位，软删后可重建同 value；
+  - 级联软删：删类型 → 软删类型本体 + 级联软删其下字典项并返回数量；
+    `get-by-type` 只返回启用项按 sort 升序，类型缺失 / 软删 / 停用统一
+    `字典类型不存在或已停用`；
+  - 种子「数据字典」页面（sort 7，`lucide:book-marked`）+ 类型/字典项
+    各三个按钮权限码。
+- Review 修复（AI）：`update_*` 查重漏排除自身、`delete_dictionary` 返回类型
+  与 api 契约不符（改 u64 级联数）且未级联、`get_dictionary_by_type` 漏
+  `status != 1` 校验、字典项创建/更新漏 value 活记录查重、错误文案统一；
+  repo/service 测试各自独立 `static SEQ` 并发撞 `type` 唯一键 flaky →
+  service 测试数据加 `svc_` 模块前缀；seed MENU_SEEDS 补字典 7 条。
+- 验证：repo 6/6、service 8/8（连续 4 次全绿，flaky 消除）、infra::seed 5/5、
+  主项目全量 133/133、codegen 14/14、`cargo fmt --check` 双项目通过。
+- 卡点：无。遗留待办：任务 1/2/3 等 Commit 步骤与任务 9 手动冒烟（可选）待 [用户] 执行。
+- 明日：W6 起通用模块按既定三段流程继续（图形验证码 / 文件上传 / 系统配置…）。
