@@ -276,6 +276,84 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemLoginLog"),
         sort: 1,
     },
+    // 数据字典页面 + 类型 / 字典项各三个按钮权限码（W5-3）
+    MenuSeed {
+        name: "SystemDictionary",
+        title: "数据字典",
+        path: "/system/dictionary",
+        component: "#/views/system/dictionary/index.vue",
+        icon: "lucide:book-marked",
+        menu_type: 2,
+        permission: "",
+        parent: Some("System"),
+        sort: 7,
+    },
+    MenuSeed {
+        name: "SystemDictionaryCreate",
+        title: "字典类型新增",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:dictionary:create",
+        parent: Some("SystemDictionary"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "SystemDictionaryUpdate",
+        title: "字典类型编辑",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:dictionary:update",
+        parent: Some("SystemDictionary"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "SystemDictionaryDelete",
+        title: "字典类型删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:dictionary:delete",
+        parent: Some("SystemDictionary"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "SystemDictionaryDetailCreate",
+        title: "字典项新增",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:dictionary-detail:create",
+        parent: Some("SystemDictionary"),
+        sort: 4,
+    },
+    MenuSeed {
+        name: "SystemDictionaryDetailUpdate",
+        title: "字典项编辑",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:dictionary-detail:update",
+        parent: Some("SystemDictionary"),
+        sort: 5,
+    },
+    MenuSeed {
+        name: "SystemDictionaryDetailDelete",
+        title: "字典项删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:dictionary-detail:delete",
+        parent: Some("SystemDictionary"),
+        sort: 6,
+    },
 ];
 
 /// 启动初始化：确保开发种子数据存在（幂等，可重复调用）。
@@ -550,5 +628,54 @@ mod tests {
             .expect("登录日志删除按钮权限码应存在");
         assert_eq!(button.menu_type, 3, "按钮应为菜单类型 3");
         assert_eq!(button.parent_id, menu.id, "按钮应挂在登录日志菜单下");
+    }
+
+    /// W5-3：数据字典菜单页面与类型 / 字典项各三个按钮权限码应随种子就绪。
+    #[tokio::test]
+    async fn ensure_seed_creates_dictionary_menu_and_buttons() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let menu = sys_menu::Entity::find()
+            .filter(sys_menu::Column::Name.eq("SystemDictionary"))
+            .filter(sys_menu::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("数据字典菜单应存在");
+        assert_eq!(menu.menu_type, 2, "数据字典应为页面菜单");
+        assert_eq!(menu.title, "数据字典");
+        assert_eq!(menu.path, "/system/dictionary");
+        let system = sys_menu::Entity::find()
+            .filter(sys_menu::Column::Name.eq("System"))
+            .filter(sys_menu::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("System 目录应存在");
+        assert_eq!(menu.parent_id, system.id, "数据字典应挂在 System 目录下");
+
+        let expected = [
+            "system:dictionary:create",
+            "system:dictionary:update",
+            "system:dictionary:delete",
+            "system:dictionary-detail:create",
+            "system:dictionary-detail:update",
+            "system:dictionary-detail:delete",
+        ];
+        for permission in expected {
+            let button = sys_menu::Entity::find()
+                .filter(sys_menu::Column::Permission.eq(permission))
+                .filter(sys_menu::Column::DeletedAt.is_null())
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("权限码 {permission} 应存在"));
+            assert_eq!(button.menu_type, 3, "{permission} 应为按钮类型 3");
+            assert_eq!(
+                button.parent_id, menu.id,
+                "{permission} 应挂在数据字典菜单下"
+            );
+        }
     }
 }
