@@ -1,9 +1,9 @@
 //! 操作日志业务（codegen 生成）。
 
-use sea_orm::{ActiveValue::Set, DatabaseConnection};
+use sea_orm::DatabaseConnection;
 
 use crate::entity::sys_operation_log;
-use crate::modules::operation_log::dto::{CreateOperationLogReq, OperationLogFilter, OperationLogListReq, UpdateOperationLogReq};
+use crate::modules::operation_log::dto::{OperationLogFilter, OperationLogListReq};
 use crate::modules::operation_log::repo as operation_log_repo;
 use crate::utils::PageData;
 use crate::utils::error::AppError;
@@ -18,6 +18,7 @@ pub async fn page_operation_logs(
         &OperationLogFilter {
             user_id: req.user_id,
             status: req.status,
+            keyword: req.keyword.clone(),
         },
         req.page.page_index(),
         req.page.page_size(),
@@ -25,58 +26,11 @@ pub async fn page_operation_logs(
     .await
 }
 
-/// 创建：唯一字段查重（含软删占位）→ 构造 ActiveModel → 落库。
-pub async fn create_operation_log(
-    db: &DatabaseConnection,
-    req: &CreateOperationLogReq,
-) -> Result<sys_operation_log::Model, AppError> {
-
-    let model = sys_operation_log::ActiveModel {
-        user_id: Set(req.user_id),
-        ip: Set(req.ip.clone().unwrap_or_default()),
-        method: Set(req.method.clone().unwrap_or_default()),
-        path: Set(req.path.clone()),
-        status: Set(req.status.unwrap_or(0)),
-        latency: Set(req.latency.unwrap_or(0)),
-        agent: Set(req.agent.clone().unwrap_or_default()),
-        body: Set(req.body.clone().unwrap_or_default()),
-        resp: Set(req.resp.clone().unwrap_or_default()),
-        error_message: Set(req.error_message.clone().unwrap_or_default()),
-        ..Default::default()
-    };
-    let model = operation_log_repo::create_operation_log(db, model).await?;
-    Ok(model)
-}
-
-/// 更新：判存在 → 唯一字段查重排除自身 → 全量覆盖。
-pub async fn update_operation_log(
-    db: &DatabaseConnection,
-    req: &UpdateOperationLogReq,
-) -> Result<sys_operation_log::Model, AppError> {
-    let Some(_) = operation_log_repo::find_by_id(db, req.id).await? else {
-        return Err(AppError::Biz(format!("操作日志不存在：{}", req.id)));
-    };
-
-    let model = sys_operation_log::ActiveModel {
-        id: Set(req.id),
-        user_id: Set(req.user_id),
-        ip: Set(req.ip.clone()),
-        method: Set(req.method.clone()),
-        path: Set(req.path.clone()),
-        status: Set(req.status),
-        latency: Set(req.latency),
-        agent: Set(req.agent.clone()),
-        body: Set(req.body.clone()),
-        resp: Set(req.resp.clone()),
-        error_message: Set(req.error_message.clone()),
-        ..Default::default()
-    };
-    let model = operation_log_repo::update_operation_log(db, model).await?;
-    Ok(model)
-}
-
 /// 查询单个详情（排除软删除）。
-pub async fn get_operation_log(db: &DatabaseConnection, id: u64) -> Result<sys_operation_log::Model, AppError> {
+pub async fn get_operation_log(
+    db: &DatabaseConnection,
+    id: u64,
+) -> Result<sys_operation_log::Model, AppError> {
     let Some(model) = operation_log_repo::find_by_id(db, id).await? else {
         return Err(AppError::Biz(format!("操作日志不存在：{id}")));
     };
@@ -92,11 +46,21 @@ pub async fn delete_operation_log(db: &DatabaseConnection, id: u64) -> Result<()
     Ok(())
 }
 
+pub async fn delete_operation_log_batch(
+    db: &DatabaseConnection,
+    ids: &[u64],
+) -> Result<u64, AppError> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    Ok(operation_log_repo::soft_delete_batch(db, ids).await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::entity::sys_operation_log;
-    use crate::modules::operation_log::dto::{CreateOperationLogReq, UpdateOperationLogReq};
+    use crate::utils::PageQuery;
     use crate::utils::error::AppError;
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -116,21 +80,27 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn seed(
         db: &DatabaseConnection,
+        path_kw: &str,
+        user_id: u64,
+        status: i32,
+        created_at: chrono::NaiveDateTime,
         deleted_at: Option<chrono::NaiveDateTime>,
     ) -> sys_operation_log::Model {
         sys_operation_log::ActiveModel {
-            user_id: Set(0),
-            ip: Set(unique("ip")),
-            method: Set(unique("method")),
-            path: Set(unique("path")),
-            status: Set(0),
-            latency: Set(0),
-            agent: Set(unique("agent")),
-            body: Set(unique("body")),
-            resp: Set(unique("resp")),
-            error_message: Set(unique("error_message")),
+            user_id: Set(user_id),
+            ip: Set("127.0.0.1".to_string()),
+            method: Set("POST".to_string()),
+            path: Set(format!("/api/v1/test/{path_kw}")),
+            status: Set(status),
+            latency: Set(10),
+            agent: Set("test-agent".to_string()),
+            body: Set("{\"password\":\"secret\"}".to_string()),
+            resp: Set("{\"code\":1}".to_string()),
+            error_message: Set(String::new()),
+            created_at: Set(created_at),
             deleted_at: Set(deleted_at),
             ..Default::default()
         }
@@ -139,34 +109,19 @@ mod tests {
         .unwrap()
     }
 
-    fn create_req() -> CreateOperationLogReq {
-        CreateOperationLogReq {
-            user_id: 0,
-            ip: None,
-            method: None,
-            path: unique("path"),
-            status: Some(0),
-            latency: Some(0),
-            agent: None,
-            body: None,
-            resp: None,
-            error_message: None,
-        }
-    }
-
-    fn update_req(id: u64) -> UpdateOperationLogReq {
-        UpdateOperationLogReq {
-            id,
-            user_id: 0,
-            ip: unique("ip"),
-            method: unique("method"),
-            path: unique("path"),
-            status: 0,
-            latency: 0,
-            agent: unique("agent"),
-            body: unique("body"),
-            resp: unique("resp"),
-            error_message: unique("error_message"),
+    fn list_req(
+        keyword: Option<String>,
+        user_id: Option<u64>,
+        status: Option<i32>,
+    ) -> OperationLogListReq {
+        OperationLogListReq {
+            page: PageQuery {
+                page: None,
+                page_size: None,
+            },
+            user_id,
+            status,
+            keyword,
         }
     }
 
@@ -179,58 +134,84 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_rejects_duplicate__including_soft_deleted() {
+    async fn page_operation_logs_filters_by_keyword_user_and_status() {
         let db = test_db().await;
-        let live = seed(&db, None).await;
-        let deleted = seed(&db, Some(chrono::Utc::now().naive_utc())).await;
+        let kw = unique("svc_page");
+        let base = chrono::Local::now().naive_local();
+        let deleted_at = Some(chrono::Local::now().naive_local());
 
-        let result_live = create_operation_log(&db, &create_req()).await;
-        let result_deleted = create_operation_log(&db, &create_req()).await;
+        let hit = seed(&db, &kw, 1, 200, base, None).await;
+        let other_user = seed(&db, &kw, 2, 200, base - chrono::Duration::seconds(1), None).await;
+        let other_status = seed(&db, &kw, 1, 500, base - chrono::Duration::seconds(2), None).await;
+        let deleted = seed(
+            &db,
+            &kw,
+            1,
+            200,
+            base - chrono::Duration::seconds(3),
+            deleted_at,
+        )
+        .await;
 
-        cleanup(&db, &[live.id, deleted.id]).await;
+        let by_keyword = page_operation_logs(&db, &list_req(Some(kw.clone()), None, None))
+            .await
+            .unwrap();
+        let by_user = page_operation_logs(&db, &list_req(Some(kw.clone()), Some(2), None))
+            .await
+            .unwrap();
+        let by_status = page_operation_logs(&db, &list_req(Some(kw.clone()), None, Some(500)))
+            .await
+            .unwrap();
 
-        assert!(
-            matches!(result_live, Err(AppError::Biz(_))),
-            "正常占位应拒绝重复，实际：{result_live:?}"
-        );
-        assert!(
-            matches!(result_deleted, Err(AppError::Biz(_))),
-            "软删占位应拒绝重复，实际：{result_deleted:?}"
-        );
+        cleanup(&db, &[hit.id, other_user.id, other_status.id, deleted.id]).await;
+
+        assert_eq!(by_keyword.total, 3, "keyword 应命中 3 条活记录");
+        assert_eq!(by_user.total, 1, "user_id 精确过滤");
+        assert_eq!(by_user.items[0].id, other_user.id);
+        assert_eq!(by_status.total, 1, "status 精确过滤");
+        assert_eq!(by_status.items[0].id, other_status.id);
     }
 
     #[tokio::test]
-    async fn update_rejects_duplicate__excluding_self() {
-        let db = test_db().await;
-        let a = seed(&db, None).await;
-        let b = seed(&db, None).await;
-
-        let dup = update_operation_log(&db, &update_req(b.id)).await;
-        let keep_self = update_operation_log(&db, &update_req(b.id)).await;
-
-        cleanup(&db, &[a.id, b.id]).await;
-
-        assert!(
-            matches!(dup, Err(AppError::Biz(_))),
-            "占用他人唯一值应拒绝，实际：{dup:?}"
-        );
-        keep_self.expect("保留自身唯一值应更新成功");
-    }
-
-    #[tokio::test]
-    async fn update_and_delete_return_biz_error_when_missing() {
+    async fn get_and_delete_missing_return_biz_error() {
         let db = test_db().await;
 
-        let missing = update_operation_log(&db, &update_req(9_999_999_999)).await;
+        let get_missing = get_operation_log(&db, 9_999_999_999).await;
         let delete_missing = delete_operation_log(&db, 9_999_999_999).await;
 
-        assert!(
-            matches!(missing, Err(AppError::Biz(_))),
-            "更新不存在应返回 Biz，实际：{missing:?}"
-        );
-        assert!(
-            matches!(delete_missing, Err(AppError::Biz(_))),
-            "删除不存在应返回 Biz，实际：{delete_missing:?}"
-        );
+        assert!(matches!(get_missing, Err(AppError::Biz(_))));
+        assert!(matches!(delete_missing, Err(AppError::Biz(_))));
+    }
+
+    #[tokio::test]
+    async fn delete_batch_skips_missing_and_empty_ok() {
+        let db = test_db().await;
+        let kw = unique("svc_batch");
+        let base = chrono::Local::now().naive_local();
+        let a = seed(&db, &kw, 1, 200, base, None).await;
+        let b = seed(&db, &kw, 1, 200, base - chrono::Duration::seconds(1), None).await;
+        let already_deleted = seed(
+            &db,
+            &kw,
+            1,
+            200,
+            base - chrono::Duration::seconds(2),
+            Some(chrono::Local::now().naive_local()),
+        )
+        .await;
+
+        let empty = delete_operation_log_batch(&db, &[]).await.unwrap();
+        let affected =
+            delete_operation_log_batch(&db, &[a.id, b.id, already_deleted.id, 9_999_999_999])
+                .await
+                .unwrap();
+        let a_after = operation_log_repo::find_by_id(&db, a.id).await.unwrap();
+        let b_after = operation_log_repo::find_by_id(&db, b.id).await.unwrap();
+
+        cleanup(&db, &[a.id, b.id, already_deleted.id]).await;
+
+        assert_eq!(empty, 0, "空数组应返回 0 且不执行删除");
+        assert_eq!(affected, 2, "只处理存在且未删除的行");
+        assert!(a_after.is_none() && b_after.is_none(), "批量软删后不可见");
     }
 }
