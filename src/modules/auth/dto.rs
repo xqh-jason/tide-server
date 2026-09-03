@@ -15,3 +15,10 @@ pub struct LoginReq {
 pub struct LoginResp {
     pub token: String,
 }
+
+/// 登录请求的客户端元信息（handler 从 Request 提取后传给 service）。
+#[derive(Debug, Clone, Default)]
+pub struct LoginMeta {
+    pub ip: String,
+    pub agent: String,
+}

@@ -5,7 +5,7 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::bearer_token;
-use crate::modules::auth::dto::{LoginReq, LoginResp};
+use crate::modules::auth::dto::{LoginMeta, LoginReq, LoginResp};
 use crate::modules::auth::service as auth_service;
 use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
@@ -14,9 +14,26 @@ use std::time::Duration;
 
 /// 登录：校验用户名密码，签发 JWT。公开接口（不挂认证中间件）。
 #[endpoint]
-pub async fn login(depot: &mut Depot, body: JsonBody<LoginReq>) -> ApiResult<LoginResp> {
+pub async fn login(
+    depot: &mut Depot,
+    req: &Request,
+    body: JsonBody<LoginReq>,
+) -> ApiResult<LoginResp> {
     let state = AppState::from_depot(depot)?;
-    let resp = auth_service::login(&state.db, &state.config.jwt, body.into_inner()).await?;
+    let meta = LoginMeta {
+        ip: req
+            .remote_addr()
+            .ip()
+            .map(|addr| addr.to_string())
+            .unwrap_or_default(),
+        agent: req
+            .headers()
+            .get(salvo::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string(),
+    };
+    let resp = auth_service::login(&state.db, &state.config.jwt, body.into_inner(), meta).await?;
     Ok(ApiResponse::ok(resp))
 }
 

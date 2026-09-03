@@ -1,9 +1,11 @@
 //! 认证业务：登录（查用户 → 校验密码 → 取角色 → 签发 JWT）。
 
+use sea_orm::ActiveValue::Set;
 use sea_orm::DatabaseConnection;
 
+use crate::entity::sys_login_log;
 use crate::infra::config::Jwt as JwtConfig;
-use crate::modules::auth::dto::{LoginReq, LoginResp};
+use crate::modules::auth::dto::{LoginMeta, LoginReq, LoginResp};
 use crate::modules::user::repo as user_repo;
 use crate::utils::error::AppError;
 use crate::utils::{crypt, jwt};
@@ -12,43 +14,88 @@ pub async fn login(
     db: &DatabaseConnection,
     jwt_cfg: &JwtConfig,
     req: LoginReq,
+    meta: LoginMeta,
 ) -> Result<LoginResp, AppError> {
-    let user = user_repo::find_by_username(db, &req.username)
-        .await?
-        .ok_or_else(|| AppError::Biz("用户名或密码错误".into()))?;
-
-    if user.status != 1 {
-        return Err(AppError::Biz("用户已被禁用".into()));
-    }
+    // 用户不存在：对外统一提示，日志内部分级
+    let user = match user_repo::find_by_username(db, &req.username).await {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            record_login(db, &req, 0, 0, "用户不存在", &meta).await;
+            return Err(AppError::Biz("用户名或密码错误".into()));
+        }
+        Err(err) => {
+            record_login(db, &req, 0, 0, "查询用户失败", &meta).await;
+            return Err(err.into());
+        }
+    };
 
     // 密码校验失败与用户不存在返回同一提示，避免账号枚举
     if !crypt::verify_password(&req.password, &user.password) {
+        record_login(db, &req, user.id, 0, "密码错误", &meta).await;
         return Err(AppError::Biz("用户名或密码错误".into()));
     }
-    // 禁用用户同样拒绝登录（提示保持一致，不泄露账号状态）
+    // 禁用用户同样拒绝登录：对外提示保持一致，日志区分原因
     if user.status != 1 {
+        record_login(db, &req, user.id, 0, "用户已被禁用", &meta).await;
         return Err(AppError::Biz("用户名或密码错误".into()));
     }
 
     let roles = user_repo::find_roles_by_user_id(db, user.id).await?;
     let role_keys: Vec<String> = roles.into_iter().map(|r| r.role_key).collect();
-    let token = jwt::sign(
+    match jwt::sign(
         user.id,
         &user.username,
         &role_keys,
         &jwt_cfg.secret,
         jwt_cfg.ttl_seconds,
-    )?;
+    ) {
+        Ok(token) => {
+            record_login(db, &req, user.id, 1, "登录成功", &meta).await;
+            Ok(LoginResp { token })
+        }
+        Err(err) => {
+            record_login(db, &req, user.id, 0, "token 签发失败", &meta).await;
+            Err(err.into())
+        }
+    }
+}
 
-    Ok(LoginResp { token })
+/// 登录日志落库：失败只降级，不影响登录结果。
+async fn record_login(
+    db: &DatabaseConnection,
+    req: &LoginReq,
+    user_id: u64,
+    status: i8,
+    msg: &str,
+    meta: &LoginMeta,
+) {
+    let model = sys_login_log::ActiveModel {
+        user_id: Set(user_id),
+        username: Set(truncate_chars(&req.username, 64)),
+        ip: Set(truncate_chars(&meta.ip, 64)),
+        agent: Set(truncate_chars(&meta.agent, 255)),
+        status: Set(status),
+        msg: Set(truncate_chars(msg, 255)),
+        ..Default::default()
+    };
+    if let Err(err) = crate::modules::login_log::repo::create_login_log(db, model).await {
+        tracing::error!(%err, "login log 落库失败");
+    }
+}
+
+/// 按字符数截断，避免超长触发 DB 报错。
+fn truncate_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_role, sys_user, sys_user_role};
+    use crate::entity::{sys_login_log, sys_role, sys_user, sys_user_role};
     use crate::utils::crypt;
-    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, QueryOrder, Set,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -129,6 +176,34 @@ mod tests {
             .unwrap();
     }
 
+    fn test_meta() -> LoginMeta {
+        LoginMeta {
+            ip: "127.0.0.1".into(),
+            agent: "test-agent".into(),
+        }
+    }
+
+    async fn cleanup_login_logs(db: &sea_orm::DatabaseConnection, username: &str) {
+        sys_login_log::Entity::delete_many()
+            .filter(sys_login_log::Column::Username.eq(username))
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
+    async fn latest_login_log(
+        db: &sea_orm::DatabaseConnection,
+        username: &str,
+    ) -> sys_login_log::Model {
+        sys_login_log::Entity::find()
+            .filter(sys_login_log::Column::Username.eq(username))
+            .order_by_desc(sys_login_log::Column::Id)
+            .one(db)
+            .await
+            .unwrap()
+            .expect("登录日志应存在")
+    }
+
     #[tokio::test]
     async fn login_success_returns_token_with_roles() {
         let db = test_db().await;
@@ -138,17 +213,24 @@ mod tests {
             &db,
             &test_jwt_cfg(),
             LoginReq {
-                username,
+                username: username.clone(),
                 password: "pass123".into(),
             },
+            test_meta(),
         )
         .await
         .unwrap();
 
         let claims = crate::utils::jwt::verify(&resp.token, "test-secret").unwrap();
+        let log = latest_login_log(&db, &username).await;
+        cleanup_login_logs(&db, &username).await;
+        cleanup(&db, uid, rid).await;
+
         assert_eq!(claims.user_id, uid);
         assert_eq!(claims.roles, vec![role_key]);
-        cleanup(&db, uid, rid).await;
+        assert_eq!(log.status, 1, "成功登录应记录 status=1");
+        assert_eq!(log.user_id, uid, "成功登录应记录用户 id");
+        assert_eq!(log.msg, "登录成功");
     }
 
     #[tokio::test]
@@ -160,30 +242,51 @@ mod tests {
             &db,
             &test_jwt_cfg(),
             LoginReq {
-                username,
+                username: username.clone(),
                 password: "bad".into(),
             },
+            test_meta(),
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, AppError::Biz(_)));
+        let log = latest_login_log(&db, &username).await;
+        cleanup_login_logs(&db, &username).await;
         cleanup(&db, uid, rid).await;
+
+        assert!(
+            matches!(&err, AppError::Biz(message) if message == "用户名或密码错误"),
+            "密码错误对外应统一文案，实际：{err:?}"
+        );
+        assert_eq!(log.status, 0);
+        assert_eq!(log.user_id, uid);
+        assert_eq!(log.msg, "密码错误", "日志内部分级记录密码错误");
     }
 
     #[tokio::test]
     async fn login_unknown_user_returns_biz_error() {
         let db = test_db().await;
+        let username = unique_name("login_unknown");
         let err = login(
             &db,
             &test_jwt_cfg(),
             LoginReq {
-                username: "no_such_user_xyz".into(),
+                username: username.clone(),
                 password: "x".into(),
             },
+            test_meta(),
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, AppError::Biz(_)));
+        let log = latest_login_log(&db, &username).await;
+        cleanup_login_logs(&db, &username).await;
+
+        assert!(
+            matches!(&err, AppError::Biz(message) if message == "用户名或密码错误"),
+            "未知用户对外应统一文案，实际：{err:?}"
+        );
+        assert_eq!(log.status, 0);
+        assert_eq!(log.user_id, 0, "未知用户没有 user_id");
+        assert_eq!(log.msg, "用户不存在", "日志内部分级记录用户不存在");
     }
 
     /// 禁用用户（status=0）即使密码正确也不允许登录，且与用户不存在返回同一提示（防枚举）。
@@ -206,21 +309,27 @@ mod tests {
             &db,
             &test_jwt_cfg(),
             LoginReq {
-                username,
+                username: username.clone(),
                 password: "pass123".into(),
             },
+            test_meta(),
         )
         .await
         .unwrap_err();
 
+        let log = latest_login_log(&db, &username).await;
+        cleanup_login_logs(&db, &username).await;
         sys_user::Entity::delete_by_id(user.id)
             .exec(&db)
             .await
             .unwrap();
 
         assert!(
-            matches!(err, AppError::Biz(_)),
-            "禁用用户登录应返回 Biz 业务错误，实际：{err:?}"
+            matches!(&err, AppError::Biz(message) if message == "用户名或密码错误"),
+            "禁用用户对外应统一文案，实际：{err:?}"
         );
+        assert_eq!(log.status, 0);
+        assert_eq!(log.user_id, user.id);
+        assert_eq!(log.msg, "用户已被禁用", "日志内部分级记录禁用");
     }
 }
