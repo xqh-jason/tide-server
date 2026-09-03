@@ -53,6 +53,13 @@ pub fn build(state: AppState) -> Router {
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
                         .push(crate::modules::operation_log::routes()),
+                )
+                // 登录日志：POST /api/v1/login-log/{list,get,delete,delete-batch}
+                .push(
+                    Router::with_path("login-log")
+                        .hoop(AuthRequired)
+                        .hoop(OperationLog)
+                        .push(crate::modules::login_log::routes()),
                 ),
         )
 }

@@ -41,6 +41,7 @@
 
 pub mod auth;
 pub mod dict;
+pub mod login_log;
 pub mod menu;
 pub mod operation_log;
 pub mod permission;
