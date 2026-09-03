@@ -569,13 +569,70 @@ fn render_service_tests(def: &DomainDef) -> String {
     let create_req = format!("Create{camel}Req");
     let update_req = format!("Update{camel}Req");
     let singular = def.domain.clone();
-    let unique_field = def
-        .unique_field_names()
-        .first()
-        .cloned()
+    let unique_field = def.unique_field_names().first().cloned();
+    let create_req_fields = render_create_req_fields(def, unique_field.as_deref().unwrap_or(""));
+    let update_req_fields = render_update_req_fields(def, unique_field.as_deref().unwrap_or(""));
+    // 无唯一字段时 helper 无参，避免生成 `fn create_req(: String)` 坏参数
+    let create_params = unique_field
+        .as_deref()
+        .map(|f| format!("{f}: String"))
         .unwrap_or_default();
-    let create_req_fields = render_create_req_fields(def, &unique_field);
-    let update_req_fields = render_update_req_fields(def, &unique_field);
+    let update_params = unique_field
+        .as_deref()
+        .map(|f| format!("id: u64, {f}: String"))
+        .unwrap_or_else(|| "id: u64".to_string());
+    let missing_arg = if unique_field.is_some() {
+        ", unique(\"missing\")"
+    } else {
+        ""
+    };
+    let duplicate_tests = match &unique_field {
+        Some(field) => format!(
+            r#"    #[tokio::test]
+    async fn create_rejects_duplicate_{field}_including_soft_deleted() {{
+        let db = test_db().await;
+        let live = seed(&db, None).await;
+        let deleted = seed(&db, Some(chrono::Utc::now().naive_utc())).await;
+
+        let result_live = create_{singular}(&db, &create_req(live.{field}.clone())).await;
+        let result_deleted = create_{singular}(&db, &create_req(deleted.{field}.clone())).await;
+
+        cleanup(&db, &[live.id, deleted.id]).await;
+
+        assert!(
+            matches!(result_live, Err(AppError::Biz(_))),
+            "正常占位应拒绝重复，实际：{{result_live:?}}"
+        );
+        assert!(
+            matches!(result_deleted, Err(AppError::Biz(_))),
+            "软删占位应拒绝重复，实际：{{result_deleted:?}}"
+        );
+    }}
+
+    #[tokio::test]
+    async fn update_rejects_duplicate_{field}_excluding_self() {{
+        let db = test_db().await;
+        let a = seed(&db, None).await;
+        let b = seed(&db, None).await;
+
+        let dup = update_{singular}(&db, &update_req(b.id, a.{field}.clone())).await;
+        let keep_self = update_{singular}(&db, &update_req(b.id, b.{field}.clone())).await;
+
+        cleanup(&db, &[a.id, b.id]).await;
+
+        assert!(
+            matches!(dup, Err(AppError::Biz(_))),
+            "占用他人唯一值应拒绝，实际：{{dup:?}}"
+        );
+        keep_self.expect("保留自身唯一值应更新成功");
+    }}
+
+"#,
+            field = field,
+            singular = singular,
+        ),
+        None => String::new(),
+    };
     format!(
         r#"#[cfg(test)]
 mod tests {{
@@ -615,13 +672,13 @@ mod tests {{
         .unwrap()
     }}
 
-    fn create_req({unique_field}: String) -> {create_req} {{
+    fn create_req({create_params}) -> {create_req} {{
         {create_req} {{
 {create_req_fields}
         }}
     }}
 
-    fn update_req(id: u64, {unique_field}: String) -> {update_req} {{
+    fn update_req({update_params}) -> {update_req} {{
         {update_req} {{
             id,
 {update_req_fields}
@@ -636,50 +693,13 @@ mod tests {{
             .unwrap();
     }}
 
-    #[tokio::test]
-    async fn create_rejects_duplicate_{unique_field}_including_soft_deleted() {{
-        let db = test_db().await;
-        let live = seed(&db, None).await;
-        let deleted = seed(&db, Some(chrono::Utc::now().naive_utc())).await;
-
-        let result_live = create_{singular}(&db, &create_req(live.{unique_field}.clone())).await;
-        let result_deleted = create_{singular}(&db, &create_req(deleted.{unique_field}.clone())).await;
-
-        cleanup(&db, &[live.id, deleted.id]).await;
-
-        assert!(
-            matches!(result_live, Err(AppError::Biz(_))),
-            "正常占位应拒绝重复，实际：{{result_live:?}}"
-        );
-        assert!(
-            matches!(result_deleted, Err(AppError::Biz(_))),
-            "软删占位应拒绝重复，实际：{{result_deleted:?}}"
-        );
-    }}
-
-    #[tokio::test]
-    async fn update_rejects_duplicate_{unique_field}_excluding_self() {{
-        let db = test_db().await;
-        let a = seed(&db, None).await;
-        let b = seed(&db, None).await;
-
-        let dup = update_{singular}(&db, &update_req(b.id, a.{unique_field}.clone())).await;
-        let keep_self = update_{singular}(&db, &update_req(b.id, b.{unique_field}.clone())).await;
-
-        cleanup(&db, &[a.id, b.id]).await;
-
-        assert!(
-            matches!(dup, Err(AppError::Biz(_))),
-            "占用他人唯一值应拒绝，实际：{{dup:?}}"
-        );
-        keep_self.expect("保留自身唯一值应更新成功");
-    }}
+{duplicate_tests}
 
     #[tokio::test]
     async fn update_and_delete_return_biz_error_when_missing() {{
         let db = test_db().await;
 
-        let missing = update_{singular}(&db, &update_req(9_999_999_999, unique("missing"))).await;
+        let missing = update_{singular}(&db, &update_req(9_999_999_999{missing_arg})).await;
         let delete_missing = delete_{singular}(&db, 9_999_999_999).await;
 
         assert!(
@@ -698,7 +718,10 @@ mod tests {{
         create_req = create_req,
         update_req = update_req,
         singular = singular,
-        unique_field = unique_field,
+        create_params = create_params,
+        update_params = update_params,
+        duplicate_tests = duplicate_tests,
+        missing_arg = missing_arg,
         seed_fields = render_seed_fields(def, &[]),
         create_req_fields = create_req_fields,
         update_req_fields = update_req_fields,
@@ -1034,6 +1057,48 @@ mod tests {
             }"#,
         )
         .unwrap()
+    }
+
+    fn def_no_unique() -> DomainDef {
+        DomainDef::from_json(
+            r#"{
+                "domain": "log",
+                "table": "sys_log",
+                "comment": "日志",
+                "fields": [
+                    { "name": "id", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "primary": true, "auto_increment": true },
+                    { "name": "path", "rust_type": "String", "sql_type": "VARCHAR(255)", "optional": false },
+                    { "name": "status", "rust_type": "i8", "sql_type": "TINYINT", "optional": true, "default": 1 },
+                    { "name": "deleted_at", "rust_type": "Option<DateTime>", "sql_type": "DATETIME", "readonly": true, "soft_delete": true }
+                ],
+                "unique_fields": [],
+                "filters": []
+            }"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn service_template_without_unique_field_has_valid_helpers() {
+        let out = render_service_tests(&def_no_unique());
+        assert!(!out.contains("(: String"), "不应生成空参数名");
+        assert!(
+            !out.contains("id: u64, : String"),
+            "update_req 不应有空参数名"
+        );
+        assert!(
+            out.contains("fn create_req()"),
+            "无唯一字段 create_req 应无参"
+        );
+        assert!(
+            out.contains("fn update_req(id: u64)"),
+            "无唯一字段 update_req 应只有 id"
+        );
+        assert!(
+            !out.contains("create_rejects_duplicate_"),
+            "无唯一字段不应生成唯一查重测试"
+        );
+        assert!(out.contains("update_and_delete_return_biz_error_when_missing"));
     }
 
     #[test]
