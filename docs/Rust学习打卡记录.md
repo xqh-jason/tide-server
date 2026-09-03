@@ -233,3 +233,25 @@ static GLOBAL: Jemalloc = Jemalloc;
   - repo 与 service 测试各有独立 `static SEQ`，并发时 keyword 前缀相撞导致
     分页 total 翻倍 → 测试前缀按模块隔离（repo_/svc_）。
 - 明日：W5-2 登录日志（登录成功/失败自动落库，独立规格）。
+
+## 2026-09-03（W5-2 登录日志）
+
+- 目标：登录成功 / 失败自动落库（登录 service 内写、msg 内部分级），
+  管理端只读分页 / 详情 / 单删 / 批量删除，补齐菜单与权限码种子。
+- 完成：
+  - 规格与计划：`docs/superpowers/specs/2026-09-03-w5-login-log-design.md`
+    + `docs/superpowers/plans/2026-09-03-w5-login-log.md`；
+  - `sys_login_log` 迁移（created_at / username 索引）并应用；codegen 域定义
+    + 六文件骨架——无唯一字段域直接生成通过，验证 W5-1 模板修复生效；
+  - repo / service / dto / api 裁剪为只读 + delete + delete-batch
+    （username / ip 模糊、status 精确、created_at 倒序）；
+  - auth service 登录改造：`LoginMeta { ip, agent }` 由 handler 传入，
+    成功 / 用户不存在 / 密码错误 / 禁用 / token 签发失败均落库；
+    对外统一「用户名或密码错误」（修复禁用用户提示泄漏），msg 内部分级；
+    入库前按列长截断，落库失败仅降级；
+  - 管理端点挂 AuthRequired + OperationLog；种子「登录日志」+ 删除权限码。
+- 验证：login_log 5/5、auth service 4/4、infra::seed 4/4、codegen 14/14；
+  主项目全量 124/124 全绿，`cargo fmt --check` 双项目通过。
+- 卡点：无（W5-1 留下的 codegen 无唯一域模板问题在本模块作为验证域闭环）。
+- 明日：W5-3 数据字典 gin-vue-admin 对齐
+  （sys_dictionaries 类型 + sys_dictionary_details 字典项两级结构）。
