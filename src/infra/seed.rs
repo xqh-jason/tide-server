@@ -230,6 +230,29 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemApi"),
         sort: 3,
     },
+    // 操作日志页面 + 删除权限码（W5-1）
+    MenuSeed {
+        name: "SystemOperationLog",
+        title: "操作日志",
+        path: "/system/operation-log",
+        component: "#/views/system/operation-log/index.vue",
+        icon: "lucide:scroll-text",
+        menu_type: 2,
+        permission: "",
+        parent: Some("System"),
+        sort: 5,
+    },
+    MenuSeed {
+        name: "SystemOperationLogDelete",
+        title: "操作日志删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:operation-log:delete",
+        parent: Some("SystemOperationLog"),
+        sort: 1,
+    },
 ];
 
 /// 启动初始化：确保开发种子数据存在（幂等，可重复调用）。
@@ -432,5 +455,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count_before, count_after, "重复播种不应产生重复菜单");
+    }
+
+    /// W5-1：操作日志菜单页面与删除按钮权限码应随种子就绪。
+    #[tokio::test]
+    async fn ensure_seed_creates_operation_log_menu_and_button() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let menu = sys_menu::Entity::find()
+            .filter(sys_menu::Column::Name.eq("SystemOperationLog"))
+            .filter(sys_menu::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("操作日志菜单应存在");
+        assert_eq!(menu.menu_type, 2, "操作日志应为页面菜单");
+        assert_eq!(menu.title, "操作日志");
+        assert_eq!(menu.path, "/system/operation-log");
+        let system = sys_menu::Entity::find()
+            .filter(sys_menu::Column::Name.eq("System"))
+            .filter(sys_menu::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("System 目录应存在");
+        assert_eq!(menu.parent_id, system.id, "操作日志应挂在 System 目录下");
+
+        let button = sys_menu::Entity::find()
+            .filter(sys_menu::Column::Permission.eq("system:operation-log:delete"))
+            .filter(sys_menu::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("操作日志删除按钮权限码应存在");
+        assert_eq!(button.menu_type, 3, "按钮应为菜单类型 3");
+        assert_eq!(button.parent_id, menu.id, "按钮应挂在操作日志菜单下");
     }
 }
