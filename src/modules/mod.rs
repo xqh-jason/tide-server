@@ -42,6 +42,7 @@
 pub mod auth;
 pub mod dict;
 pub mod menu;
+pub mod operation_log;
 pub mod permission;
 pub mod role;
 pub mod sys_api;
