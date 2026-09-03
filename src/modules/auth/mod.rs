@@ -3,7 +3,7 @@
 use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
-use crate::middleware::auth::AuthRequired;
+use crate::middleware::{auth::AuthRequired, op_log::OperationLog};
 
 pub mod api;
 pub mod dto;
@@ -17,6 +17,7 @@ pub fn routes() -> Router {
         .push(
             Router::with_path("logout")
                 .hoop(AuthRequired)
+                .hoop(OperationLog)
                 .post(api::logout),
         )
 }

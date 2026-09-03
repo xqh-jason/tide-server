@@ -38,6 +38,9 @@ use serde_path_to_error as path_to_error;
 
 const ERROR_PREFIX: &str = "请求参数格式错误：";
 
+#[derive(Debug, Clone)]
+pub struct CapturedBody(pub String);
+
 /// 与 Salvo 内置 `JsonBody<T>` 用法一致的请求体提取器（含字段定位错误提示）。
 pub struct JsonBody<T>(pub T);
 
@@ -77,9 +80,9 @@ where
 
     async fn extract(
         req: &'ex mut Request,
-        _depot: &'ex mut Depot,
+        depot: &'ex mut Depot,
     ) -> Result<Self, impl Writer + Send + fmt::Debug + 'static> {
-        extract_json_body(req).await.map(Self)
+        extract_json_body(req, depot).await.map(Self)
     }
 }
 
@@ -144,7 +147,10 @@ impl Writer for BodyParamError {
     }
 }
 
-async fn extract_json_body<'de, T>(req: &'de mut Request) -> Result<T, BodyParamError>
+async fn extract_json_body<'de, T>(
+    req: &'de mut Request,
+    depot: &'de mut Depot,
+) -> Result<T, BodyParamError>
 where
     T: Deserialize<'de>,
 {
@@ -164,6 +170,9 @@ where
     if payload.is_empty() {
         return Err(BodyParamError::new(format!("{ERROR_PREFIX}请求体不能为空")));
     }
+
+    // 新增：反序列化前把原始 JSON 存进 Depot，中间件稍后从这里取
+    depot.insert_typed(CapturedBody(String::from_utf8_lossy(payload).into_owned()));
 
     let mut deserializer = serde_json::Deserializer::from_slice(payload);
     // 为什么需要 serde_path_to_error：serde_json 原生错误对“类型不对”只给
