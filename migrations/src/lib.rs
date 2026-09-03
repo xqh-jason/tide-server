@@ -6,6 +6,7 @@ mod m20260827_000003_add_rbac_table_comments;
 mod m20260827_000004_restore_menu_parent_default;
 mod m20260901_000005_create_sys_dict;
 mod m20260902_000006_add_user_emp_no;
+mod m20260903_000007_create_sys_operation_log;
 
 pub struct Migrator;
 
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260827_000004_restore_menu_parent_default::Migration),
             Box::new(m20260901_000005_create_sys_dict::Migration),
             Box::new(m20260902_000006_add_user_emp_no::Migration),
+            Box::new(m20260903_000007_create_sys_operation_log::Migration),
         ]
     }
 }
