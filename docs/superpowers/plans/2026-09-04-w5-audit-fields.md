@@ -22,6 +22,11 @@
 > - `sys_dictionary*.rs` 重跑生成器验证时发现生成器仍会把 `type` 写成裸
 >   标识符（既有缺陷），已手工修回 `r#type` 并保留 audit 字段；
 > - 既有测试统一以 `const ACTOR_ID: u64 = 1`（种子 admin）作操作人。
+>
+> **二次调整（同日，用户反馈）**：字段弃用 `Option<u64>`，改为
+> `BIGINT UNSIGNED NOT NULL DEFAULT 0`（`0` = 种子/系统写入，无操作人上下文）；
+> 实体、Resp、codegen defs 同步为 `u64`。迁移 `000010` 尚未推送，直接修正
+> 文件列定义并手动同步本地库（迁移记录已标记应用）。create 双写行为不变。
 
 ---
 

@@ -98,8 +98,8 @@ pub async fn create_user_with_links(
     let txn = db.begin().await?;
     // 创建场景：创建人与更新人同源
     let mut user = user;
-    user.created_by = Set(Some(actor_id));
-    user.updated_by = Set(Some(actor_id));
+    user.created_by = Set(actor_id);
+    user.updated_by = Set(actor_id);
     let user = user.insert(&txn).await?;
 
     if !role_ids.is_empty() {
@@ -130,7 +130,7 @@ pub async fn update_user_with_links(
     let txn = db.begin().await?;
     // 更新场景：只刷新更新人；created_by 保持 NotSet，不会被覆盖
     let mut user = user;
-    user.updated_by = Set(Some(actor_id));
+    user.updated_by = Set(actor_id);
     let user = user.update(&txn).await?;
 
     if !role_ids.is_empty() {
@@ -166,7 +166,7 @@ pub async fn update_user(
 ) -> anyhow::Result<bool> {
     // 通用更新同样盖章：只刷新更新人
     let mut model = model;
-    model.updated_by = Set(Some(actor_id));
+    model.updated_by = Set(actor_id);
     model.update(db).await?;
     Ok(true)
 }
@@ -549,8 +549,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(created.created_by, Some(actor_id));
-        assert_eq!(created.updated_by, Some(actor_id));
+        assert_eq!(created.created_by, actor_id);
+        assert_eq!(created.updated_by, actor_id);
 
         cleanup_users(&db, &[created.id, actor_id]).await;
     }
@@ -589,8 +589,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
-        assert_eq!(updated.updated_by, Some(updater_id));
+        assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, updater_id);
 
         // 通用更新（状态更新场景）同样要盖章
         let mut model: sys_user::ActiveModel = updated.into();
@@ -598,7 +598,7 @@ mod tests {
         let after_status = update_user(&db, model, updater_id).await.unwrap();
         assert!(after_status);
         let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();
-        assert_eq!(reloaded.updated_by, Some(updater_id));
+        assert_eq!(reloaded.updated_by, updater_id);
 
         cleanup_users(&db, &[created.id, creator_id, updater_id]).await;
     }

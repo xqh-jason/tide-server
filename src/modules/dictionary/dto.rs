@@ -22,9 +22,9 @@ pub struct DictionaryResp {
     /// 备注
     pub remark: String,
     /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
-    pub created_by: Option<u64>,
+    pub created_by: u64,
     /// 更新人 ID（`sys_user.id`）
-    pub updated_by: Option<u64>,
+    pub updated_by: u64,
 }
 
 impl From<sys_dictionary::Model> for DictionaryResp {
@@ -157,9 +157,9 @@ pub struct DictionaryDetailResp {
     /// 状态：`1` 启用、`0` 停用
     pub status: i8,
     /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
-    pub created_by: Option<u64>,
+    pub created_by: u64,
     /// 更新人 ID（`sys_user.id`）
-    pub updated_by: Option<u64>,
+    pub updated_by: u64,
 }
 
 impl From<sys_dictionary_detail::Model> for DictionaryDetailResp {

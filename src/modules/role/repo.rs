@@ -79,8 +79,8 @@ pub async fn create_role_with_links(
     let txn = db.begin().await?;
     // 审计字段由 repo 统一盖章：create 时创建人与更新人同源
     let mut role = role;
-    role.created_by = Set(Some(actor_id));
-    role.updated_by = Set(Some(actor_id));
+    role.created_by = Set(actor_id);
+    role.updated_by = Set(actor_id);
     let role = role.insert(&txn).await?;
     // 插入菜单关联
     if !menu_ids.is_empty() {
@@ -125,7 +125,7 @@ pub async fn update_role_with_links(
 
     // 审计字段由 repo 统一盖章：只刷新更新人，created_by 保持 NotSet 不被覆盖
     let mut role = role;
-    role.updated_by = Set(Some(actor_id));
+    role.updated_by = Set(actor_id);
 
     // 更新角色
     let role = role.update(&txn).await?;
@@ -223,7 +223,7 @@ pub async fn update_role(
     actor_id: u64,
 ) -> anyhow::Result<bool> {
     let mut role = role;
-    role.updated_by = Set(Some(actor_id));
+    role.updated_by = Set(actor_id);
     role.update(db).await?;
     Ok(true)
 }
@@ -696,8 +696,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(created.created_by, Some(actor_id));
-        assert_eq!(created.updated_by, Some(actor_id));
+        assert_eq!(created.created_by, actor_id);
+        assert_eq!(created.updated_by, actor_id);
 
         cleanup(&db, &[created.id], &[], &[]).await;
         delete_actors(&db, &[actor_id]).await;
@@ -738,8 +738,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
-        assert_eq!(updated.updated_by, Some(updater_id));
+        assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, updater_id);
 
         cleanup(&db, &[created.id], &[], &[]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;
@@ -772,8 +772,8 @@ mod tests {
         assert!(update_role(&db, model, updater_id).await.unwrap());
 
         let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();
-        assert_eq!(reloaded.created_by, Some(creator_id));
-        assert_eq!(reloaded.updated_by, Some(updater_id));
+        assert_eq!(reloaded.created_by, creator_id);
+        assert_eq!(reloaded.updated_by, updater_id);
 
         cleanup(&db, &[created.id], &[], &[]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;

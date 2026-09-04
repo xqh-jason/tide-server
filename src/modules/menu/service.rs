@@ -650,8 +650,8 @@ mod tests {
             status: 1,
             created_at: Local::now().naive_local(),
             updated_at: Local::now().naive_local(),
-            created_by: None,
-            updated_by: None,
+            created_by: 0,
+            updated_by: 0,
             deleted_at: None,
         }
     }

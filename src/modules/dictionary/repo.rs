@@ -90,8 +90,8 @@ pub async fn create_dictionary(
 ) -> anyhow::Result<Dictionary> {
     // 创建场景：创建人与更新人同源
     let mut model = model;
-    model.created_by = Set(Some(actor_id));
-    model.updated_by = Set(Some(actor_id));
+    model.created_by = Set(actor_id);
+    model.updated_by = Set(actor_id);
     let model = model.insert(db).await?;
     Ok(model)
 }
@@ -103,7 +103,7 @@ pub async fn update_dictionary(
     actor_id: u64,
 ) -> anyhow::Result<Dictionary> {
     let mut model = model;
-    model.updated_by = Set(Some(actor_id));
+    model.updated_by = Set(actor_id);
     let model = model.update(db).await?;
     Ok(model)
 }
@@ -219,8 +219,8 @@ pub async fn create_detail(
 ) -> anyhow::Result<Detail> {
     // 创建场景：创建人与更新人同源
     let mut model = model;
-    model.created_by = Set(Some(actor_id));
-    model.updated_by = Set(Some(actor_id));
+    model.created_by = Set(actor_id);
+    model.updated_by = Set(actor_id);
     Ok(model.insert(db).await?)
 }
 
@@ -231,7 +231,7 @@ pub async fn update_detail(
     actor_id: u64,
 ) -> anyhow::Result<Detail> {
     let mut model = model;
-    model.updated_by = Set(Some(actor_id));
+    model.updated_by = Set(actor_id);
     Ok(model.update(db).await?)
 }
 
@@ -582,8 +582,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(created.created_by, Some(actor_id));
-        assert_eq!(created.updated_by, Some(actor_id));
+        assert_eq!(created.created_by, actor_id);
+        assert_eq!(created.updated_by, actor_id);
 
         cleanup(&db, &[created.id]).await;
         delete_actors(&db, &[actor_id]).await;
@@ -620,8 +620,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
-        assert_eq!(updated.updated_by, Some(updater_id));
+        assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, updater_id);
 
         cleanup(&db, &[created.id]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;
@@ -647,8 +647,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(created.created_by, Some(actor_id));
-        assert_eq!(created.updated_by, Some(actor_id));
+        assert_eq!(created.created_by, actor_id);
+        assert_eq!(created.updated_by, actor_id);
 
         cleanup(&db, &[dict.id]).await;
         delete_actors(&db, &[actor_id]).await;
@@ -687,8 +687,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
-        assert_eq!(updated.updated_by, Some(updater_id));
+        assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, updater_id);
 
         cleanup(&db, &[dict.id]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;

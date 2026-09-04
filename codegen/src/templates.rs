@@ -1088,8 +1088,8 @@ mod tests {
                 "fields": [
                     { "name": "id", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "primary": true, "auto_increment": true },
                     { "name": "name", "rust_type": "String", "sql_type": "VARCHAR(64)" },
-                    { "name": "created_by", "rust_type": "Option<u64>", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "创建人 ID" },
-                    { "name": "updated_by", "rust_type": "Option<u64>", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "更新人 ID" },
+                    { "name": "created_by", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "创建人 ID" },
+                    { "name": "updated_by", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "更新人 ID" },
                     { "name": "created_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
                     { "name": "updated_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
                     { "name": "deleted_at", "rust_type": "Option<DateTime>", "sql_type": "DATETIME", "readonly": true, "soft_delete": true }
@@ -1106,8 +1106,8 @@ mod tests {
         let d = def_audit();
 
         let resp = render_resp_fields(&d);
-        assert!(resp.contains("pub created_by: Option<u64>"), "Resp 应含 created_by");
-        assert!(resp.contains("pub updated_by: Option<u64>"), "Resp 应含 updated_by");
+        assert!(resp.contains("pub created_by: u64"), "Resp 应含 created_by");
+        assert!(resp.contains("pub updated_by: u64"), "Resp 应含 updated_by");
 
         let from_fields = render_resp_from_fields(&d);
         assert!(
@@ -1149,7 +1149,7 @@ mod tests {
 
         let entity = render_entity(&d);
         assert!(
-            entity.contains("pub created_by: Option<u64>"),
+            entity.contains("pub created_by: u64"),
             "entity 应含审计字段"
         );
     }

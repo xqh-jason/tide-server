@@ -55,8 +55,8 @@ pub async fn create_api_with_links(
     let txn = db.begin().await?;
     // 审计字段由 repo 统一盖章：create 时创建人与更新人同源
     let mut api = api;
-    api.created_by = Set(Some(actor_id));
-    api.updated_by = Set(Some(actor_id));
+    api.created_by = Set(actor_id);
+    api.updated_by = Set(actor_id);
     let api = api.insert(&txn).await?;
     if !role_ids.is_empty() {
         let role_api_ids = role_ids
@@ -84,7 +84,7 @@ pub async fn update_api_with_links(
     let txn = db.begin().await?;
     // 审计字段由 repo 统一盖章：只刷新更新人，created_by 保持 NotSet 不被覆盖
     let mut api = api;
-    api.updated_by = Set(Some(actor_id));
+    api.updated_by = Set(actor_id);
     let api = api.update(&txn).await?;
     sys_role_api::Entity::delete_many()
         .filter(sys_role_api::Column::ApiId.eq(api.id))
@@ -493,8 +493,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(created.created_by, Some(actor_id));
-        assert_eq!(created.updated_by, Some(actor_id));
+        assert_eq!(created.created_by, actor_id);
+        assert_eq!(created.updated_by, actor_id);
 
         cleanup(&db, &[created.id], &[]).await;
         delete_actors(&db, &[actor_id]).await;
@@ -535,8 +535,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
-        assert_eq!(updated.updated_by, Some(updater_id));
+        assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, updater_id);
 
         cleanup(&db, &[created.id], &[]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;

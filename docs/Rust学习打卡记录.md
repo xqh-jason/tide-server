@@ -306,3 +306,10 @@ static GLOBAL: Jemalloc = Jemalloc;
   （含当天审计改造），已从 HEAD 恢复并重新应用；生成器 `r#type` 裸标识符
   缺陷再次暴露，生成 defs 后需手工修正（本轮 entity 已对齐）。
 - 明日：继续 W5 通用模块（文件上传 / 图形验证码 / 系统配置）。
+
+### 审计字段二次调整（同日）
+
+- 用户反馈：审计字段不用 Option。列改 `NOT NULL DEFAULT 0`（0 = 种子/系统写入），
+  实体 / Resp / codegen defs 全部改 `u64`；迁移 000010 未推送，直接修正文件并
+  手动同步本地库（UPDATE NULL→0 + MODIFY NOT NULL）。
+- create 双写（created_by + updated_by 同源）行为保持不变；验证 147/147 + 16/16 全绿。

@@ -28,9 +28,9 @@ pub struct RoleResp {
     #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
     pub updated_at: chrono::NaiveDateTime,
     /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
-    pub created_by: Option<u64>,
+    pub created_by: u64,
     /// 更新人 ID（`sys_user.id`）
-    pub updated_by: Option<u64>,
+    pub updated_by: u64,
 }
 
 impl From<sys_role::Model> for RoleResp {
