@@ -21,6 +21,10 @@ pub struct Model {
     pub status: i8,
     pub created_at: DateTime,
     pub updated_at: DateTime,
+    /// 创建人 ID
+    pub created_by: Option<u64>,
+    /// 更新人 ID
+    pub updated_by: Option<u64>,
     pub deleted_at: Option<DateTime>,
 }
 
