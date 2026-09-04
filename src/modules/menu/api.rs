@@ -41,7 +41,8 @@ pub async fn list_menus(
 pub async fn create_menu(depot: &mut Depot, req: JsonBody<CreateMenuReq>) -> ApiResult<MenuResp> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
-    let menu = menu_service::create_menu(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let menu = menu_service::create_menu(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(MenuResp::from(menu)))
 }
 
@@ -50,7 +51,8 @@ pub async fn create_menu(depot: &mut Depot, req: JsonBody<CreateMenuReq>) -> Api
 pub async fn update_menu(depot: &mut Depot, req: JsonBody<UpdateMenuReq>) -> ApiResult<MenuResp> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
-    let menu = menu_service::update_menu(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let menu = menu_service::update_menu(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(MenuResp::from(menu)))
 }
 

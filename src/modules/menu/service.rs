@@ -95,9 +95,10 @@ pub async fn page_menus(
     Ok(model)
 }
 
-/// 创建菜单：name 查重（含软删占位）→ component 格式校验 → 落库。
+/// 创建菜单：name 查重（含软删占位）→ component 格式校验 → 落库（审计字段由 repo 盖章）。
 pub async fn create_menu(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &CreateMenuReq,
 ) -> Result<sys_menu::Model, AppError> {
     // 检查名称是否存在
@@ -128,14 +129,16 @@ pub async fn create_menu(
             status: Set(req.status.unwrap_or(1)),
             ..Default::default()
         },
+        actor_id,
     )
     .await?;
     Ok(menu)
 }
 
-/// 更新菜单：判存在 → name 查重排除自身 → component 校验 → 全量覆盖。
+/// 更新菜单：判存在 → name 查重排除自身 → component 校验 → 全量覆盖（审计字段由 repo 盖章）。
 pub async fn update_menu(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &UpdateMenuReq,
 ) -> Result<sys_menu::Model, AppError> {
     // 检查菜单是否存在（软删视为不存在）
@@ -173,6 +176,7 @@ pub async fn update_menu(
             status: Set(req.status),
             ..Default::default()
         },
+        actor_id,
     )
     .await?;
     Ok(menu)
@@ -221,6 +225,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 既有测试不关心操作人，统一用种子 admin（id=1）作为 actor。
+    const ACTOR_ID: u64 = 1;
 
     fn unique(prefix: &str) -> String {
         format!(
@@ -397,11 +404,13 @@ mod tests {
 
         let result_deleted = create_menu(
             &db,
+            ACTOR_ID,
             &create_req(deleted_name, format!("#/views/{}.vue", unique("c"))),
         )
         .await;
         let result_live = create_menu(
             &db,
+            ACTOR_ID,
             &create_req(live_name, format!("#/views/{}.vue", unique("c"))),
         )
         .await;
@@ -425,11 +434,13 @@ mod tests {
 
         let missing_prefix = create_menu(
             &db,
+            ACTOR_ID,
             &create_req(unique("bad_prefix"), "views/foo.vue".to_string()),
         )
         .await;
         let missing_suffix = create_menu(
             &db,
+            ACTOR_ID,
             &create_req(unique("bad_suffix"), "#/views/foo".to_string()),
         )
         .await;
@@ -469,8 +480,8 @@ mod tests {
             status: 1,
         };
 
-        let dup = update_menu(&db, &update_req(name_a.clone())).await;
-        let keep_self = update_menu(&db, &update_req(name_b.clone())).await;
+        let dup = update_menu(&db, ACTOR_ID, &update_req(name_a.clone())).await;
+        let keep_self = update_menu(&db, ACTOR_ID, &update_req(name_b.clone())).await;
 
         cleanup(&db, &[], &[], &[menu_a.id, menu_b.id]).await;
 
@@ -489,6 +500,7 @@ mod tests {
 
         let missing = update_menu(
             &db,
+            ACTOR_ID,
             &UpdateMenuReq {
                 id: 9_999_999_999,
                 parent_id: 0,
@@ -522,6 +534,7 @@ mod tests {
         .await;
         let update_deleted = update_menu(
             &db,
+            ACTOR_ID,
             &UpdateMenuReq {
                 id: deleted.id,
                 parent_id: 0,
@@ -637,6 +650,8 @@ mod tests {
             status: 1,
             created_at: Local::now().naive_local(),
             updated_at: Local::now().naive_local(),
+            created_by: None,
+            updated_by: None,
             deleted_at: None,
         }
     }

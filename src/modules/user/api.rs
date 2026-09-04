@@ -93,6 +93,8 @@ pub async fn update_user_status(
 ) -> ApiResult<bool> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let resp = user_service::update_user_status(&state.db, req.id, req.status).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let resp =
+        user_service::update_user_status(&state.db, auth.user_id, req.id, req.status).await?;
     Ok(ApiResponse::ok(resp))
 }

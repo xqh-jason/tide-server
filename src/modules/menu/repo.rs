@@ -5,6 +5,7 @@ use crate::entity::{sys_menu, sys_menu::Model};
 use crate::modules::menu::dto::MenuFilter;
 use crate::modules::user::repo as user_repo;
 use crate::utils::PageData;
+use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, DatabaseConnection, QueryOrder, QuerySelect, TransactionTrait};
 
@@ -57,19 +58,29 @@ pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Opti
 }
 
 /// 创建菜单（ActiveModel 入参，默认值由 service 层负责）。
+/// 创建菜单。`actor_id` 为操作人，审计字段由 repo 统一盖章。
 pub async fn create_menu(
     db: &DatabaseConnection,
     model: sys_menu::ActiveModel,
+    actor_id: u64,
 ) -> anyhow::Result<Model> {
+    // 创建场景：创建人与更新人同源
+    let mut model = model;
+    model.created_by = Set(Some(actor_id));
+    model.updated_by = Set(Some(actor_id));
     let model = model.insert(db).await?;
     Ok(model)
 }
 
 /// 更新菜单（主键必须已设置，全量覆盖语义）。
+/// 审计字段由 repo 统一盖章：只刷新更新人，`created_by` 保持 NotSet 不被覆盖。
 pub async fn update_menu(
     db: &DatabaseConnection,
     model: sys_menu::ActiveModel,
+    actor_id: u64,
 ) -> anyhow::Result<Model> {
+    let mut model = model;
+    model.updated_by = Set(Some(actor_id));
     let model = model.update(db).await?;
     Ok(model)
 }
@@ -174,6 +185,9 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
+    /// 既有测试不关心操作人，统一用种子 admin（id=1）作为 actor。
+    const ACTOR_ID: u64 = 1;
+
     fn unique(prefix: &str) -> String {
         format!(
             "{prefix}_{}_{}",
@@ -243,7 +257,7 @@ mod tests {
             ..Default::default()
         };
 
-        let created = create_menu(&db, model).await.unwrap();
+        let created = create_menu(&db, model, ACTOR_ID).await.unwrap();
 
         cleanup(&db, &[created.id]).await;
 
@@ -427,7 +441,7 @@ mod tests {
         model.hidden = Set(1);
         model.status = Set(1);
 
-        let updated = update_menu(&db, model).await.unwrap();
+        let updated = update_menu(&db, model, ACTOR_ID).await.unwrap();
 
         cleanup(&db, &[menu.id]).await;
 
@@ -450,5 +464,98 @@ mod tests {
         cleanup(&db, &[deleted.id]).await;
 
         assert_eq!(found.as_ref().map(|m| m.id), Some(deleted.id));
+    }
+
+    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
+    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+        crate::entity::sys_user::ActiveModel {
+            username: Set(unique("audit_actor")),
+            password: Set("x".to_string()),
+            nickname: Set("审计操作人".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn delete_actors(db: &DatabaseConnection, ids: &[u64]) {
+        crate::entity::sys_user::Entity::delete_many()
+            .filter(crate::entity::sys_user::Column::Id.is_in(ids.iter().copied()))
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_menu_stamps_actor_as_creator_and_updater() {
+        let db = test_db().await;
+        let actor_id = seed_actor(&db).await;
+
+        let created = create_menu(
+            &db,
+            sys_menu::ActiveModel {
+                parent_id: Set(0),
+                path: Set(format!("/{}", unique("audit_path"))),
+                name: Set(unique("AuditMenu")),
+                component: Set(format!("#/views/{}.vue", unique("audit_comp"))),
+                title: Set(unique("audit_title")),
+                menu_type: Set(1),
+                status: Set(1),
+                ..Default::default()
+            },
+            actor_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.created_by, Some(actor_id));
+        assert_eq!(created.updated_by, Some(actor_id));
+
+        cleanup(&db, &[created.id]).await;
+        delete_actors(&db, &[actor_id]).await;
+    }
+
+    #[tokio::test]
+    async fn update_menu_refreshes_updated_by_and_keeps_created_by() {
+        let db = test_db().await;
+        let creator_id = seed_actor(&db).await;
+        let updater_id = seed_actor(&db).await;
+
+        let created = create_menu(
+            &db,
+            sys_menu::ActiveModel {
+                parent_id: Set(0),
+                path: Set(format!("/{}", unique("audit_path"))),
+                name: Set(unique("AuditMenu")),
+                component: Set(format!("#/views/{}.vue", unique("audit_comp"))),
+                title: Set(unique("audit_title")),
+                menu_type: Set(1),
+                status: Set(1),
+                ..Default::default()
+            },
+            creator_id,
+        )
+        .await
+        .unwrap();
+
+        let updated = update_menu(
+            &db,
+            sys_menu::ActiveModel {
+                id: Set(created.id),
+                title: Set(unique("audit_title_renamed")),
+                ..Default::default()
+            },
+            updater_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, Some(updater_id));
+
+        cleanup(&db, &[created.id]).await;
+        delete_actors(&db, &[creator_id, updater_id]).await;
     }
 }

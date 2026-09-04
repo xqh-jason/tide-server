@@ -7,6 +7,7 @@ use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
+use crate::middleware::auth::AuthUser;
 use crate::modules::dictionary::dto::{
     CreateDictionaryDetailReq, CreateDictionaryReq, DictionaryDetailListReq, DictionaryDetailResp,
     DictionaryListReq, DictionaryOptionResp, DictionaryResp, DictionaryTypeReq,
@@ -38,7 +39,8 @@ pub async fn create_dictionary(
 ) -> ApiResult<DictionaryResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let model = dict_service::create_dictionary(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let model = dict_service::create_dictionary(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(model.into()))
 }
 
@@ -50,7 +52,8 @@ pub async fn update_dictionary(
 ) -> ApiResult<DictionaryResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let model = dict_service::update_dictionary(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let model = dict_service::update_dictionary(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(model.into()))
 }
 
@@ -111,7 +114,8 @@ pub async fn create_dictionary_detail(
 ) -> ApiResult<DictionaryDetailResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let model = dict_service::create_dictionary_detail(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let model = dict_service::create_dictionary_detail(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(model.into()))
 }
 
@@ -123,7 +127,8 @@ pub async fn update_dictionary_detail(
 ) -> ApiResult<DictionaryDetailResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let model = dict_service::update_dictionary_detail(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let model = dict_service::update_dictionary_detail(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(model.into()))
 }
 

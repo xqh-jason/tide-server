@@ -68,6 +68,16 @@ pub struct MenuResp {
     pub permission: String,
     /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
+    /// 创建时间（`yyyy-MM-dd HH:mm:ss`）
+    #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
+    pub created_at: chrono::NaiveDateTime,
+    /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
+    #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
+    pub updated_at: chrono::NaiveDateTime,
+    /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
+    pub created_by: Option<u64>,
+    /// 更新人 ID（`sys_user.id`）
+    pub updated_by: Option<u64>,
 }
 
 impl From<sys_menu::Model> for MenuResp {
@@ -86,6 +96,10 @@ impl From<sys_menu::Model> for MenuResp {
             menu_type: m.menu_type,
             permission: m.permission,
             status: m.status,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+            created_by: m.created_by,
+            updated_by: m.updated_by,
         }
     }
 }

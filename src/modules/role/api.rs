@@ -2,6 +2,7 @@ use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
+use crate::middleware::auth::AuthUser;
 use crate::modules::role::dto::{
     CreateRoleReq, RoleListReq, RoleResp, UpdateRoleReq, UpdateRoleStatusReq,
 };
@@ -28,7 +29,8 @@ pub async fn list_roles(
 pub async fn create_role(depot: &mut Depot, body: JsonBody<CreateRoleReq>) -> ApiResult<RoleResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let role = role_service::create_role(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let role = role_service::create_role(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(RoleResp::from(role)))
 }
 
@@ -37,7 +39,8 @@ pub async fn create_role(depot: &mut Depot, body: JsonBody<CreateRoleReq>) -> Ap
 pub async fn update_role(depot: &mut Depot, body: JsonBody<UpdateRoleReq>) -> ApiResult<RoleResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let role = role_service::update_role(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let role = role_service::update_role(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(RoleResp::from(role)))
 }
 
@@ -49,7 +52,8 @@ pub async fn update_role_status(
 ) -> ApiResult<()> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    role_service::update_role_status(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    role_service::update_role_status(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(()))
 }
 

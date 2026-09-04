@@ -82,19 +82,28 @@ pub async fn find_dictionary_by_type_include_deleted(
 }
 
 /// 类型：创建。
+/// 类型：创建。`actor_id` 为操作人，审计字段由 repo 统一盖章。
 pub async fn create_dictionary(
     db: &DatabaseConnection,
     model: sys_dictionary::ActiveModel,
+    actor_id: u64,
 ) -> anyhow::Result<Dictionary> {
+    // 创建场景：创建人与更新人同源
+    let mut model = model;
+    model.created_by = Set(Some(actor_id));
+    model.updated_by = Set(Some(actor_id));
     let model = model.insert(db).await?;
     Ok(model)
 }
 
-/// 类型：更新（主键必须已设置）。
+/// 类型：更新（主键必须已设置）。审计字段由 repo 统一盖章：只刷新更新人。
 pub async fn update_dictionary(
     db: &DatabaseConnection,
     model: sys_dictionary::ActiveModel,
+    actor_id: u64,
 ) -> anyhow::Result<Dictionary> {
+    let mut model = model;
+    model.updated_by = Set(Some(actor_id));
     let model = model.update(db).await?;
     Ok(model)
 }
@@ -202,18 +211,27 @@ pub async fn soft_delete_details_by_dictionary_id(
 }
 
 /// 字典项：创建。
+/// 字典项：创建。`actor_id` 为操作人，审计字段由 repo 统一盖章。
 pub async fn create_detail(
     db: &DatabaseConnection,
     model: sys_dictionary_detail::ActiveModel,
+    actor_id: u64,
 ) -> anyhow::Result<Detail> {
+    // 创建场景：创建人与更新人同源
+    let mut model = model;
+    model.created_by = Set(Some(actor_id));
+    model.updated_by = Set(Some(actor_id));
     Ok(model.insert(db).await?)
 }
 
-/// 字典项：更新（主键必须已设置）。
+/// 字典项：更新（主键必须已设置）。审计字段由 repo 统一盖章：只刷新更新人。
 pub async fn update_detail(
     db: &DatabaseConnection,
     model: sys_dictionary_detail::ActiveModel,
+    actor_id: u64,
 ) -> anyhow::Result<Detail> {
+    let mut model = model;
+    model.updated_by = Set(Some(actor_id));
     Ok(model.update(db).await?)
 }
 
@@ -522,5 +540,157 @@ mod tests {
             "软删占位不算活记录：同 value 应允许重建"
         );
         assert_eq!(found_alive.map(|m| m.id), Some(alive.id));
+    }
+
+    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
+    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+        crate::entity::sys_user::ActiveModel {
+            username: Set(unique("audit_actor")),
+            password: Set("x".to_string()),
+            nickname: Set("审计操作人".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn delete_actors(db: &DatabaseConnection, ids: &[u64]) {
+        crate::entity::sys_user::Entity::delete_many()
+            .filter(crate::entity::sys_user::Column::Id.is_in(ids.iter().copied()))
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_dictionary_stamps_actor_as_creator_and_updater() {
+        let db = test_db().await;
+        let actor_id = seed_actor(&db).await;
+
+        let created = create_dictionary(
+            &db,
+            sys_dictionary::ActiveModel {
+                name: Set(unique("audit_dict")),
+                r#type: Set(unique("audit_dict_type")),
+                status: Set(1),
+                ..Default::default()
+            },
+            actor_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.created_by, Some(actor_id));
+        assert_eq!(created.updated_by, Some(actor_id));
+
+        cleanup(&db, &[created.id]).await;
+        delete_actors(&db, &[actor_id]).await;
+    }
+
+    #[tokio::test]
+    async fn update_dictionary_refreshes_updated_by_and_keeps_created_by() {
+        let db = test_db().await;
+        let creator_id = seed_actor(&db).await;
+        let updater_id = seed_actor(&db).await;
+
+        let created = create_dictionary(
+            &db,
+            sys_dictionary::ActiveModel {
+                name: Set(unique("audit_dict")),
+                r#type: Set(unique("audit_dict_type")),
+                status: Set(1),
+                ..Default::default()
+            },
+            creator_id,
+        )
+        .await
+        .unwrap();
+
+        let updated = update_dictionary(
+            &db,
+            sys_dictionary::ActiveModel {
+                id: Set(created.id),
+                name: Set(unique("audit_dict_renamed")),
+                ..Default::default()
+            },
+            updater_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, Some(updater_id));
+
+        cleanup(&db, &[created.id]).await;
+        delete_actors(&db, &[creator_id, updater_id]).await;
+    }
+
+    #[tokio::test]
+    async fn create_detail_stamps_actor_as_creator_and_updater() {
+        let db = test_db().await;
+        let actor_id = seed_actor(&db).await;
+        let dict = seed_dictionary(&db, "审计字典", &unique("audit_type"), 1, None).await;
+
+        let created = create_detail(
+            &db,
+            sys_dictionary_detail::ActiveModel {
+                dictionary_id: Set(dict.id),
+                label: Set(unique("audit_label")),
+                value: Set(unique("audit_value")),
+                status: Set(1),
+                ..Default::default()
+            },
+            actor_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.created_by, Some(actor_id));
+        assert_eq!(created.updated_by, Some(actor_id));
+
+        cleanup(&db, &[dict.id]).await;
+        delete_actors(&db, &[actor_id]).await;
+    }
+
+    #[tokio::test]
+    async fn update_detail_refreshes_updated_by_and_keeps_created_by() {
+        let db = test_db().await;
+        let creator_id = seed_actor(&db).await;
+        let updater_id = seed_actor(&db).await;
+        let dict = seed_dictionary(&db, "审计字典", &unique("audit_type"), 1, None).await;
+
+        let created = create_detail(
+            &db,
+            sys_dictionary_detail::ActiveModel {
+                dictionary_id: Set(dict.id),
+                label: Set(unique("audit_label")),
+                value: Set(unique("audit_value")),
+                status: Set(1),
+                ..Default::default()
+            },
+            creator_id,
+        )
+        .await
+        .unwrap();
+
+        let updated = update_detail(
+            &db,
+            sys_dictionary_detail::ActiveModel {
+                id: Set(created.id),
+                label: Set(unique("audit_label_renamed")),
+                ..Default::default()
+            },
+            updater_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, Some(updater_id));
+
+        cleanup(&db, &[dict.id]).await;
+        delete_actors(&db, &[creator_id, updater_id]).await;
     }
 }

@@ -45,6 +45,7 @@ pub async fn page_dictionaries(
 /// 否则同一 type 在软删后会被误判为「可重建」而撞唯一键。
 pub async fn create_dictionary(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &CreateDictionaryReq,
 ) -> Result<sys_dictionary::Model, AppError> {
     // 1) type 查重：活的或软删占位命中都拒绝
@@ -55,7 +56,7 @@ pub async fn create_dictionary(
         return Err(AppError::Biz(format!("字典类型编码已存在：{}", req.r#type)));
     }
 
-    // 2) 落库（type 唯一键兜底并发下的重复插入）
+    // 2) 落库（type 唯一键兜底并发下的重复插入）；审计字段由 repo 统一盖章
     let result = dict_repo::create_dictionary(
         db,
         sys_dictionary::ActiveModel {
@@ -65,6 +66,7 @@ pub async fn create_dictionary(
             remark: Set(req.remark.clone().unwrap_or_default()),
             ..Default::default()
         },
+        actor_id,
     )
     .await?;
     Ok(result)
@@ -76,6 +78,7 @@ pub async fn create_dictionary(
 /// 查重命中的正是本行，必须放行——只有 `existing.id != req.id` 才算真重复。
 pub async fn update_dictionary(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &UpdateDictionaryReq,
 ) -> Result<sys_dictionary::Model, AppError> {
     // 1) 目标记录必须存在（软删视为不存在）
@@ -95,7 +98,7 @@ pub async fn update_dictionary(
         }
     }
 
-    // 3) 全量覆盖更新（编辑表单整体提交）
+    // 3) 全量覆盖更新（编辑表单整体提交）；审计字段由 repo 统一盖章
     let result = dict_repo::update_dictionary(
         db,
         sys_dictionary::ActiveModel {
@@ -106,6 +109,7 @@ pub async fn update_dictionary(
             remark: Set(req.remark.clone().unwrap_or_default()),
             ..Default::default()
         },
+        actor_id,
     )
     .await?;
     Ok(result)
@@ -190,6 +194,7 @@ pub async fn page_dictionary_details(
 /// 不能依赖数据库唯一键（表上刻意不加）。
 pub async fn create_dictionary_detail(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &CreateDictionaryDetailReq,
 ) -> Result<sys_dictionary_detail::Model, AppError> {
     // 1) 所属类型必须存在且未软删
@@ -211,7 +216,7 @@ pub async fn create_dictionary_detail(
         return Err(AppError::Biz(format!("字典值已存在：{}", req.value)));
     }
 
-    // 3) 落库
+    // 3) 落库（审计字段由 repo 统一盖章）
     let result = dict_repo::create_detail(
         db,
         sys_dictionary_detail::ActiveModel {
@@ -223,6 +228,7 @@ pub async fn create_dictionary_detail(
             status: Set(req.status),
             ..Default::default()
         },
+        actor_id,
     )
     .await?;
     Ok(result)
@@ -231,6 +237,7 @@ pub async fn create_dictionary_detail(
 /// 更新字典项：判存在 → 类型校验 → value 查重排除自身 → 全量覆盖。
 pub async fn update_dictionary_detail(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &UpdateDictionaryDetailReq,
 ) -> Result<sys_dictionary_detail::Model, AppError> {
     // 1) 目标字典项必须存在（软删视为不存在）
@@ -256,7 +263,7 @@ pub async fn update_dictionary_detail(
         }
     }
 
-    // 4) 全量覆盖更新（编辑表单整体提交）
+    // 4) 全量覆盖更新（编辑表单整体提交；审计字段由 repo 统一盖章）
     let result = dict_repo::update_detail(
         db,
         sys_dictionary_detail::ActiveModel {
@@ -269,6 +276,7 @@ pub async fn update_dictionary_detail(
             status: Set(req.status),
             ..Default::default()
         },
+        actor_id,
     )
     .await?;
     Ok(result)
@@ -313,6 +321,9 @@ mod tests {
     // type/name 撞 `sys_dictionary.type` 唯一键（随机 flaky）。这里固定加
     // `svc_` 模块标记，使 service 测试数据与 repo 测试数据永不相交。
     static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 既有测试不关心操作人，统一用种子 admin（id=1）作为 actor。
+    const ACTOR_ID: u64 = 1;
 
     fn unique(prefix: &str) -> String {
         format!(
@@ -427,8 +438,9 @@ mod tests {
         let live = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let deleted = seed_dictionary(&db, &unique("nm"), &unique("tdel"), 1, Some(now())).await;
 
-        let dup_live = create_dictionary(&db, &create_req(live.r#type.clone())).await;
-        let dup_deleted = create_dictionary(&db, &create_req(deleted.r#type.clone())).await;
+        let dup_live = create_dictionary(&db, ACTOR_ID, &create_req(live.r#type.clone())).await;
+        let dup_deleted =
+            create_dictionary(&db, ACTOR_ID, &create_req(deleted.r#type.clone())).await;
 
         cleanup(&db, &[live.id, deleted.id]).await;
 
@@ -448,8 +460,8 @@ mod tests {
         let a = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let b = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
 
-        let dup = update_dictionary(&db, &update_req(b.id, a.r#type.clone())).await;
-        let keep_self = update_dictionary(&db, &update_req(b.id, b.r#type.clone())).await;
+        let dup = update_dictionary(&db, ACTOR_ID, &update_req(b.id, a.r#type.clone())).await;
+        let keep_self = update_dictionary(&db, ACTOR_ID, &update_req(b.id, b.r#type.clone())).await;
 
         cleanup(&db, &[a.id, b.id]).await;
 
@@ -480,15 +492,16 @@ mod tests {
     async fn create_detail_rejects_missing_type_and_duplicate_value() {
         let db = test_db().await;
 
-        let missing = create_dictionary_detail(&db, &detail_req(9_999_999_999, "v")).await;
+        let missing =
+            create_dictionary_detail(&db, ACTOR_ID, &detail_req(9_999_999_999, "v")).await;
         assert!(
             matches!(missing, Err(AppError::Biz(_))),
             "类型不存在应拒绝，实际：{missing:?}"
         );
 
         let d = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
-        let first = create_dictionary_detail(&db, &detail_req(d.id, "dup_value")).await;
-        let dup = create_dictionary_detail(&db, &detail_req(d.id, "dup_value")).await;
+        let first = create_dictionary_detail(&db, ACTOR_ID, &detail_req(d.id, "dup_value")).await;
+        let dup = create_dictionary_detail(&db, ACTOR_ID, &detail_req(d.id, "dup_value")).await;
 
         cleanup(&db, &[d.id]).await;
 
@@ -505,7 +518,7 @@ mod tests {
         let d = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let old = seed_detail(&db, d.id, "dup_value", "lb", 0, 1, Some(now())).await;
 
-        let fresh = create_dictionary_detail(&db, &detail_req(d.id, "dup_value")).await;
+        let fresh = create_dictionary_detail(&db, ACTOR_ID, &detail_req(d.id, "dup_value")).await;
 
         cleanup(&db, &[d.id]).await;
 
@@ -559,7 +572,8 @@ mod tests {
 
         let get_type = get_dictionary(&db, 9_999_999_999).await;
         let get_detail = get_dictionary_detail(&db, 9_999_999_999).await;
-        let upd_type = update_dictionary(&db, &update_req(9_999_999_999, unique("t"))).await;
+        let upd_type =
+            update_dictionary(&db, ACTOR_ID, &update_req(9_999_999_999, unique("t"))).await;
         let del_detail = delete_dictionary_detail(&db, 9_999_999_999).await;
 
         assert!(

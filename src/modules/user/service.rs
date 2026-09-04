@@ -144,6 +144,7 @@ pub async fn create_user(
             ..Default::default()
         },
         req.role_ids,
+        actor_id,
     )
     .await?;
 
@@ -251,15 +252,17 @@ pub async fn update_user_with_links(
             ..Default::default()
         },
         req.role_ids,
+        actor_id,
     )
     .await?;
 
     Ok(UserResp::from(model))
 }
 
-/// 更新用户状态（启用/禁用）；内置超管 admin 不允许修改状态。
+/// 更新用户状态（启用/禁用）；内置超管 admin 不允许修改状态（审计字段由 repo 盖章）。
 pub async fn update_user_status(
     db: &DatabaseConnection,
+    actor_id: u64,
     user_id: u64,
     status: i8,
 ) -> Result<bool, AppError> {
@@ -274,7 +277,7 @@ pub async fn update_user_status(
 
     let mut user: sys_user::ActiveModel = user.into();
     user.status = Set(status);
-    user_repo::update_user(db, user).await?;
+    user_repo::update_user(db, user, actor_id).await?;
     Ok(true)
 }
 #[cfg(test)]

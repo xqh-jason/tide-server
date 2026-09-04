@@ -1,6 +1,7 @@
 use salvo::prelude::*;
 use salvo::{Depot, oapi::endpoint};
 
+use crate::middleware::auth::AuthUser;
 use crate::modules::sys_api::dto::{CreateApiReq, UpdateApiReq};
 use crate::{
     infra::state::AppState,
@@ -29,7 +30,8 @@ pub async fn list_apis(
 pub async fn create_api(depot: &mut Depot, req: JsonBody<CreateApiReq>) -> ApiResult<ApiResp> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
-    let model = api_service::create_api(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let model = api_service::create_api(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(model.into()))
 }
 
@@ -38,7 +40,8 @@ pub async fn create_api(depot: &mut Depot, req: JsonBody<CreateApiReq>) -> ApiRe
 pub async fn update_api(depot: &mut Depot, req: JsonBody<UpdateApiReq>) -> ApiResult<ApiResp> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
-    let model = api_service::update_api(&state.db, &req).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let model = api_service::update_api(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(model.into()))
 }
 

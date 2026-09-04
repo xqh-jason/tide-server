@@ -21,6 +21,10 @@ pub struct DictionaryResp {
     pub status: i8,
     /// 备注
     pub remark: String,
+    /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
+    pub created_by: Option<u64>,
+    /// 更新人 ID（`sys_user.id`）
+    pub updated_by: Option<u64>,
 }
 
 impl From<sys_dictionary::Model> for DictionaryResp {
@@ -31,6 +35,8 @@ impl From<sys_dictionary::Model> for DictionaryResp {
             r#type: m.r#type,
             status: m.status,
             remark: m.remark,
+            created_by: m.created_by,
+            updated_by: m.updated_by,
         }
     }
 }
@@ -150,6 +156,10 @@ pub struct DictionaryDetailResp {
     pub sort: i32,
     /// 状态：`1` 启用、`0` 停用
     pub status: i8,
+    /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
+    pub created_by: Option<u64>,
+    /// 更新人 ID（`sys_user.id`）
+    pub updated_by: Option<u64>,
 }
 
 impl From<sys_dictionary_detail::Model> for DictionaryDetailResp {
@@ -162,6 +172,8 @@ impl From<sys_dictionary_detail::Model> for DictionaryDetailResp {
             extend: m.extend,
             sort: m.sort,
             status: m.status,
+            created_by: m.created_by,
+            updated_by: m.updated_by,
         }
     }
 }

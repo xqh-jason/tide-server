@@ -39,9 +39,10 @@ pub async fn find_by_ids(
     Ok(roles)
 }
 
-/// 创建角色
+/// 创建角色（审计字段由 repo 盖章）。
 pub async fn create_role(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &CreateRoleReq,
 ) -> Result<sys_role::Model, AppError> {
     // 检查角色键是否已存在
@@ -66,7 +67,7 @@ pub async fn create_role(
     let menu_ids = req.menu_ids.clone().unwrap_or_default();
     let api_ids = req.api_ids.clone().unwrap_or_default();
 
-    let model = role_repo::create_role_with_links(db, model, menu_ids, api_ids).await?;
+    let model = role_repo::create_role_with_links(db, model, menu_ids, api_ids, actor_id).await?;
     Ok(model)
 }
 
@@ -87,9 +88,10 @@ pub async fn delete_role(db: &DatabaseConnection, id: u64) -> Result<(), AppErro
     Ok(())
 }
 
-/// 更新角色：判存在后键查重（排除自身），事务内全量重建菜单 / API 关联。
+/// 更新角色：判存在后键查重（排除自身），事务内全量重建菜单 / API 关联（审计字段由 repo 盖章）。
 pub async fn update_role(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &UpdateRoleReq,
 ) -> Result<sys_role::Model, AppError> {
     let Some(_) = role_repo::find_by_id(db, req.id).await? else {
@@ -130,15 +132,21 @@ pub async fn update_role(
         ..Default::default()
     };
 
-    let model =
-        role_repo::update_role_with_links(db, model, req.menu_ids.clone(), req.api_ids.clone())
-            .await?;
+    let model = role_repo::update_role_with_links(
+        db,
+        model,
+        req.menu_ids.clone(),
+        req.api_ids.clone(),
+        actor_id,
+    )
+    .await?;
     Ok(model)
 }
 
-/// 更新角色状态（启用/禁用）；内置超管角色 `super` 不允许修改状态。
+/// 更新角色状态（启用/禁用）；内置超管角色 `super` 不允许修改状态（审计字段由 repo 盖章）。
 pub async fn update_role_status(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &UpdateRoleStatusReq,
 ) -> Result<bool, AppError> {
     let Some(role) = role_repo::find_by_id(db, req.id).await? else {
@@ -157,7 +165,7 @@ pub async fn update_role_status(
         status: Set(req.status),
         ..Default::default()
     };
-    role_repo::update_role(db, model).await?;
+    role_repo::update_role(db, model, actor_id).await?;
 
     Ok(true)
 }
@@ -172,6 +180,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 既有测试不关心操作人，统一用种子 admin（id=1）作为 actor。
+    const ACTOR_ID: u64 = 1;
 
     fn unique(prefix: &str) -> String {
         format!(
@@ -304,10 +315,15 @@ mod tests {
         )
         .await;
 
-        let result_live =
-            create_role(&db, &create_req(unique("dup_live_name"), key_live.clone())).await;
+        let result_live = create_role(
+            &db,
+            ACTOR_ID,
+            &create_req(unique("dup_live_name"), key_live.clone()),
+        )
+        .await;
         let result_deleted = create_role(
             &db,
+            ACTOR_ID,
             &create_req(unique("dup_deleted_name"), key_deleted.clone()),
         )
         .await;
@@ -344,9 +360,18 @@ mod tests {
             api_ids: Vec::new(),
         };
 
-        let dup = update_role(&db, &update_req(unique("role_b_dup"), key_a.clone())).await;
-        let keep_self =
-            update_role(&db, &update_req(unique("role_b_renamed"), key_b.clone())).await;
+        let dup = update_role(
+            &db,
+            ACTOR_ID,
+            &update_req(unique("role_b_dup"), key_a.clone()),
+        )
+        .await;
+        let keep_self = update_role(
+            &db,
+            ACTOR_ID,
+            &update_req(unique("role_b_renamed"), key_b.clone()),
+        )
+        .await;
 
         cleanup(&db, &[role_a.id, role_b.id], &[], &[]).await;
 
@@ -366,6 +391,7 @@ mod tests {
 
         let missing = update_role(
             &db,
+            ACTOR_ID,
             &UpdateRoleReq {
                 id: 9_999_999_999,
                 role_name: "不存在".to_string(),
@@ -394,6 +420,7 @@ mod tests {
         .await;
         let update_deleted = update_role(
             &db,
+            ACTOR_ID,
             &UpdateRoleReq {
                 id: deleted.id,
                 role_name: "改已删角色".to_string(),
@@ -426,6 +453,7 @@ mod tests {
 
         let created = create_role(
             &db,
+            ACTOR_ID,
             &CreateRoleReq {
                 role_name: role_name.clone(),
                 role_key: key.clone(),
@@ -441,6 +469,7 @@ mod tests {
 
         let updated = update_role(
             &db,
+            ACTOR_ID,
             &UpdateRoleReq {
                 id: created.id,
                 role_name: format!("{role_name}_v2"),
@@ -475,6 +504,7 @@ mod tests {
         // 传空数组 = 清空关联
         update_role(
             &db,
+            ACTOR_ID,
             &UpdateRoleReq {
                 id: created.id,
                 role_name: format!("{role_name}_clear"),

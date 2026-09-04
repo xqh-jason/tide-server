@@ -50,8 +50,13 @@ pub async fn create_api_with_links(
     db: &DatabaseConnection,
     api: sys_api::ActiveModel,
     role_ids: Vec<u64>,
+    actor_id: u64,
 ) -> anyhow::Result<Model> {
     let txn = db.begin().await?;
+    // 审计字段由 repo 统一盖章：create 时创建人与更新人同源
+    let mut api = api;
+    api.created_by = Set(Some(actor_id));
+    api.updated_by = Set(Some(actor_id));
     let api = api.insert(&txn).await?;
     if !role_ids.is_empty() {
         let role_api_ids = role_ids
@@ -74,8 +79,12 @@ pub async fn update_api_with_links(
     db: &DatabaseConnection,
     api: sys_api::ActiveModel,
     role_ids: Vec<u64>,
+    actor_id: u64,
 ) -> anyhow::Result<Model> {
     let txn = db.begin().await?;
+    // 审计字段由 repo 统一盖章：只刷新更新人，created_by 保持 NotSet 不被覆盖
+    let mut api = api;
+    api.updated_by = Set(Some(actor_id));
     let api = api.update(&txn).await?;
     sys_role_api::Entity::delete_many()
         .filter(sys_role_api::Column::ApiId.eq(api.id))
@@ -136,6 +145,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 既有测试不关心操作人，统一用种子 admin（id=1）作为 actor。
+    const ACTOR_ID: u64 = 1;
 
     fn unique(prefix: &str) -> String {
         format!(
@@ -225,6 +237,7 @@ mod tests {
                 ..Default::default()
             },
             vec![role_a.id, role_b.id],
+            ACTOR_ID,
         )
         .await
         .unwrap();
@@ -256,6 +269,7 @@ mod tests {
                 ..Default::default()
             },
             vec![],
+            ACTOR_ID,
         )
         .await
         .unwrap();
@@ -353,13 +367,14 @@ mod tests {
                 ..Default::default()
             },
             vec![role_old.id],
+            ACTOR_ID,
         )
         .await
         .unwrap();
 
         let mut model: sys_api::ActiveModel = created.clone().into();
         model.description = Set("更新后描述".to_string());
-        let updated = update_api_with_links(&db, model, vec![role_new.id])
+        let updated = update_api_with_links(&db, model, vec![role_new.id], ACTOR_ID)
             .await
             .unwrap();
 
@@ -392,6 +407,7 @@ mod tests {
                 ..Default::default()
             },
             vec![role.id],
+            ACTOR_ID,
         )
         .await
         .unwrap();
@@ -416,7 +432,14 @@ mod tests {
     async fn find_by_path_method_include_deleted_finds_soft_deleted_api() {
         let db = test_db().await;
         let path = format!("/api/v1/{}/dup", unique("dup"));
-        let deleted = seed_api(&db, &path, "POST", 1, Some(chrono::Local::now().naive_local())).await;
+        let deleted = seed_api(
+            &db,
+            &path,
+            "POST",
+            1,
+            Some(chrono::Local::now().naive_local()),
+        )
+        .await;
 
         let found = find_by_path_method_include_deleted(&db, &path, "POST")
             .await
@@ -425,5 +448,97 @@ mod tests {
         cleanup(&db, &[deleted.id], &[]).await;
 
         assert_eq!(found.as_ref().map(|a| a.id), Some(deleted.id));
+    }
+
+    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
+    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+        crate::entity::sys_user::ActiveModel {
+            username: Set(unique("audit_actor")),
+            password: Set("x".to_string()),
+            nickname: Set("审计操作人".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn delete_actors(db: &DatabaseConnection, ids: &[u64]) {
+        crate::entity::sys_user::Entity::delete_many()
+            .filter(crate::entity::sys_user::Column::Id.is_in(ids.iter().copied()))
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_api_with_links_stamps_actor_as_creator_and_updater() {
+        let db = test_db().await;
+        let actor_id = seed_actor(&db).await;
+
+        let created = create_api_with_links(
+            &db,
+            sys_api::ActiveModel {
+                path: Set(format!("/api/{}", unique("audit_api"))),
+                method: Set("POST".to_string()),
+                description: Set("审计测试接口".to_string()),
+                api_group: Set("audit".to_string()),
+                status: Set(1),
+                ..Default::default()
+            },
+            vec![],
+            actor_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.created_by, Some(actor_id));
+        assert_eq!(created.updated_by, Some(actor_id));
+
+        cleanup(&db, &[created.id], &[]).await;
+        delete_actors(&db, &[actor_id]).await;
+    }
+
+    #[tokio::test]
+    async fn update_api_with_links_refreshes_updated_by_and_keeps_created_by() {
+        let db = test_db().await;
+        let creator_id = seed_actor(&db).await;
+        let updater_id = seed_actor(&db).await;
+
+        let created = create_api_with_links(
+            &db,
+            sys_api::ActiveModel {
+                path: Set(format!("/api/{}", unique("audit_api"))),
+                method: Set("POST".to_string()),
+                description: Set("审计测试接口".to_string()),
+                api_group: Set("audit".to_string()),
+                status: Set(1),
+                ..Default::default()
+            },
+            vec![],
+            creator_id,
+        )
+        .await
+        .unwrap();
+
+        let updated = update_api_with_links(
+            &db,
+            sys_api::ActiveModel {
+                id: Set(created.id),
+                description: Set("审计测试接口（改名）".to_string()),
+                ..Default::default()
+            },
+            vec![],
+            updater_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, Some(updater_id));
+
+        cleanup(&db, &[created.id], &[]).await;
+        delete_actors(&db, &[creator_id, updater_id]).await;
     }
 }

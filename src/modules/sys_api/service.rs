@@ -7,9 +7,10 @@ use crate::modules::sys_api::repo as api_repo;
 use crate::utils::PageData;
 use crate::{entity::sys_api, modules::sys_api::dto::CreateApiReq, utils::error::AppError};
 
-/// 创建 API：path + method 查重（含软删占位）→ 写入主表并维护角色授权关联。
+/// 创建 API：path + method 查重（含软删占位）→ 写入主表并维护角色授权关联（审计字段由 repo 盖章）。
 pub async fn create_api(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &CreateApiReq,
 ) -> Result<sys_api::Model, AppError> {
     // path + method 查重（含软删占位）
@@ -30,13 +31,14 @@ pub async fn create_api(
         status: Set(req.status.unwrap_or(1)),
         ..Default::default()
     };
-    let model = api_repo::create_api_with_links(db, model, req.role_ids.clone()).await?;
+    let model = api_repo::create_api_with_links(db, model, req.role_ids.clone(), actor_id).await?;
     Ok(model)
 }
 
-/// 更新 API：判存在 → path + method 查重排除自身 → 全量覆盖并重建角色授权。
+/// 更新 API：判存在 → path + method 查重排除自身 → 全量覆盖并重建角色授权（审计字段由 repo 盖章）。
 pub async fn update_api(
     db: &DatabaseConnection,
+    actor_id: u64,
     req: &UpdateApiReq,
 ) -> Result<sys_api::Model, AppError> {
     // 检查 API 是否存在
@@ -62,7 +64,7 @@ pub async fn update_api(
         status: Set(req.status),
         ..Default::default()
     };
-    let model = api_repo::update_api_with_links(db, model, req.role_ids.clone()).await?;
+    let model = api_repo::update_api_with_links(db, model, req.role_ids.clone(), actor_id).await?;
     Ok(model)
 }
 
@@ -114,6 +116,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 既有测试不关心操作人，统一用种子 admin（id=1）作为 actor。
+    const ACTOR_ID: u64 = 1;
 
     fn unique(prefix: &str) -> String {
         format!(
@@ -202,11 +207,13 @@ mod tests {
 
         let result_live = create_api(
             &db,
+            ACTOR_ID,
             &create_req(path_live.clone(), "POST".to_string(), vec![]),
         )
         .await;
         let result_deleted = create_api(
             &db,
+            ACTOR_ID,
             &create_req(path_deleted.clone(), "POST".to_string(), vec![]),
         )
         .await;
@@ -234,6 +241,7 @@ mod tests {
 
         let dup = update_api(
             &db,
+            ACTOR_ID,
             &UpdateApiReq {
                 id: api_b.id,
                 path: path_a.clone(),
@@ -247,6 +255,7 @@ mod tests {
         .await;
         let keep_self = update_api(
             &db,
+            ACTOR_ID,
             &UpdateApiReq {
                 id: api_b.id,
                 path: path_b.clone(),
@@ -276,6 +285,7 @@ mod tests {
 
         let missing = update_api(
             &db,
+            ACTOR_ID,
             &UpdateApiReq {
                 id: 9_999_999_999,
                 path: "/missing".to_string(),
@@ -300,6 +310,7 @@ mod tests {
 
         let update_deleted = update_api(
             &db,
+            ACTOR_ID,
             &UpdateApiReq {
                 id: deleted.id,
                 path: path.clone(),
@@ -328,12 +339,14 @@ mod tests {
 
         let created = create_api(
             &db,
+            ACTOR_ID,
             &create_req(path.clone(), "POST".to_string(), vec![role_old.id]),
         )
         .await
         .expect("创建带授权 API 应成功");
         let updated = update_api(
             &db,
+            ACTOR_ID,
             &UpdateApiReq {
                 id: created.id,
                 path: path.clone(),

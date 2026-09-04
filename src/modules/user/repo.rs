@@ -86,12 +86,20 @@ pub async fn find_page(
 }
 
 /// 事务创建用户并批量绑定角色关联（`role_ids` 为空则不建关联）。
+///
+/// `actor_id` 为操作人，审计字段（`created_by` / `updated_by`）由 repo 统一盖章，
+/// 调用方无需在 ActiveModel 中设置。
 pub async fn create_user_with_links(
     db: &DatabaseConnection,
     user: sys_user::ActiveModel,
     role_ids: Vec<u64>,
+    actor_id: u64,
 ) -> anyhow::Result<sys_user::Model> {
     let txn = db.begin().await?;
+    // 创建场景：创建人与更新人同源
+    let mut user = user;
+    user.created_by = Set(Some(actor_id));
+    user.updated_by = Set(Some(actor_id));
     let user = user.insert(&txn).await?;
 
     if !role_ids.is_empty() {
@@ -117,8 +125,12 @@ pub async fn update_user_with_links(
     db: &DatabaseConnection,
     user: sys_user::ActiveModel,
     role_ids: Vec<u64>,
+    actor_id: u64,
 ) -> anyhow::Result<sys_user::Model> {
     let txn = db.begin().await?;
+    // 更新场景：只刷新更新人；created_by 保持 NotSet，不会被覆盖
+    let mut user = user;
+    user.updated_by = Set(Some(actor_id));
     let user = user.update(&txn).await?;
 
     if !role_ids.is_empty() {
@@ -150,7 +162,11 @@ pub async fn update_user_with_links(
 pub async fn update_user(
     db: &DatabaseConnection,
     model: sys_user::ActiveModel,
+    actor_id: u64,
 ) -> anyhow::Result<bool> {
+    // 通用更新同样盖章：只刷新更新人
+    let mut model = model;
+    model.updated_by = Set(Some(actor_id));
     model.update(db).await?;
     Ok(true)
 }
@@ -162,6 +178,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 既有测试不关心操作人，统一用种子 admin（id=1）作为 actor。
+    const ACTOR_ID: u64 = 1;
 
     /// 唯一命名：`<prefix>_<pid>_<seq>`，避免并行测试冲突。
     fn unique_name(prefix: &str) -> String {
@@ -275,6 +294,7 @@ mod tests {
                 ..Default::default()
             },
             vec![],
+            ACTOR_ID,
         )
         .await
         .unwrap();
@@ -480,5 +500,106 @@ mod tests {
             !found_keys.contains(&deleted_key),
             "登录角色不应包含已删除角色"
         );
+    }
+
+    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
+    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+        sys_user::ActiveModel {
+            username: Set(unique_name("audit_actor")),
+            password: Set("x".to_string()),
+            nickname: Set("审计操作人".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    /// 清理：先删关联表，再删主表（含操作人）。
+    async fn cleanup_users(db: &DatabaseConnection, ids: &[u64]) {
+        for id in ids {
+            sys_user_role::Entity::delete_many()
+                .filter(sys_user_role::Column::UserId.eq(*id))
+                .exec(db)
+                .await
+                .unwrap();
+        }
+        for id in ids {
+            sys_user::Entity::delete_by_id(*id).exec(db).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn create_user_with_links_stamps_actor_as_creator_and_updater() {
+        let db = test_db().await;
+        let actor_id = seed_actor(&db).await;
+
+        let created = create_user_with_links(
+            &db,
+            sys_user::ActiveModel {
+                username: Set(unique_name("audit_target")),
+                password: Set("x".to_string()),
+                nickname: Set("审计目标用户".to_string()),
+                ..Default::default()
+            },
+            vec![],
+            actor_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.created_by, Some(actor_id));
+        assert_eq!(created.updated_by, Some(actor_id));
+
+        cleanup_users(&db, &[created.id, actor_id]).await;
+    }
+
+    #[tokio::test]
+    async fn update_user_with_links_refreshes_updated_by_and_keeps_created_by() {
+        let db = test_db().await;
+        let creator_id = seed_actor(&db).await;
+        let updater_id = seed_actor(&db).await;
+
+        let created = create_user_with_links(
+            &db,
+            sys_user::ActiveModel {
+                username: Set(unique_name("audit_target")),
+                password: Set("x".to_string()),
+                nickname: Set("审计目标用户".to_string()),
+                ..Default::default()
+            },
+            vec![],
+            creator_id,
+        )
+        .await
+        .unwrap();
+
+        // 换另一个操作人做局部更新：updated_by 应刷新，created_by 保持原值
+        let updated = update_user_with_links(
+            &db,
+            sys_user::ActiveModel {
+                id: Set(created.id),
+                nickname: Set("改名后".to_string()),
+                ..Default::default()
+            },
+            vec![],
+            updater_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, Some(updater_id));
+
+        // 通用更新（状态更新场景）同样要盖章
+        let mut model: sys_user::ActiveModel = updated.into();
+        model.status = Set(0);
+        let after_status = update_user(&db, model, updater_id).await.unwrap();
+        assert!(after_status);
+        let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();
+        assert_eq!(reloaded.updated_by, Some(updater_id));
+
+        cleanup_users(&db, &[created.id, creator_id, updater_id]).await;
     }
 }

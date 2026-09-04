@@ -21,6 +21,16 @@ pub struct RoleResp {
     pub status: i8,
     /// 备注
     pub remark: String,
+    /// 创建时间（`yyyy-MM-dd HH:mm:ss`）
+    #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
+    pub created_at: chrono::NaiveDateTime,
+    /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
+    #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
+    pub updated_at: chrono::NaiveDateTime,
+    /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
+    pub created_by: Option<u64>,
+    /// 更新人 ID（`sys_user.id`）
+    pub updated_by: Option<u64>,
 }
 
 impl From<sys_role::Model> for RoleResp {
@@ -32,6 +42,10 @@ impl From<sys_role::Model> for RoleResp {
             sort: m.sort,
             status: m.status,
             remark: m.remark,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+            created_by: m.created_by,
+            updated_by: m.updated_by,
         }
     }
 }

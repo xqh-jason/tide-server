@@ -74,8 +74,13 @@ pub async fn create_role_with_links(
     role: sys_role::ActiveModel,
     menu_ids: Vec<u64>,
     api_ids: Vec<u64>,
+    actor_id: u64,
 ) -> anyhow::Result<sys_role::Model> {
     let txn = db.begin().await?;
+    // 审计字段由 repo 统一盖章：create 时创建人与更新人同源
+    let mut role = role;
+    role.created_by = Set(Some(actor_id));
+    role.updated_by = Set(Some(actor_id));
     let role = role.insert(&txn).await?;
     // 插入菜单关联
     if !menu_ids.is_empty() {
@@ -114,8 +119,13 @@ pub async fn update_role_with_links(
     role: sys_role::ActiveModel,
     menu_ids: Vec<u64>,
     api_ids: Vec<u64>,
+    actor_id: u64,
 ) -> anyhow::Result<sys_role::Model> {
     let txn = db.begin().await?;
+
+    // 审计字段由 repo 统一盖章：只刷新更新人，created_by 保持 NotSet 不被覆盖
+    let mut role = role;
+    role.updated_by = Set(Some(actor_id));
 
     // 更新角色
     let role = role.update(&txn).await?;
@@ -210,7 +220,10 @@ pub async fn find_by_ids(
 pub async fn update_role(
     db: &DatabaseConnection,
     role: sys_role::ActiveModel,
+    actor_id: u64,
 ) -> anyhow::Result<bool> {
+    let mut role = role;
+    role.updated_by = Set(Some(actor_id));
     role.update(db).await?;
     Ok(true)
 }
@@ -223,6 +236,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 既有测试不关心操作人，统一用种子 admin（id=1）作为 actor。
+    const ACTOR_ID: u64 = 1;
 
     async fn test_db() -> DatabaseConnection {
         let config = crate::infra::config::Config::load().unwrap();
@@ -340,6 +356,7 @@ mod tests {
             role,
             vec![menu_a.id, menu_b.id],
             vec![api_a.id, api_b.id],
+            ACTOR_ID,
         )
         .await
         .unwrap();
@@ -381,7 +398,7 @@ mod tests {
             ..Default::default()
         };
 
-        let created = create_role_with_links(&db, role, vec![], vec![])
+        let created = create_role_with_links(&db, role, vec![], vec![], ACTOR_ID)
             .await
             .unwrap();
 
@@ -423,6 +440,7 @@ mod tests {
             },
             vec![old_menu.id],
             vec![old_api.id],
+            ACTOR_ID,
         )
         .await
         .unwrap();
@@ -438,6 +456,7 @@ mod tests {
             },
             vec![new_menu.id],
             vec![new_api.id],
+            ACTOR_ID,
         )
         .await
         .unwrap();
@@ -559,6 +578,7 @@ mod tests {
             },
             vec![menu.id],
             vec![api.id],
+            ACTOR_ID,
         )
         .await
         .unwrap();
@@ -631,5 +651,131 @@ mod tests {
         let found = found.unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, live_role.id);
+    }
+
+    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
+    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+        crate::entity::sys_user::ActiveModel {
+            username: Set(unique("audit_actor")),
+            password: Set("x".to_string()),
+            nickname: Set("审计操作人".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn delete_actors(db: &DatabaseConnection, ids: &[u64]) {
+        for id in ids {
+            crate::entity::sys_user::Entity::delete_by_id(*id)
+                .exec(db)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn create_role_with_links_stamps_actor_as_creator_and_updater() {
+        let db = test_db().await;
+        let actor_id = seed_actor(&db).await;
+
+        let created = create_role_with_links(
+            &db,
+            sys_role::ActiveModel {
+                role_name: Set(unique("audit_role")),
+                role_key: Set(unique("audit_role_key")),
+                status: Set(1),
+                ..Default::default()
+            },
+            vec![],
+            vec![],
+            actor_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.created_by, Some(actor_id));
+        assert_eq!(created.updated_by, Some(actor_id));
+
+        cleanup(&db, &[created.id], &[], &[]).await;
+        delete_actors(&db, &[actor_id]).await;
+    }
+
+    #[tokio::test]
+    async fn update_role_with_links_refreshes_updated_by_and_keeps_created_by() {
+        let db = test_db().await;
+        let creator_id = seed_actor(&db).await;
+        let updater_id = seed_actor(&db).await;
+
+        let created = create_role_with_links(
+            &db,
+            sys_role::ActiveModel {
+                role_name: Set(unique("audit_role")),
+                role_key: Set(unique("audit_role_key")),
+                status: Set(1),
+                ..Default::default()
+            },
+            vec![],
+            vec![],
+            creator_id,
+        )
+        .await
+        .unwrap();
+
+        let updated = update_role_with_links(
+            &db,
+            sys_role::ActiveModel {
+                id: Set(created.id),
+                role_name: Set(unique("audit_role_renamed")),
+                ..Default::default()
+            },
+            vec![],
+            vec![],
+            updater_id,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.created_by, Some(creator_id), "创建人不应被更新覆盖");
+        assert_eq!(updated.updated_by, Some(updater_id));
+
+        cleanup(&db, &[created.id], &[], &[]).await;
+        delete_actors(&db, &[creator_id, updater_id]).await;
+    }
+
+    #[tokio::test]
+    async fn update_role_refreshes_updated_by_for_status_change() {
+        let db = test_db().await;
+        let creator_id = seed_actor(&db).await;
+        let updater_id = seed_actor(&db).await;
+
+        let created = create_role_with_links(
+            &db,
+            sys_role::ActiveModel {
+                role_name: Set(unique("audit_role")),
+                role_key: Set(unique("audit_role_key")),
+                status: Set(1),
+                ..Default::default()
+            },
+            vec![],
+            vec![],
+            creator_id,
+        )
+        .await
+        .unwrap();
+
+        // 状态更新走通用 update_role（ActiveModel 由 Model 转换，字段全量 Set）
+        let mut model: sys_role::ActiveModel = created.clone().into();
+        model.status = Set(0);
+        assert!(update_role(&db, model, updater_id).await.unwrap());
+
+        let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();
+        assert_eq!(reloaded.created_by, Some(creator_id));
+        assert_eq!(reloaded.updated_by, Some(updater_id));
+
+        cleanup(&db, &[created.id], &[], &[]).await;
+        delete_actors(&db, &[creator_id, updater_id]).await;
     }
 }
