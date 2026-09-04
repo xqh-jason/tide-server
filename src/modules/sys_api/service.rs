@@ -197,7 +197,7 @@ mod tests {
         let live = seed_api(&db, &path_live, "POST").await;
         let deleted = seed_api(&db, &path_deleted, "POST").await;
         let mut deleted_model: sys_api::ActiveModel = deleted.clone().into();
-        deleted_model.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        deleted_model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         deleted_model.update(&db).await.unwrap();
 
         let result_live = create_api(
@@ -295,7 +295,7 @@ mod tests {
         let path = format!("/api/v1/{}/deleted", unique("update"));
         let deleted = seed_api(&db, &path, "POST").await;
         let mut deleted_model: sys_api::ActiveModel = deleted.clone().into();
-        deleted_model.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        deleted_model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         deleted_model.update(&db).await.unwrap();
 
         let update_deleted = update_api(

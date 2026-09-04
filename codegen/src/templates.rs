@@ -254,7 +254,7 @@ mod tests {{
         let deleted = seed(
             &db,
             &unique("deleted"),
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
 
@@ -288,7 +288,7 @@ mod tests {{
         let kw_live = unique("page_live");
         let kw_deleted = unique("page_deleted");
         let live = seed(&db, &kw_live, None).await;
-        let deleted = seed(&db, &kw_deleted, Some(chrono::Utc::now().naive_utc())).await;
+        let deleted = seed(&db, &kw_deleted, Some(chrono::Local::now().naive_local())).await;
 
         let data = find_page(
             &db,
@@ -592,7 +592,7 @@ fn render_service_tests(def: &DomainDef) -> String {
     async fn create_rejects_duplicate_{field}_including_soft_deleted() {{
         let db = test_db().await;
         let live = seed(&db, None).await;
-        let deleted = seed(&db, Some(chrono::Utc::now().naive_utc())).await;
+        let deleted = seed(&db, Some(chrono::Local::now().naive_local())).await;
 
         let result_live = create_{singular}(&db, &create_req(live.{field}.clone())).await;
         let result_deleted = create_{singular}(&db, &create_req(deleted.{field}.clone())).await;

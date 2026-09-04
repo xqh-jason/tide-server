@@ -290,7 +290,7 @@ mod tests {
         let user = seed_user(&db, 1, None).await;
         let active_role = seed_role(&db, 1, None).await;
         let disabled_role = seed_role(&db, 0, None).await;
-        let deleted_role = seed_role(&db, 1, Some(chrono::Utc::now().naive_utc())).await;
+        let deleted_role = seed_role(&db, 1, Some(chrono::Local::now().naive_local())).await;
         let menu = seed_button(&db, "system:user:create", 1, None).await;
 
         for role in [&active_role, &disabled_role, &deleted_role] {
@@ -334,7 +334,7 @@ mod tests {
             &db,
             "system:user:create",
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
         let empty_permission_menu = seed_button(&db, "", 1, None).await;

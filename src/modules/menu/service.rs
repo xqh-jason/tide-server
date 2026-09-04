@@ -216,7 +216,7 @@ mod tests {
     use crate::entity::{sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
     use crate::modules::menu::dto::{CreateMenuReq, UpdateMenuReq};
     use crate::utils::error::AppError;
-    use chrono::Utc;
+    use chrono::Local;
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -390,7 +390,7 @@ mod tests {
             &deleted_name,
             0,
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
         let live = seed_menu(&db, &live_name, 0, 1, None).await;
@@ -517,7 +517,7 @@ mod tests {
             &deleted_name,
             0,
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
         let update_deleted = update_menu(
@@ -635,8 +635,8 @@ mod tests {
             menu_type: 1,
             permission: String::new(),
             status: 1,
-            created_at: Utc::now().naive_utc(),
-            updated_at: Utc::now().naive_utc(),
+            created_at: Local::now().naive_local(),
+            updated_at: Local::now().naive_local(),
             deleted_at: None,
         }
     }

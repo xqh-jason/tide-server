@@ -300,7 +300,7 @@ mod tests {
             &unique("deleted_role"),
             &key_deleted,
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
 
@@ -389,7 +389,7 @@ mod tests {
             "已删角色",
             &key,
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
         let update_deleted = update_role(

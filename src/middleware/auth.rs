@@ -168,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn ensure_user_active_rejects_deleted_user() {
         let db = test_db().await;
-        let user = seed_user(&db, 1, Some(chrono::Utc::now().naive_utc())).await;
+        let user = seed_user(&db, 1, Some(chrono::Local::now().naive_local())).await;
 
         let result = ensure_user_active(&db, user.id).await;
 

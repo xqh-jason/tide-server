@@ -477,7 +477,7 @@ mod tests {
             &db,
             &unique("find_deleted"),
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
 
@@ -506,7 +506,7 @@ mod tests {
             &db,
             &format!("{keyword}_deleted"),
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
 
@@ -614,7 +614,7 @@ mod tests {
         .unwrap();
 
         let mut mark_deleted: sys_role::ActiveModel = deleted_role.clone().into();
-        mark_deleted.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        mark_deleted.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         mark_deleted.update(&db).await.unwrap();
 
         let found = find_by_ids(&db, vec![live_role.id, deleted_role.id]).await;

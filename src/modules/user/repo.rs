@@ -319,7 +319,7 @@ mod tests {
         .unwrap();
 
         let mut mark_deleted: sys_user::ActiveModel = inserted.clone().into();
-        mark_deleted.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        mark_deleted.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         mark_deleted.update(&db).await.unwrap();
 
         let found = find_by_username(&db, &username).await.unwrap();
@@ -361,7 +361,7 @@ mod tests {
         .unwrap();
 
         let mut mark_deleted: sys_user::ActiveModel = deleted.clone().into();
-        mark_deleted.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        mark_deleted.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         mark_deleted.update(&db).await.unwrap();
 
         let result = find_page(
@@ -447,7 +447,7 @@ mod tests {
         }
 
         let mut mark_deleted: sys_role::ActiveModel = roles[2].clone().into();
-        mark_deleted.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        mark_deleted.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         mark_deleted.update(&db).await.unwrap();
 
         let found_keys = find_roles_by_user_id(&db, user.id)

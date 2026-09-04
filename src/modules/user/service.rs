@@ -620,7 +620,7 @@ mod tests {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
         let disabled_role = seed_role(&db, 0, None).await;
-        let deleted_role = seed_role(&db, 1, Some(chrono::Utc::now().naive_utc())).await;
+        let deleted_role = seed_role(&db, 1, Some(chrono::Local::now().naive_local())).await;
         bind_user_role(&db, actor.id, disabled_role.id).await;
         bind_user_role(&db, actor.id, deleted_role.id).await;
 
@@ -742,7 +742,7 @@ mod tests {
         .unwrap();
 
         let mut mark_deleted: sys_user::ActiveModel = user.clone().into();
-        mark_deleted.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        mark_deleted.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         mark_deleted.update(&db).await.unwrap();
 
         let auth = AuthUser {
@@ -782,7 +782,7 @@ mod tests {
         .unwrap();
 
         let mut mark_deleted: sys_user::ActiveModel = old_user.clone().into();
-        mark_deleted.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        mark_deleted.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         mark_deleted.update(&db).await.unwrap();
 
         let result = create_user(&db, actor.id, request(username.clone(), vec![])).await;

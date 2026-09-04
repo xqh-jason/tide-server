@@ -328,7 +328,7 @@ mod tests {
     }
 
     fn now() -> chrono::NaiveDateTime {
-        chrono::Utc::now().naive_utc()
+        chrono::Local::now().naive_local()
     }
 
     async fn seed_dictionary(

@@ -267,7 +267,7 @@ mod tests {
             &db,
             &unique("find_deleted"),
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
 
@@ -291,7 +291,7 @@ mod tests {
             &db,
             &format!("{keyword}_deleted"),
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
 
@@ -443,7 +443,7 @@ mod tests {
     async fn find_by_name_include_deleted_finds_soft_deleted_menu() {
         let db = test_db().await;
         let name = unique("dup_name");
-        let deleted = seed_menu(&db, &name, 1, Some(chrono::Utc::now().naive_utc())).await;
+        let deleted = seed_menu(&db, &name, 1, Some(chrono::Local::now().naive_local())).await;
 
         let found = find_by_name_include_deleted(&db, &name).await.unwrap();
 

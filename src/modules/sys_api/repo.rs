@@ -275,7 +275,7 @@ mod tests {
             &format!("/deleted_{}", unique("find")),
             "POST",
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
 
@@ -301,7 +301,7 @@ mod tests {
             &format!("/{keyword}_deleted"),
             "POST",
             1,
-            Some(chrono::Utc::now().naive_utc()),
+            Some(chrono::Local::now().naive_local()),
         )
         .await;
 
@@ -416,7 +416,7 @@ mod tests {
     async fn find_by_path_method_include_deleted_finds_soft_deleted_api() {
         let db = test_db().await;
         let path = format!("/api/v1/{}/dup", unique("dup"));
-        let deleted = seed_api(&db, &path, "POST", 1, Some(chrono::Utc::now().naive_utc())).await;
+        let deleted = seed_api(&db, &path, "POST", 1, Some(chrono::Local::now().naive_local())).await;
 
         let found = find_by_path_method_include_deleted(&db, &path, "POST")
             .await
