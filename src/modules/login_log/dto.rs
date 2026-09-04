@@ -23,8 +23,10 @@ pub struct LoginLogResp {
     pub status: i8,
     /// 结果说明（如「登录成功」「密码错误」「用户已被禁用」）
     pub msg: String,
-    /// 记录时间
+    /// 记录时间（`yyyy-MM-dd HH:mm:ss`）
     pub created_at: String,
+    /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
+    pub updated_at: String,
 }
 
 impl From<sys_login_log::Model> for LoginLogResp {
@@ -37,7 +39,8 @@ impl From<sys_login_log::Model> for LoginLogResp {
             agent: m.agent,
             status: m.status,
             msg: m.msg,
-            created_at: format!("{}", m.created_at),
+            created_at: crate::utils::serde_format::format_datetime(m.created_at),
+            updated_at: crate::utils::serde_format::format_datetime(m.updated_at),
         }
     }
 }
