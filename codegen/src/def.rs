@@ -29,6 +29,9 @@ pub struct FieldDef {
     pub optional: bool,
     #[serde(default)]
     pub readonly: bool,
+    /// 审计字段：由系统（repo 层）写入，不进创建/更新请求体，但要进响应体。
+    #[serde(default)]
+    pub audit: bool,
     #[serde(default)]
     pub soft_delete: bool,
     #[serde(default)]

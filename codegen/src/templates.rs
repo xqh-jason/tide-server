@@ -847,11 +847,11 @@ pub struct Update{camel}Req {{
     )
 }
 
-/// Resp 字段（primary + 非 readonly 业务字段）。
+/// Resp 字段（primary + audit 审计字段 + 非 readonly 业务字段）。
 fn render_resp_fields(def: &DomainDef) -> String {
     def.fields
         .iter()
-        .filter(|f| f.primary || !f.readonly)
+        .filter(|f| f.primary || f.audit || !f.readonly)
         .map(|f| format!("    pub {}: {},\n", f.name, field_rust_type(f)))
         .collect()
 }
@@ -860,7 +860,7 @@ fn render_resp_fields(def: &DomainDef) -> String {
 fn render_resp_from_fields(def: &DomainDef) -> String {
     def.fields
         .iter()
-        .filter(|f| f.primary || !f.readonly)
+        .filter(|f| f.primary || f.audit || !f.readonly)
         .map(|f| format!("            {}: m.{},\n", f.name, f.name))
         .collect()
 }
@@ -1076,6 +1076,82 @@ mod tests {
             }"#,
         )
         .unwrap()
+    }
+
+    /// 含 audit 审计字段的域定义（W5 审计字段补项）。
+    fn def_audit() -> DomainDef {
+        DomainDef::from_json(
+            r#"{
+                "domain": "cfg",
+                "table": "sys_cfg",
+                "comment": "配置",
+                "fields": [
+                    { "name": "id", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "primary": true, "auto_increment": true },
+                    { "name": "name", "rust_type": "String", "sql_type": "VARCHAR(64)" },
+                    { "name": "created_by", "rust_type": "Option<u64>", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "创建人 ID" },
+                    { "name": "updated_by", "rust_type": "Option<u64>", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "更新人 ID" },
+                    { "name": "created_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
+                    { "name": "updated_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
+                    { "name": "deleted_at", "rust_type": "Option<DateTime>", "sql_type": "DATETIME", "readonly": true, "soft_delete": true }
+                ],
+                "unique_fields": [],
+                "filters": []
+            }"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn audit_fields_appear_in_resp_but_not_in_create_or_update_req() {
+        let d = def_audit();
+
+        let resp = render_resp_fields(&d);
+        assert!(resp.contains("pub created_by: Option<u64>"), "Resp 应含 created_by");
+        assert!(resp.contains("pub updated_by: Option<u64>"), "Resp 应含 updated_by");
+
+        let from_fields = render_resp_from_fields(&d);
+        assert!(
+            from_fields.contains("created_by: m.created_by"),
+            "Resp::from 应搬运审计字段"
+        );
+
+        let create_req = render_dto_create_fields(&d);
+        assert!(
+            !create_req.contains("created_by"),
+            "CreateReq 不应含审计字段（由系统写入）"
+        );
+
+        let update_req = render_dto_update_fields(&d);
+        assert!(
+            !update_req.contains("created_by"),
+            "UpdateReq 不应含审计字段（由系统写入）"
+        );
+    }
+
+    #[test]
+    fn audit_fields_excluded_from_seed_and_active_model() {
+        let d = def_audit();
+
+        let seed = render_seed_fields(&d, &[]);
+        assert!(!seed.contains("created_by"), "seed 不应为审计字段赋值");
+
+        let create_model = render_create_model_fields(&d);
+        assert!(
+            !create_model.contains("req.created_by"),
+            "Create ActiveModel 不应 Set 审计字段"
+        );
+
+        let update_model = render_update_model_fields(&d);
+        assert!(
+            !update_model.contains("req.created_by"),
+            "Update ActiveModel 不应 Set 审计字段"
+        );
+
+        let entity = render_entity(&d);
+        assert!(
+            entity.contains("pub created_by: Option<u64>"),
+            "entity 应含审计字段"
+        );
     }
 
     #[test]

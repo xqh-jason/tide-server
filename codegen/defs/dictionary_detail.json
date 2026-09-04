@@ -12,6 +12,8 @@
     { "name": "status", "rust_type": "i8", "sql_type": "TINYINT", "optional": true, "default": 1, "comment": "状态" },
     { "name": "created_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
     { "name": "updated_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
+    { "name": "created_by", "rust_type": "Option<u64>", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "创建人 ID" },
+    { "name": "updated_by", "rust_type": "Option<u64>", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "更新人 ID" },
     { "name": "deleted_at", "rust_type": "Option<DateTime>", "sql_type": "DATETIME", "readonly": true, "soft_delete": true }
   ],
   "unique_fields": [],
