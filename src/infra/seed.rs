@@ -18,6 +18,9 @@ pub const SEED_ADMIN_USERNAME: &str = "admin";
 /// 超级管理员角色键（与 `permission::SUPER_ROLE_KEY` 同值，避免依赖方向循环）。
 const SEED_SUPER_ROLE_KEY: &str = "super";
 
+/// 种子数据的操作人：内置 admin（种子即其所建，与存量数据回填口径一致）。
+const SEED_ACTOR_ID: u64 = 1;
+
 /// 播种互斥锁：ensure_seed 的"先查后插"在并发下不幂等（TOCTOU），
 /// 启动初始化与测试并发调用时通过进程内锁串行化。
 static SEED_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -378,6 +381,9 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             emp_no: Set("admin".to_string()),
             nickname: Set("超级管理员".to_string()),
             status: Set(1),
+            // 种子数据统一记为 admin 所建（id=1），与存量数据回填口径一致
+            created_by: Set(SEED_ACTOR_ID),
+            updated_by: Set(SEED_ACTOR_ID),
             ..Default::default()
         }
         .insert(db)
@@ -399,6 +405,9 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             sort: Set(0),
             status: Set(1),
             remark: Set("系统内置超管角色".to_string()),
+            // 种子数据统一记为 admin 所建（id=1）
+            created_by: Set(SEED_ACTOR_ID),
+            updated_by: Set(SEED_ACTOR_ID),
             ..Default::default()
         }
         .insert(db)
@@ -445,6 +454,9 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
                 menu_type: Set(seed.menu_type),
                 permission: Set(seed.permission.to_string()),
                 status: Set(1),
+                // 种子数据统一记为 admin 所建（id=1）
+                created_by: Set(SEED_ACTOR_ID),
+                updated_by: Set(SEED_ACTOR_ID),
                 ..Default::default()
             }
             .insert(db)
