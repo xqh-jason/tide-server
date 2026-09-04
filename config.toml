@@ -4,7 +4,9 @@ port = 8080
 
 [database]
 # charset=utf8mb4 必须：否则中文（菜单名/昵称等）经 sqlx 读取会乱码
-url = "mysql://root:root@localhost:3307/salvo_vben?charset=utf8mb4"
+# timezone=%2B08:00（即 +08:00）必须：sqlx 默认强制会话时区为 UTC，不加则
+# CURRENT_TIMESTAMP 默认值按 UTC 落库，时间会差 8 小时
+url = "mysql://root:root@localhost:3307/salvo_vben?charset=utf8mb4&timezone=%2B08:00"
 # 是否把每条 SQL 打到控制台；调 SQL 时临时改为 true
 log_sql = false
 
