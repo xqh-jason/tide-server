@@ -84,6 +84,8 @@ pub async fn update_user(depot: &mut Depot, body: JsonBody<UpdateUserReq>) -> Ap
     Ok(ApiResponse::ok(resp))
 }
 
+/// 更新用户状态（POST + JSON body：`{ "id": ..., "status": ... }`）；
+/// 内置超管 admin 不允许修改状态。
 #[endpoint]
 pub async fn update_user_status(
     depot: &mut Depot,

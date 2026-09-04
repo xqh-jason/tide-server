@@ -136,6 +136,7 @@ pub async fn update_role(
     Ok(model)
 }
 
+/// 更新角色状态（启用/禁用）；内置超管角色 `super` 不允许修改状态。
 pub async fn update_role_status(
     db: &DatabaseConnection,
     req: &UpdateRoleStatusReq,

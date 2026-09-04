@@ -17,6 +17,10 @@ pub struct Server {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Database {
     pub url: String,
+    /// 是否在控制台打印每条 SQL 语句（默认 false）。
+    /// sea-orm 默认以 INFO 级别输出，会刷屏；调试时改为 true 即可。
+    #[serde(default)]
+    pub log_sql: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

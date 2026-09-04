@@ -7,6 +7,7 @@ pub mod service;
 use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
+/// 角色端点：`POST /api/v1/role/{list,create,update,get,delete,update-status}`。
 pub fn routes() -> Router {
     Router::new()
         .oapi_tags(["角色"])

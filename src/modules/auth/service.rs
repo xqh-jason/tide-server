@@ -10,6 +10,8 @@ use crate::modules::user::repo as user_repo;
 use crate::utils::error::AppError;
 use crate::utils::{crypt, jwt};
 
+/// 登录：查用户 → 校验密码与状态 → 取角色 → 签发 JWT，全程落登录日志。
+/// 用户不存在 / 密码错误 / 已禁用对外统一返回「用户名或密码错误」，防账号枚举。
 pub async fn login(
     db: &DatabaseConnection,
     jwt_cfg: &JwtConfig,

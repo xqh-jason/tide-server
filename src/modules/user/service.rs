@@ -17,6 +17,7 @@ use crate::utils::PageData;
 use crate::utils::crypt;
 use crate::utils::error::AppError;
 
+/// 按用户名查询用户（`by-username` 端点用）；不存在时返回 `None`。
 pub async fn get_by_username(
     db: &sea_orm::DatabaseConnection,
     username: &str,
@@ -149,6 +150,7 @@ pub async fn create_user(
     Ok(UserResp::from(model))
 }
 
+/// 获取用户详情（排除软删除）；不存在返回业务错误。
 pub async fn get_user(db: &DatabaseConnection, user_id: u64) -> Result<UserResp, AppError> {
     let user = user_repo::find_by_id(db, user_id).await?;
 
@@ -255,6 +257,7 @@ pub async fn update_user_with_links(
     Ok(UserResp::from(model))
 }
 
+/// 更新用户状态（启用/禁用）；内置超管 admin 不允许修改状态。
 pub async fn update_user_status(
     db: &DatabaseConnection,
     user_id: u64,

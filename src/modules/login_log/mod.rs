@@ -9,7 +9,7 @@ pub mod service;
 
 /// 登录日志端点：`POST /api/v1/login-log/{list,get,delete,delete-batch}`。
 pub fn routes() -> Router {
-    Router::with_path("login-log")
+    Router::new()
         .oapi_tags(["登录日志"])
         .push(Router::with_path("list").post(api::list_login_logs))
         .push(Router::with_path("get").post(api::get_login_log))

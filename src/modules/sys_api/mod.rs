@@ -11,6 +11,7 @@ pub mod dto;
 pub mod repo;
 pub mod service;
 
+/// API 权限点端点：`POST /api/v1/sys-api/{list,create,update,get,delete}`。
 pub fn routes() -> Router {
     Router::new()
         .oapi_tags(["接口权限"])

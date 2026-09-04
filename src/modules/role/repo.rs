@@ -206,6 +206,7 @@ pub async fn find_by_ids(
     Ok(roles)
 }
 
+/// 通用更新（ActiveModel 入参，状态更新等单字段场景用）。
 pub async fn update_role(
     db: &DatabaseConnection,
     role: sys_role::ActiveModel,

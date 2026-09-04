@@ -9,6 +9,8 @@ pub mod dto;
 pub mod repo;
 pub mod service;
 
+/// 用户端点：`POST /api/v1/user/{list,by-username,info,access-codes,create,update,get,update-status}`。
+/// 菜单契约端点 `menus` 在 menu 域的 `user_routes()` 中注册。
 pub fn routes() -> Router {
     Router::new()
         .oapi_tags(["用户"])

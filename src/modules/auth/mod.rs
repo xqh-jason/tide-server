@@ -9,6 +9,7 @@ pub mod api;
 pub mod dto;
 pub mod service;
 
+/// 认证端点：`POST /api/v1/auth/login`（公开）与 `POST /api/v1/auth/logout`（需登录态）。
 pub fn routes() -> Router {
     Router::with_path("auth")
         .oapi_tags(["认证"])

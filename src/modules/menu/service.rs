@@ -76,6 +76,7 @@ fn build_menu_tree(menus: Vec<sys_menu::Model>) -> Vec<VbenMenuItem> {
     build(0, &by_parent, 1)
 }
 
+/// 菜单分页查询：请求参数（keyword / status / menu_type）组装为 repo 过滤条件。
 pub async fn page_menus(
     db: &DatabaseConnection,
     req: &MenuListReq,
@@ -94,6 +95,7 @@ pub async fn page_menus(
     Ok(model)
 }
 
+/// 创建菜单：name 查重（含软删占位）→ component 格式校验 → 落库。
 pub async fn create_menu(
     db: &DatabaseConnection,
     req: &CreateMenuReq,
@@ -131,6 +133,7 @@ pub async fn create_menu(
     Ok(menu)
 }
 
+/// 更新菜单：判存在 → name 查重排除自身 → component 校验 → 全量覆盖。
 pub async fn update_menu(
     db: &DatabaseConnection,
     req: &UpdateMenuReq,
@@ -175,6 +178,7 @@ pub async fn update_menu(
     Ok(menu)
 }
 
+/// 删除菜单：判存在后软删，repo 层级联软删全部子孙菜单并清空角色关联。
 pub async fn delete_menu(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
     // 检查菜单是否存在
     let Some(_) = menu_repo::find_by_id(db, id).await? else {

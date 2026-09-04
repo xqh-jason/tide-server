@@ -16,6 +16,12 @@ codegen 只用于生成两个 entity，四件套手写（生成器不支持一�
 
 **规格依据：** `docs/superpowers/specs/2026-09-03-w5-dictionary-design.md`
 
+> **收尾补记（2026-09-03）**：模块已全部落地并提交，逐条 Commit 实际被合并执行——
+> `397dde4`（迁移+搬迁+退役）、`55d4ec4`（域实现+测试+退役旧域）、`17a66cf`（种子）、
+> `5173135`（打卡文档）；故下方 Commit 步骤按实际提交勾销。
+> 其余 [用户] 红/绿验证步骤以最终全量主项目 133/133 + codegen 14/14 全绿为准同步勾选。
+> 唯一未勾选项：任务 9 步骤 3 手动冒烟（可选，未执行）。
+
 ---
 
 ## 文件结构
@@ -292,7 +298,7 @@ docker exec salvo-vben-mysql mysql -uroot -proot salvo_vben \
 
 预期：`sys_dict` 已消失；`old_rows == new_types == new_items`（旧表 1:1 搬迁）。
 
-- [ ] **步骤 4：Commit（[用户]）**
+- [x] **步骤 4：Commit（[用户]）** — 已由 `397dde4` 提交（信息有改写）
 
 ```bash
 git add migrations/src/m20260903_000009_create_sys_dictionary.rs migrations/src/lib.rs
@@ -401,7 +407,7 @@ cargo check
 
 预期：可能报 `modules/dict` 引用了 `sys_dict`——任务 3 会清理，此处不影响。
 
-- [ ] **步骤 6：Commit（[用户]，审阅生成物后提交）**
+- [x] **步骤 6：Commit（[用户]，审阅生成物后提交）** — 已由 `55d4ec4` 一并提交
 
 ```bash
 git add codegen/defs/dictionary.json codegen/defs/dictionary_detail.json \
@@ -460,7 +466,7 @@ rm -rf src/modules/dict codegen/defs/dict.json
                 )
 ```
 
-- [ ] **步骤 4：验证编译**
+- [x] **步骤 4：验证编译**（中间态报错随任务 4~6 落地消除，最终全量全绿）
 
 ```bash
 cargo check
@@ -469,7 +475,7 @@ cargo check
 预期：因 `dictionary` 模块还不存在而报错——任务 4~6 补上即消失。
 （若不想留中间态，可把本任务放在任务 6 之后执行。）
 
-- [ ] **步骤 5：Commit（[用户]）**
+- [x] **步骤 5：Commit（[用户]）** — 已由 `55d4ec4` 提交（信息有改写）
 
 ```bash
 git add -A src/modules/dict codegen/defs/dict.json src/modules/mod.rs src/infra/router.rs
@@ -615,7 +621,7 @@ pub struct DictionaryTypeReq {
 }
 ```
 
-- [ ] **步骤 2：Commit（[用户]）**
+- [x] **步骤 2：Commit（[用户]）** — 已由 `55d4ec4` 一并提交
 
 ```bash
 git add src/modules/dictionary/dto.rs
@@ -673,7 +679,7 @@ cargo test dictionary::repo 2>&1 | tail -30
 
 预期：编译失败，`dictionary` 模块 / 这些函数不存在。
 
-- [ ] **步骤 3：用户实现 repo**
+- [x] **步骤 3：用户实现 repo**（55d4ec4 落地）
 
 ```rust
 //! 数据字典数据访问：类型表与字典项表。
@@ -808,7 +814,7 @@ pub async fn soft_delete_detail(db: &DatabaseConnection, id: u64) -> anyhow::Res
 cargo test dictionary::repo 2>&1 | tail -30
 ```
 
-- [ ] **步骤 5：Commit（[用户]）**
+- [x] **步骤 5：Commit（[用户]）** — 已由 `55d4ec4` 提交（信息有改写）
 
 ```bash
 git add src/modules/dictionary/repo.rs
@@ -959,13 +965,13 @@ pub async fn delete_dictionary_detail(db: &DatabaseConnection, id: u64) -> Resul
 注意：错误文案必须与规格 §7 完全一致（测试按文案断言 Biz 变体即可，
 文案本身由 review 环节核对）。
 
-- [ ] **步骤 4：运行测试验证绿（[用户]）**
+- [x] **步骤 4：运行测试验证绿（[用户]）**（repo/service 连续 4 次全绿）
 
 ```bash
 cargo test dictionary 2>&1 | tail -30
 ```
 
-- [ ] **步骤 5：Commit（[用户]）**
+- [x] **步骤 5：Commit（[用户]）** — 已由 `55d4ec4` 提交（信息有改写）
 
 ```bash
 git add src/modules/dictionary/service.rs
@@ -1110,7 +1116,7 @@ cargo check
 cargo test dictionary 2>&1 | tail -10
 ```
 
-- [ ] **步骤 4：Commit（[用户]）**
+- [x] **步骤 4：Commit（[用户]）** — 已由 `55d4ec4` 提交（信息有改写）
 
 ```bash
 git add src/modules/dictionary/api.rs src/modules/dictionary/mod.rs
@@ -1134,7 +1140,7 @@ async fn ensure_seed_creates_dictionary_menu_and_buttons() {
 }
 ```
 
-- [ ] **步骤 2：运行确认红（[用户]）**
+- [x] **步骤 2：运行确认红（[用户]）**（红→绿已由步骤 3/4 闭环）
 
 ```bash
 cargo test infra::seed 2>&1 | tail -30
@@ -1231,7 +1237,7 @@ cargo test infra::seed 2>&1 | tail -30
 cargo test infra::seed 2>&1 | tail -30
 ```
 
-- [ ] **步骤 5：Commit（[用户]）**
+- [x] **步骤 5：Commit（[用户]）** — 已由 `17a66cf` 提交（信息有改写）
 
 ```bash
 git add src/infra/seed.rs
@@ -1253,7 +1259,7 @@ cd codegen && cargo test 2>&1 | tail -5
 
 预期：双项目全绿；格式无 diff。
 
-- [ ] **步骤 2：AI Review**
+- [x] **步骤 2：AI Review**（已执行；修复项在打卡记录留档：update 查重排除自身、delete 级联与返回类型、get-by-type 状态校验、value 查重、种子补齐）
 
 按规格逐节核对：表结构与索引、搬迁后行数一致、`sys_dict` 已退役、
 两套端点顺序（list → create → update → get → delete，get-by-type 在 CRUD 后）、
@@ -1272,7 +1278,7 @@ cd codegen && cargo test 2>&1 | tail -5
 在 `docs/Rust学习打卡记录.md` 末尾补 2026-09-03 记录：完成 W5-3 数据字典
 （两级表迁移与搬迁、级联软删、下拉端点、种子），注明测试数与提交。
 
-- [ ] **步骤 5：Commit（[用户]）**
+- [x] **步骤 5：Commit（[用户]）** — 已由 `5173135` 提交
 
 ```bash
 git add docs/Rust学习打卡记录.md

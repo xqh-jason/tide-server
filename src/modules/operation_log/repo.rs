@@ -62,6 +62,7 @@ pub async fn soft_delete_operation_log(db: &DatabaseConnection, id: u64) -> anyh
     Ok(true)
 }
 
+/// 批量软删：只处理存在且未删除的行，返回受影响行数。
 pub async fn soft_delete_batch(db: &DatabaseConnection, ids: &[u64]) -> anyhow::Result<u64> {
     let now = chrono::Local::now().naive_local();
     let result = sys_operation_log::Entity::update_many()

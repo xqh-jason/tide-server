@@ -85,6 +85,7 @@ pub async fn find_page(
     crate::utils::paginate(select, db, page_index, page_size).await
 }
 
+/// 事务创建用户并批量绑定角色关联（`role_ids` 为空则不建关联）。
 pub async fn create_user_with_links(
     db: &DatabaseConnection,
     user: sys_user::ActiveModel,
@@ -111,6 +112,7 @@ pub async fn create_user_with_links(
     Ok(user)
 }
 
+/// 事务更新用户并重建角色关联（先删旧关联，再插新关联）。
 pub async fn update_user_with_links(
     db: &DatabaseConnection,
     user: sys_user::ActiveModel,
@@ -144,6 +146,7 @@ pub async fn update_user_with_links(
     Ok(user)
 }
 
+/// 通用更新（ActiveModel 入参，状态更新等单字段场景用）。
 pub async fn update_user(
     db: &DatabaseConnection,
     model: sys_user::ActiveModel,

@@ -46,6 +46,7 @@ pub async fn delete_operation_log(db: &DatabaseConnection, id: u64) -> Result<()
     Ok(())
 }
 
+/// 批量软删：空数组返回 0；repo 层忽略不存在的 id。
 pub async fn delete_operation_log_batch(
     db: &DatabaseConnection,
     ids: &[u64],
