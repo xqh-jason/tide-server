@@ -285,3 +285,24 @@ static GLOBAL: Jemalloc = Jemalloc;
   主项目全量 133/133、codegen 14/14、`cargo fmt --check` 双项目通过。
 - 卡点：无。遗留待办：任务 1/2/3 等 Commit 步骤与任务 9 手动冒烟（可选）待 [用户] 执行。
 - 明日：W6 起通用模块按既定三段流程继续（图形验证码 / 文件上传 / 系统配置…）。
+
+## 2026-09-04 · W5 补项：创建人 / 更新人审计字段
+
+- 目标：为 6 张配置类主表（user/role/menu/api/dictionary/dictionary_detail）
+  补 `created_by` / `updated_by`（BIGINT UNSIGNED NULL，存 user_id）。
+- 完成：
+  - 迁移 `m20260904_000010_add_audit_columns`（12 列 + 中文注释，`down` 可回滚）；
+  - 6 份 entity 加 `Option<u64>` 字段；
+  - **repo 层统一盖章**：11 个 create/update 函数签名加 `actor_id`，create 设
+    双字段、update 只刷新 `updated_by`（`created_by` 保持 NotSet 不被覆盖）；
+    service 只透传、api 取 `AuthUser`，11 个 handler 全部接上；
+  - 6 个 Resp 回传审计字段；Create/Update 请求体不接受（防伪造）；
+  - codegen 支持 `audit` 语义（audit 字段进 Resp、不进请求体/seed），
+    dictionary 两份 defs 同步；模板单测 2 个。
+- Review：注入 20 处赋值行、handler 16 处 `auth.user_id`（含既有 5 处）、
+  `seed.rs` 零改动（直写 insert 天然 NULL）、日志表与关联表未波及。
+- 验证：主项目 147/147、codegen 16/16、`cargo fmt --check` 通过。
+- 卡点：重跑生成器验证 entity 一致性时，生成器覆盖了 dictionary 域手写四件套
+  （含当天审计改造），已从 HEAD 恢复并重新应用；生成器 `r#type` 裸标识符
+  缺陷再次暴露，生成 defs 后需手工修正（本轮 entity 已对齐）。
+- 明日：继续 W5 通用模块（文件上传 / 图形验证码 / 系统配置）。
