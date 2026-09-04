@@ -11,10 +11,15 @@ use crate::utils::PageQuery;
 /// 字典类型响应体。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DictionaryResp {
+    /// 字典类型 id
     pub id: u64,
+    /// 类型名称（显示名）
     pub name: String,
+    /// 类型编码（全局唯一，含软删占位）
     pub r#type: String,
+    /// 状态：`1` 启用、`0` 停用
     pub status: i8,
+    /// 备注
     pub remark: String,
 }
 
@@ -33,10 +38,12 @@ impl From<sys_dictionary::Model> for DictionaryResp {
 /// 字典类型列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct DictionaryListReq {
+    /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
-    /// 对 name / type 模糊匹配
+    /// 模糊搜索关键字（匹配 name / type）；不传查全部
     pub keyword: Option<String>,
+    /// 状态精确过滤：`1` 启用、`0` 停用；不传查全部
     pub status: Option<i8>,
 }
 
@@ -50,19 +57,28 @@ pub struct DictionaryFilter {
 /// 创建字典类型请求。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateDictionaryReq {
+    /// 类型名称（显示名）
     pub name: String,
+    /// 类型编码（全局唯一，含软删占位）
     pub r#type: String,
+    /// 状态：`1` 启用、`0` 停用
     pub status: i8,
+    /// 备注，可空
     pub remark: Option<String>,
 }
 
 /// 更新字典类型请求（编辑表单全量提交）。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateDictionaryReq {
+    /// 目标字典类型 id
     pub id: u64,
+    /// 类型名称
     pub name: String,
+    /// 类型编码（全局唯一，排除自身查重）
     pub r#type: String,
+    /// 状态：`1` 启用、`0` 停用
     pub status: i8,
+    /// 备注，可空
     pub remark: Option<String>,
 }
 
@@ -71,25 +87,35 @@ pub struct UpdateDictionaryReq {
 /// 按类型编码取启用字典项的请求。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct DictionaryTypeReq {
+    /// 字典类型编码（类型不存在或已停用返回业务错误）
     pub r#type: String,
 }
 
 /// `get-by-type` 响应：类型信息 + 启用字典项（前端下拉一次拿全）。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DictionaryOptionResp {
+    /// 字典类型 id
     pub id: u64,
+    /// 类型名称
     pub name: String,
+    /// 类型编码
     pub r#type: String,
+    /// 启用的字典项列表（按 sort 升序）
     pub details: Vec<DictionaryDetailOption>,
 }
 
 /// 下拉项：只带前端渲染需要的字段。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DictionaryDetailOption {
+    /// 字典项 id
     pub id: u64,
+    /// 显示文本
     pub label: String,
+    /// 选项值
     pub value: String,
+    /// 扩展字段（JSON 字符串，业务自定义）
     pub extend: String,
+    /// 排序值，越小越靠前
     pub sort: i32,
 }
 
@@ -110,12 +136,19 @@ impl From<sys_dictionary_detail::Model> for DictionaryDetailOption {
 /// 字典项响应体。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DictionaryDetailResp {
+    /// 字典项 id
     pub id: u64,
+    /// 所属字典类型 id
     pub dictionary_id: u64,
+    /// 显示文本
     pub label: String,
+    /// 选项值（同类型下活记录唯一）
     pub value: String,
+    /// 扩展字段（JSON 字符串，业务自定义）
     pub extend: String,
+    /// 排序值，越小越靠前
     pub sort: i32,
+    /// 状态：`1` 启用、`0` 停用
     pub status: i8,
 }
 
@@ -136,11 +169,14 @@ impl From<sys_dictionary_detail::Model> for DictionaryDetailResp {
 /// 字典项列表请求。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct DictionaryDetailListReq {
+    /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
+    /// 所属字典类型 id 精确过滤；不传查全部
     pub dictionary_id: Option<u64>,
-    /// 对 label / value 模糊匹配
+    /// 模糊搜索关键字（匹配 label / value）；不传查全部
     pub keyword: Option<String>,
+    /// 状态精确过滤：`1` 启用、`0` 停用；不传查全部
     pub status: Option<i8>,
 }
 
@@ -155,22 +191,35 @@ pub struct DictionaryDetailFilter {
 /// 创建字典项请求。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateDictionaryDetailReq {
+    /// 所属字典类型 id（必须存在且未软删）
     pub dictionary_id: u64,
+    /// 显示文本
     pub label: String,
+    /// 选项值（同类型下活记录唯一）
     pub value: String,
+    /// 扩展字段（JSON 字符串），可空
     pub extend: Option<String>,
+    /// 排序值，越小越靠前
     pub sort: i32,
+    /// 状态：`1` 启用、`0` 停用
     pub status: i8,
 }
 
 /// 更新字典项请求（编辑表单全量提交）。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateDictionaryDetailReq {
+    /// 目标字典项 id
     pub id: u64,
+    /// 所属字典类型 id（必须存在且未软删）
     pub dictionary_id: u64,
+    /// 显示文本
     pub label: String,
+    /// 选项值（同类型下活记录唯一，排除自身查重）
     pub value: String,
+    /// 扩展字段（JSON 字符串），可空
     pub extend: Option<String>,
+    /// 排序值，越小越靠前
     pub sort: i32,
+    /// 状态：`1` 启用、`0` 停用
     pub status: i8,
 }

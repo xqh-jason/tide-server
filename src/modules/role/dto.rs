@@ -9,11 +9,17 @@ use crate::utils::PageQuery;
 /// 角色响应体。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RoleResp {
+    /// 角色 id
     pub id: u64,
+    /// 角色名称（显示名，全局唯一）
     pub role_name: String,
+    /// 角色键（编码，全局唯一；`super` 为内置超管）
     pub role_key: String,
+    /// 排序值，越小越靠前
     pub sort: i32,
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
+    /// 备注
     pub remark: String,
 }
 
@@ -33,9 +39,12 @@ impl From<sys_role::Model> for RoleResp {
 /// 角色列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RoleListReq {
+    /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
-    pub keyword: Option<String>, // 角色名 / 角色键模糊搜索
+    /// 角色名 / 角色键模糊搜索关键字；不传查全部
+    pub keyword: Option<String>,
+    /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,
 }
 
@@ -49,12 +58,19 @@ pub struct RoleFilter {
 /// 创建角色请求：`menu_ids` / `api_ids` 为 `Some` 时全量替换关联，`None` 表示不设置。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateRoleReq {
+    /// 角色名称（显示名，全局唯一）
     pub role_name: String,
+    /// 角色键（编码，全局唯一，含软删占位）
     pub role_key: String,
+    /// 排序值；缺省 0
     pub sort: Option<i32>,
+    /// 状态：`1` 启用（默认）、`0` 禁用
     pub status: Option<i8>,
+    /// 备注，可空
     pub remark: Option<String>,
+    /// 绑定的菜单 ID 列表；`None` 不设置
     pub menu_ids: Option<Vec<u64>>,
+    /// 绑定的 API 权限点 ID 列表；`None` 不设置
     pub api_ids: Option<Vec<u64>>,
 }
 
@@ -62,19 +78,29 @@ pub struct CreateRoleReq {
 /// `menu_ids` / `api_ids` 全量替换关联，传空数组即清空关联。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateRoleReq {
+    /// 目标角色 id
     pub id: u64,
+    /// 角色名称（全局唯一，排除自身查重）
     pub role_name: String,
+    /// 角色键（全局唯一，排除自身查重；不能改为内置 `super`）
     pub role_key: String,
+    /// 排序值
     pub sort: i32,
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
+    /// 备注
     pub remark: String,
+    /// 绑定的菜单 ID 列表（全量替换，空数组即清空）
     pub menu_ids: Vec<u64>,
+    /// 绑定的 API 权限点 ID 列表（全量替换，空数组即清空）
     pub api_ids: Vec<u64>,
 }
 
 /// 更新角色状态请求：仅传 `id` / `status` 即可。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateRoleStatusReq {
+    /// 目标角色 id（内置 `super` 不允许修改）
     pub id: u64,
+    /// 目标状态：`1` 启用、`0` 禁用
     pub status: i8,
 }

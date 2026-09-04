@@ -9,5 +9,6 @@ use serde::Deserialize;
 /// 避免为每个域重复定义同构的 `XxxIdReq`；后续改字段名只改这里。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct IdReq {
+    /// 目标记录主键 id
     pub id: u64,
 }

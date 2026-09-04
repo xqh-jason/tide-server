@@ -9,10 +9,15 @@ use crate::utils::PageQuery;
 /// vben 菜单树节点。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct VbenMenuItem {
+    /// 路由路径（如 `/system`）
     pub path: String,
+    /// 路由名（唯一，vben keep-alive 依据）
     pub name: String,
+    /// 组件路径（`#/views/xxx.vue`，vben glob 动态导入）
     pub component: String,
+    /// 菜单元信息（标题 / 图标 / 排序等）
     pub meta: VbenMenuMeta,
+    /// 子菜单；为空时序列化省略该字段
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<VbenMenuItem>,
 }
@@ -20,11 +25,16 @@ pub struct VbenMenuItem {
 /// 菜单节点 meta（vben 使用 camelCase 字段）。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct VbenMenuMeta {
+    /// 菜单标题（侧边栏显示名）
     pub title: String,
+    /// 图标名（如 `mdi:home`）
     pub icon: String,
+    /// 排序值，越小越靠前
     pub order: i32,
+    /// 是否 keep-alive 缓存页面
     #[serde(rename = "keepAlive")]
     pub keep_alive: bool,
+    /// 是否在侧边栏隐藏
     #[serde(rename = "hideInMenu")]
     pub hide_in_menu: bool,
 }
@@ -32,18 +42,31 @@ pub struct VbenMenuMeta {
 /// 菜单管理响应体（含菜单完整字段）。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MenuResp {
+    /// 菜单 id
     pub id: u64,
+    /// 父菜单 id，`0` 表示顶级
     pub parent_id: u64,
+    /// 路由路径（如 `/system`）
     pub path: String,
+    /// 路由名（唯一，vben keep-alive 依据）
     pub name: String,
+    /// 组件路径（`#/views/xxx.vue`；按钮类型为空）
     pub component: String,
+    /// 菜单标题（显示名）
     pub title: String,
+    /// 图标名（如 `mdi:home`）
     pub icon: String,
+    /// 排序值，越小越靠前
     pub sort: i32,
+    /// 是否 keep-alive：`1` 是、`0` 否
     pub keep_alive: i8,
+    /// 是否隐藏：`1` 隐藏、`0` 显示
     pub hidden: i8,
+    /// 菜单类型：`1` 目录/页面、`2` 外链、`3` 按钮
     pub menu_type: i8,
+    /// 按钮权限码（如 `system:user:create`）；非按钮为空字符串
     pub permission: String,
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
 }
 
@@ -70,10 +93,14 @@ impl From<sys_menu::Model> for MenuResp {
 /// 菜单列表请求：分页 + keyword（title/name/path 模糊）/ status / menu_type 过滤。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct MenuListReq {
+    /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
+    /// 模糊搜索关键字（匹配 title / name / path）；不传查全部
     pub keyword: Option<String>,
+    /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,
+    /// 菜单类型精确过滤：`1` 目录/页面、`2` 外链、`3` 按钮；不传查全部
     pub menu_type: Option<i8>,
 }
 
@@ -88,35 +115,60 @@ pub struct MenuFilter {
 /// 创建菜单请求：可选字段有默认值（sort=0 / keep_alive=0 / hidden=0 / menu_type=1 / status=1）。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateMenuReq {
+    /// 父菜单 id；缺省 0（顶级）
     pub parent_id: Option<u64>,
+    /// 路由路径（如 `/system`）
     pub path: String,
+    /// 路由名（全局唯一，含软删占位）
     pub name: String,
+    /// 组件路径；非按钮必须 `#/views/xxx.vue` 格式
     #[serde(default)]
     pub component: String,
+    /// 菜单标题（显示名）
     pub title: String,
+    /// 图标名，可空
     pub icon: Option<String>,
+    /// 排序值；缺省 0
     pub sort: Option<i32>,
+    /// 是否 keep-alive；缺省 0
     pub keep_alive: Option<i8>,
+    /// 是否隐藏；缺省 0
     pub hidden: Option<i8>,
+    /// 菜单类型：`1` 目录/页面（默认）、`2` 外链、`3` 按钮
     pub menu_type: Option<i8>,
+    /// 按钮权限码；非按钮可空
     pub permission: Option<String>,
+    /// 状态：`1` 启用（默认）、`0` 禁用
     pub status: Option<i8>,
 }
 
 /// 更新菜单请求（编辑表单全量提交）：所有字段必填，语义同角色域全量更新。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateMenuReq {
+    /// 目标菜单 id
     pub id: u64,
+    /// 父菜单 id，`0` 表示顶级
     pub parent_id: u64,
+    /// 路由路径
     pub path: String,
+    /// 路由名（全局唯一，排除自身查重）
     pub name: String,
+    /// 组件路径；非按钮必须 `#/views/xxx.vue` 格式
     pub component: String,
+    /// 菜单标题（显示名）
     pub title: String,
+    /// 图标名
     pub icon: String,
+    /// 排序值
     pub sort: i32,
+    /// 是否 keep-alive：`1` 是、`0` 否
     pub keep_alive: i8,
+    /// 是否隐藏：`1` 隐藏、`0` 显示
     pub hidden: i8,
+    /// 菜单类型：`1` 目录/页面、`2` 外链、`3` 按钮
     pub menu_type: i8,
+    /// 按钮权限码；非按钮为空字符串
     pub permission: String,
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
 }

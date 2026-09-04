@@ -36,13 +36,21 @@ impl Writer for AppError {
     }
 }
 
-/// 让 AppError 的错误响应出现在 OpenAPI 文档中（#[endpoint] 要求）。
+/// 让 AppError 不干扰 OpenAPI 文档中的成功响应（#[endpoint] 要求实现）。
+///
+/// 关键点：`Result<ApiResponse<T>, AppError>` 的文档注册顺序是 Ok 先、Err 后，
+/// 且两者都登记在 `"200"` key 下——若 Err 也 `insert` 会把成功响应覆盖，
+/// 导致 Swagger 文档里看不到 `data` 字段的具体类型。
+/// 运行时错误与成功同为 HTTP 200（body.code 区分 1/0），文档只为成功体建模，
+/// 这里检测到已有 200 响应时直接跳过；仅当端点只可能返回错误时才登记错误体。
 impl EndpointOutRegister for AppError {
     fn register(components: &mut oapi::Components, operation: &mut oapi::Operation) {
-        // HTTP 状态码统一 200，错误由响应体 code（0）区分
+        if operation.responses.contains_key("200") {
+            return;
+        }
         operation.responses.insert(
             "200",
-            oapi::Response::new("business error")
+            oapi::Response::new("business error（HTTP 200，body.code=0）")
                 .add_content("application/json", ApiResponse::<()>::to_schema(components)),
         );
     }

@@ -9,11 +9,17 @@ use crate::utils::PageQuery;
 /// API 权限点响应体。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ApiResp {
+    /// API 权限点 id
     pub id: u64,
+    /// 请求路径（如 `/api/v1/user/list`）
     pub path: String,
+    /// HTTP 方法（GET / POST 等）
     pub method: String,
+    /// 描述
     pub description: String,
+    /// 分组名（前端分组展示用）
     pub api_group: String,
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
 }
 
@@ -33,10 +39,14 @@ impl From<sys_api::Model> for ApiResp {
 /// API 列表请求：分页 + keyword（path/description/api_group 模糊）/ status / method 精确过滤。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ApiListReq {
+    /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
+    /// 模糊搜索关键字（匹配 path / description / api_group）；不传查全部
     pub keyword: Option<String>,
+    /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,
+    /// HTTP 方法精确过滤（如 `POST`）；不传查全部
     pub method: Option<String>,
 }
 
@@ -51,22 +61,35 @@ pub struct ApiFilter {
 /// 创建 API 请求：`role_ids` 为空表示暂不授权给任何角色。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateApiReq {
+    /// 请求路径（path + method 组合唯一，含软删占位）
     pub path: String,
+    /// HTTP 方法（GET / POST 等）
     pub method: String,
+    /// 描述，可空
     pub description: Option<String>,
+    /// 分组名，可空
     pub api_group: Option<String>,
+    /// 状态：`1` 启用（默认）、`0` 禁用
     pub status: Option<i8>,
+    /// 授权角色 ID 列表，允许空
     pub role_ids: Vec<u64>,
 }
 
 /// 更新 API 请求（编辑表单全量提交）：`role_ids` 全量替换角色授权（空数组即清空）。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateApiReq {
+    /// 目标 API 权限点 id
     pub id: u64,
+    /// 请求路径（path + method 组合唯一，排除自身查重）
     pub path: String,
+    /// HTTP 方法
     pub method: String,
+    /// 描述
     pub description: String,
+    /// 分组名
     pub api_group: String,
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
+    /// 授权角色 ID 列表（全量替换，空数组即清空）
     pub role_ids: Vec<u64>,
 }

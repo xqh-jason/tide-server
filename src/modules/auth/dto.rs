@@ -6,13 +6,16 @@ use serde::{Deserialize, Serialize};
 /// 登录请求：`{ "username": "...", "password": "..." }`。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginReq {
+    /// 用户名
     pub username: String,
+    /// 密码（明文传输由 HTTPS 保证，服务端只存 Argon2id 哈希）
     pub password: String,
 }
 
 /// 登录响应：vben 期望 `{ token }`。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LoginResp {
+    /// JWT 访问令牌，后续请求放入 `Authorization: Bearer <token>`
     pub token: String,
 }
 

@@ -10,8 +10,11 @@ use serde::Serialize;
 /// ToSchema 用于 #[endpoint] 生成 OpenAPI 文档。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ApiResponse<T> {
+    /// 业务状态码：`1` 成功、`0` 失败（HTTP 状态码恒为 200，以本字段为准）
     pub code: i32,
+    /// 业务数据；`code = 0` 时为 null
     pub data: T,
+    /// 提示消息：成功为 `ok`，失败为具体错误文案
     pub message: String,
 }
 

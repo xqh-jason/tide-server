@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 /// 所有列表接口自动生效（机制保证统一，而非靠约定）。
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct PageQuery {
-    pub page: Option<u64>, // 从 1 开始
+    /// 页码，从 1 开始；缺省 1
+    pub page: Option<u64>,
+    /// 每页条数，1..=100；缺省 10
     pub page_size: Option<u64>,
 }
 
@@ -33,8 +35,11 @@ impl PageQuery {
 /// `total` 为总条数，`total_pages` 为总页数，`items` 为当前页数据。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PageResult<T> {
+    /// 总条数
     pub total: u64,
+    /// 总页数
     pub total_pages: u64,
+    /// 当前页数据
     pub items: Vec<T>,
 }
 
