@@ -36,7 +36,7 @@ impl Writer for AppError {
     }
 }
 
-/// 让 AppError 不干扰 OpenAPI 文档中的成功响应（#[endpoint] 要求实现）。
+/// 让 AppError 不干扰 OpenAPI 文档中的成功响应（#[macro@endpoint] 要求实现）。
 ///
 /// 关键点：`Result<ApiResponse<T>, AppError>` 的文档注册顺序是 Ok 先、Err 后，
 /// 且两者都登记在 `"200"` key 下——若 Err 也 `insert` 会把成功响应覆盖，

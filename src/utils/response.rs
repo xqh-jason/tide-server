@@ -7,7 +7,7 @@ use serde::Serialize;
 /// ⚠️ vben v5 官方模板默认成功码是 `code === 0`（defaultResponseInterceptor 默认
 /// successCode=0），前端 request.ts 必须显式改为 `code === 1`（successCode: 1）
 /// 才能对接本契约，不是默认匹配。
-/// ToSchema 用于 #[endpoint] 生成 OpenAPI 文档。
+/// ToSchema 用于 #[macro@endpoint] 生成 OpenAPI 文档。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ApiResponse<T> {
     /// 业务状态码：`1` 成功、`0` 失败（HTTP 状态码恒为 200，以本字段为准）

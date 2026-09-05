@@ -171,6 +171,28 @@ pub async fn update_user(
     Ok(true)
 }
 
+/// 软删除用户：同一事务内物理清空 `sys_user_role` 角色关联，并把主表
+/// `deleted_at` 置为当前时间（软删；username 保留占用唯一键，防重建撞名）。
+pub async fn soft_delete_user(db: &DatabaseConnection, id: u64) -> anyhow::Result<()> {
+    let txn = db.begin().await?;
+
+    // 物理清空角色关联（关系表硬删除约定）
+    sys_user_role::Entity::delete_many()
+        .filter(sys_user_role::Column::UserId.eq(id))
+        .exec(&txn)
+        .await?;
+
+    // 软删主表（不存在或已软删时静默跳过，不报错）
+    if let Some(user) = sys_user::Entity::find_by_id(id).one(&txn).await? {
+        let mut user: sys_user::ActiveModel = user.into();
+        user.deleted_at = Set(Some(chrono::Local::now().naive_local()));
+        user.update(&txn).await?;
+    }
+
+    txn.commit().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,5 +623,63 @@ mod tests {
         assert_eq!(reloaded.updated_by, updater_id);
 
         cleanup_users(&db, &[created.id, creator_id, updater_id]).await;
+    }
+
+    #[tokio::test]
+    async fn soft_delete_user_clears_role_links_and_marks_deleted() {
+        let db = test_db().await;
+        let actor_id = seed_actor(&db).await;
+        let role = sys_role::ActiveModel {
+            role_name: Set(unique_name("del_role")),
+            role_key: Set(unique_name("del_role_key")),
+            sort: Set(0),
+            status: Set(1),
+            remark: Set(String::new()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let created = create_user_with_links(
+            &db,
+            sys_user::ActiveModel {
+                username: Set(unique_name("del_target")),
+                password: Set("x".to_string()),
+                nickname: Set("删除目标".to_string()),
+                ..Default::default()
+            },
+            vec![role.id],
+            actor_id,
+        )
+        .await
+        .unwrap();
+
+        // 绑定后确有关联
+        let links = sys_user_role::Entity::find()
+            .filter(sys_user_role::Column::UserId.eq(created.id))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(links.len(), 1, "删除前应存在角色关联");
+
+        soft_delete_user(&db, created.id).await.unwrap();
+
+        assert!(
+            find_by_id(&db, created.id).await.unwrap().is_none(),
+            "软删后活记录查询不可见"
+        );
+        let links_after = sys_user_role::Entity::find()
+            .filter(sys_user_role::Column::UserId.eq(created.id))
+            .all(&db)
+            .await
+            .unwrap();
+        assert!(links_after.is_empty(), "角色关联应被物理清空");
+
+        cleanup_users(&db, &[created.id, actor_id]).await;
+        sys_role::Entity::delete_by_id(role.id)
+            .exec(&db)
+            .await
+            .unwrap();
     }
 }

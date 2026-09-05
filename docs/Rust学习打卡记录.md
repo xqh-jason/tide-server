@@ -313,3 +313,20 @@ static GLOBAL: Jemalloc = Jemalloc;
   实体 / Resp / codegen defs 全部改 `u64`；迁移 000010 未推送，直接修正文件并
   手动同步本地库（UPDATE NULL→0 + MODIFY NOT NULL）。
 - create 双写（created_by + updated_by 同源）行为保持不变；验证 147/147 + 16/16 全绿。
+
+### 2026-09-05 补录：人名字段拼装 / 模块审查 / user delete
+
+- 完成 W5 审计字段后续三件事（此前提交遗漏记录）：
+  1. **人字段名称统一拼装**：utils/user_ref.rs 定义 UserRefIds /
+     UserRefNames + fill_user_names 单点管道（收集 id → 一次批量查
+     username → 填充 *_name，含软删以便历史引用）；6 张主表注册，
+     5 域 Resp 统一 created_at/updated_at + by/by_name，dictionary 补时间字段；
+  2. **分层一致性审查**：service 层一律返回 Model（user 域由返回 Resp
+     改为返回 Model，handler 组装）+ role update_role_status 位置对齐
+     mod.rs + role/menu/sys_api service 顺序对齐 handler + dto From /
+     UserRefNames impl 补注释（并核对新增注释 rustdoc 渲染正常，0 warning）；
+  3. **user delete 补齐**：种子有 system:user:delete 按钮但后端无接口，
+     补 repo soft_delete_user（事务清空 sys_user_role + 软删）、service /
+     handler / 路由（禁删 admin、判存在；接口级权限码由后续 API 授权层
+     统一施加，此处不校验）。
+- 验证：主项目 156/156、codegen 16/16、`cargo doc` 0 warning。

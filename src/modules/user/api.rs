@@ -118,3 +118,13 @@ pub async fn update_user_status(
         user_service::update_user_status(&state.db, auth.user_id, req.id, req.status).await?;
     Ok(ApiResponse::ok(resp))
 }
+
+/// 删除用户（POST + JSON body：`{ "id": ... }`）：内置超管 admin 不允许删除；
+/// 软删并清空角色关联。接口级权限码由后续 API 授权层统一施加。
+#[endpoint]
+pub async fn delete_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<()> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    user_service::delete_user(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(()))
+}

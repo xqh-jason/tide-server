@@ -256,6 +256,22 @@ pub async fn update_user_with_links(
     Ok(model)
 }
 
+/// 删除用户（软删 + 物理清空角色关联）。
+///
+/// 内置超管 admin（`ADMIN_USERNAME`）不允许删除——其由 seed 兜底重建，
+/// 删除会破坏登录锚点。接口级权限码由后续 API 授权层统一施加，此处不校验。
+pub async fn delete_user(db: &DatabaseConnection, user_id: u64) -> Result<(), AppError> {
+    let Some(user) = user_repo::find_by_id(db, user_id).await? else {
+        return Err(AppError::Biz("用户不存在".into()));
+    };
+    if user.username == ADMIN_USERNAME {
+        return Err(AppError::Biz("系统内置管理员不允许删除".into()));
+    }
+
+    user_repo::soft_delete_user(db, user_id).await?;
+    Ok(())
+}
+
 /// 更新用户状态（启用/禁用）；内置超管 admin 不允许修改状态（审计字段由 repo 盖章）。
 pub async fn update_user_status(
     db: &DatabaseConnection,
@@ -1269,6 +1285,67 @@ mod tests {
         assert_eq!(
             other_after.username, other.username,
             "占用用户名用户不应受影响"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_user_soft_deletes_and_keeps_username_occupancy() {
+        let db = test_db().await;
+        let target = sys_user::ActiveModel {
+            username: Set(unique_name("del_target")),
+            password: Set("x".to_string()),
+            nickname: Set("删除目标".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        delete_user(&db, target.id)
+            .await
+            .expect("删除用户应成功（接口级权限码由后续 API 授权层施加）");
+
+        assert!(
+            user_repo::find_by_id(&db, target.id)
+                .await
+                .unwrap()
+                .is_none(),
+            "软删后活记录查询不可见"
+        );
+        let deleted = user_repo::find_by_username_include_deleted(&db, target.username.as_str())
+            .await
+            .unwrap()
+            .expect("软删记录仍存在（username 占位）");
+        assert!(deleted.deleted_at.is_some(), "deleted_at 应已置位");
+
+        sys_user::Entity::delete_by_id(target.id)
+            .exec(&db)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_user_rejects_admin_and_missing() {
+        let db = test_db().await;
+        let (admin, owned) = load_or_create_admin(&db).await;
+
+        let admin_result = delete_user(&db, admin.id).await;
+        let missing_result = delete_user(&db, 9_999_999_999).await;
+
+        if owned {
+            sys_user::Entity::delete_by_id(admin.id)
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        assert!(
+            matches!(admin_result, Err(AppError::Biz(ref message)) if message.contains("不允许删除")),
+            "内置超管 admin 不允许删除: {admin_result:?}"
+        );
+        assert!(
+            matches!(missing_result, Err(AppError::Biz(ref message)) if message.contains("用户不存在")),
+            "不存在的用户返回业务错误: {missing_result:?}"
         );
     }
 }
