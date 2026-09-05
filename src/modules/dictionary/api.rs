@@ -15,6 +15,7 @@ use crate::modules::dictionary::dto::{
 };
 use crate::modules::dictionary::service as dict_service;
 use crate::utils::request::JsonBody;
+use crate::utils::user_ref::fill_user_names;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 // —— 字典类型 ——
@@ -28,7 +29,10 @@ pub async fn list_dictionaries(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let data = dict_service::page_dictionaries(&state.db, &req).await?;
-    Ok(ApiResponse::ok(data.into()))
+    // 填充创建人和更新人显示名
+    let items = fill_user_names(&state.db, data.items, DictionaryResp::from).await?;
+    let page = crate::utils::PageResult::new(data.total, data.total_pages, items);
+    Ok(ApiResponse::ok(page))
 }
 
 /// 创建字典类型（POST + JSON body）。
@@ -41,7 +45,10 @@ pub async fn create_dictionary(
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let model = dict_service::create_dictionary(&state.db, auth.user_id, &req).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let resp = fill_user_names(&state.db, vec![model], DictionaryResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 更新字典类型（POST + JSON body）。
@@ -54,7 +61,10 @@ pub async fn update_dictionary(
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let model = dict_service::update_dictionary(&state.db, auth.user_id, &req).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let resp = fill_user_names(&state.db, vec![model], DictionaryResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 字典类型详情（POST + JSON body：`{ "id": ... }`）。
@@ -63,7 +73,10 @@ pub async fn get_dictionary(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResu
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = dict_service::get_dictionary(&state.db, req.id).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let resp = fill_user_names(&state.db, vec![model], DictionaryResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 删除字典类型：级联软删其下字典项，返回删除数量。
@@ -103,7 +116,10 @@ pub async fn list_dictionary_details(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let data = dict_service::page_dictionary_details(&state.db, &req).await?;
-    Ok(ApiResponse::ok(data.into()))
+    // 填充创建人和更新人显示名
+    let items = fill_user_names(&state.db, data.items, DictionaryDetailResp::from).await?;
+    let page = crate::utils::PageResult::new(data.total, data.total_pages, items);
+    Ok(ApiResponse::ok(page))
 }
 
 /// 创建字典项（POST + JSON body）。
@@ -116,7 +132,10 @@ pub async fn create_dictionary_detail(
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let model = dict_service::create_dictionary_detail(&state.db, auth.user_id, &req).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let resp = fill_user_names(&state.db, vec![model], DictionaryDetailResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 更新字典项（POST + JSON body）。
@@ -129,7 +148,10 @@ pub async fn update_dictionary_detail(
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let model = dict_service::update_dictionary_detail(&state.db, auth.user_id, &req).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let resp = fill_user_names(&state.db, vec![model], DictionaryDetailResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 字典项详情（POST + JSON body：`{ "id": ... }`）。
@@ -141,7 +163,10 @@ pub async fn get_dictionary_detail(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = dict_service::get_dictionary_detail(&state.db, req.id).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let resp = fill_user_names(&state.db, vec![model], DictionaryDetailResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 删除字典项（POST + JSON body：`{ "id": ... }`）。

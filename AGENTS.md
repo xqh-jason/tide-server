@@ -48,7 +48,8 @@
   - 实体实现 `UserRefIds::user_ref_ids()`：收集本记录全部人字段 id（`vec![self.created_by, ...]`）；
   - Resp 实现 `UserRefNames::set_user_ref_names()`：有几个人字段填几个 `*_name`；
   - service 端点统一 `fill_user_names(items, db, Resp::from)` 一行拼装（收集 → 一次
-    `IN` 批量查显示名 → 填充；显示名口径 `nickname` 非空否则退 `username`，排除软删）。
+    `IN` 批量查显示名 → 填充；显示名取 `username`；不排除软删——名称解析面向
+    历史引用，操作人即便已软删，历史记录仍应带出名字）。
   - 新增人字段 = 实体 impl 加一个 id + Resp 加一对字段，协议与管道零改动。
 - **写入口径**：审计字段由 repo 层统一盖章（create 双写 `created_by`/`updated_by`、
   update 只刷 `updated_by`），service 只透传 `actor_id`；请求体不接受人字段，防伪造。

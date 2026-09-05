@@ -10,7 +10,7 @@ use crate::{
 };
 use crate::{
     modules::sys_api::service as api_service,
-    utils::{ApiResponse, request::JsonBody},
+    utils::{ApiResponse, request::JsonBody, user_ref::fill_user_names},
 };
 
 /// API 权限点列表（POST + JSON body）：分页 + keyword / status / method 过滤。
@@ -22,7 +22,12 @@ pub async fn list_apis(
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     let data = api_service::page_apis(&state.db, &req).await?;
-    Ok(ApiResponse::ok(data.into()))
+    let items = fill_user_names(&state.db, data.items, ApiResp::from).await?;
+    Ok(ApiResponse::ok(PageResult::new(
+        data.total,
+        data.total_pages,
+        items,
+    )))
 }
 
 /// 创建 API（POST + JSON body）：path + method 查重、角色授权关联落库。
@@ -32,7 +37,10 @@ pub async fn create_api(depot: &mut Depot, req: JsonBody<CreateApiReq>) -> ApiRe
     let req = req.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let model = api_service::create_api(&state.db, auth.user_id, &req).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let resp = fill_user_names(&state.db, vec![model], ApiResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 更新 API（POST + JSON body）：全量覆盖并重建角色授权关联。
@@ -42,7 +50,10 @@ pub async fn update_api(depot: &mut Depot, req: JsonBody<UpdateApiReq>) -> ApiRe
     let req = req.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let model = api_service::update_api(&state.db, auth.user_id, &req).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let resp = fill_user_names(&state.db, vec![model], ApiResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// API 详情（POST + JSON body：`{ "id": ... }`）。
@@ -51,7 +62,10 @@ pub async fn get_api(depot: &mut Depot, req: JsonBody<IdReq>) -> ApiResult<ApiRe
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     let model = api_service::get_api(&state.db, req.id).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let resp = fill_user_names(&state.db, vec![model], ApiResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 删除 API（POST + JSON body：`{ "id": ... }`）：级联清空角色授权并软删。

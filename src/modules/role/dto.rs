@@ -2,9 +2,11 @@
 
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::entity::sys_role;
 use crate::utils::PageQuery;
+use crate::utils::user_ref::UserRefNames;
 
 /// 角色响应体。
 #[derive(Debug, Serialize, ToSchema)]
@@ -27,10 +29,14 @@ pub struct RoleResp {
     /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
     #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
     pub updated_at: chrono::NaiveDateTime,
-    /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
+    /// 创建人 ID（`sys_user.id`；`0` 表示种子/系统写入）
     pub created_by: u64,
     /// 更新人 ID（`sys_user.id`）
     pub updated_by: u64,
+    /// 创建人显示名（`sys_user.username`）
+    pub created_by_name: String,
+    /// 更新人显示名（`sys_user.username`）
+    pub updated_by_name: String,
 }
 
 impl From<sys_role::Model> for RoleResp {
@@ -46,7 +52,16 @@ impl From<sys_role::Model> for RoleResp {
             updated_at: m.updated_at,
             created_by: m.created_by,
             updated_by: m.updated_by,
+            created_by_name: String::new(),
+            updated_by_name: String::new(),
         }
+    }
+}
+
+impl UserRefNames for RoleResp {
+    fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
+        self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
+        self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
     }
 }
 

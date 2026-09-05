@@ -1,10 +1,13 @@
 //! 数据字典 DTO：entity 不直接暴露给接口，经 From 转换。
 
+use std::collections::HashMap;
+
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::entity::{sys_dictionary, sys_dictionary_detail};
 use crate::utils::PageQuery;
+use crate::utils::user_ref::UserRefNames;
 
 // —— 字典类型 ——
 
@@ -21,10 +24,20 @@ pub struct DictionaryResp {
     pub status: i8,
     /// 备注
     pub remark: String,
-    /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
+    /// 创建时间（`yyyy-MM-dd HH:mm:ss`）
+    #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
+    pub created_at: chrono::NaiveDateTime,
+    /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
+    #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
+    pub updated_at: chrono::NaiveDateTime,
+    /// 创建人 ID（`sys_user.id`；`0` 表示种子/系统写入）
     pub created_by: u64,
     /// 更新人 ID（`sys_user.id`）
     pub updated_by: u64,
+    /// 创建人姓名（显示名）
+    pub created_by_name: String,
+    /// 更新人姓名（显示名）
+    pub updated_by_name: String,
 }
 
 impl From<sys_dictionary::Model> for DictionaryResp {
@@ -35,9 +48,20 @@ impl From<sys_dictionary::Model> for DictionaryResp {
             r#type: m.r#type,
             status: m.status,
             remark: m.remark,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
             created_by: m.created_by,
             updated_by: m.updated_by,
+            created_by_name: String::new(),
+            updated_by_name: String::new(),
         }
+    }
+}
+
+impl UserRefNames for DictionaryResp {
+    fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
+        self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
+        self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
     }
 }
 
@@ -156,10 +180,20 @@ pub struct DictionaryDetailResp {
     pub sort: i32,
     /// 状态：`1` 启用、`0` 停用
     pub status: i8,
-    /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
+    /// 创建时间（`yyyy-MM-dd HH:mm:ss`）
+    #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
+    pub created_at: chrono::NaiveDateTime,
+    /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
+    #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
+    pub updated_at: chrono::NaiveDateTime,
+    /// 创建人 ID（`sys_user.id`；`0` 表示种子/系统写入）
     pub created_by: u64,
     /// 更新人 ID（`sys_user.id`）
     pub updated_by: u64,
+    /// 创建人显示名（`sys_user.username`）
+    pub created_by_name: String,
+    /// 更新人显示名（`sys_user.username`）
+    pub updated_by_name: String,
 }
 
 impl From<sys_dictionary_detail::Model> for DictionaryDetailResp {
@@ -172,9 +206,20 @@ impl From<sys_dictionary_detail::Model> for DictionaryDetailResp {
             extend: m.extend,
             sort: m.sort,
             status: m.status,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
             created_by: m.created_by,
             updated_by: m.updated_by,
+            created_by_name: String::new(),
+            updated_by_name: String::new(),
         }
+    }
+}
+
+impl UserRefNames for DictionaryDetailResp {
+    fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
+        self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
+        self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
     }
 }
 

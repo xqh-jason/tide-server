@@ -2,16 +2,13 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::DatabaseConnection;
 
 use crate::entity::sys_user;
-use crate::middleware::auth::AuthUser;
 use crate::modules::permission::repo as permission_repo;
 use crate::modules::permission::{
     ADMIN_USERNAME, SUPER_ROLE_KEY, SYSTEM_USER_CREATE, SYSTEM_USER_UPDATE,
     service as permission_service,
 };
 use crate::modules::role::service as role_service;
-use crate::modules::user::dto::{
-    CreateUserReq, UpdateUserReq, UserFilter, UserInfoResp, UserListReq, UserResp,
-};
+use crate::modules::user::dto::{CreateUserReq, UpdateUserReq, UserFilter, UserListReq};
 use crate::modules::user::repo as user_repo;
 use crate::utils::PageData;
 use crate::utils::crypt;
@@ -45,15 +42,15 @@ pub async fn page_users(
     Ok(model)
 }
 
-/// 当前登录用户完整信息（契约 §3.2 的 `/user/info`）。
+/// 当前登录用户完整信息（契约 §3.2 的 `/user/info`）；返回 Model，
+/// UserInfoResp 组装与创建人名称拼装统一在 handler 层完成。
 pub async fn get_user_info(
     db: &sea_orm::DatabaseConnection,
-    auth: &AuthUser,
-) -> Result<UserInfoResp, AppError> {
-    let user = user_repo::find_by_id(db, auth.user_id)
+    user_id: u64,
+) -> Result<sys_user::Model, AppError> {
+    user_repo::find_by_id(db, user_id)
         .await?
-        .ok_or_else(|| AppError::Biz("用户不存在".into()))?;
-    Ok(UserInfoResp::from_model(user, auth))
+        .ok_or_else(|| AppError::Biz("用户不存在".into()))
 }
 
 /// 权限码数组（契约 §3.2 的 `/user/access-codes`）：
@@ -76,7 +73,7 @@ pub async fn create_user(
     db: &DatabaseConnection,
     actor_id: u64,
     req: CreateUserReq,
-) -> Result<UserResp, AppError> {
+) -> Result<sys_user::Model, AppError> {
     if !permission_service::has_permission(db, actor_id, SYSTEM_USER_CREATE).await? {
         return Err(AppError::Biz("用户没有创建用户权限".into()));
     }
@@ -148,17 +145,17 @@ pub async fn create_user(
     )
     .await?;
 
-    Ok(UserResp::from(model))
+    Ok(model)
 }
 
 /// 获取用户详情（排除软删除）；不存在返回业务错误。
-pub async fn get_user(db: &DatabaseConnection, user_id: u64) -> Result<UserResp, AppError> {
+pub async fn get_user(db: &DatabaseConnection, user_id: u64) -> Result<sys_user::Model, AppError> {
     let user = user_repo::find_by_id(db, user_id).await?;
 
     if user.is_none() {
         return Err(AppError::Biz("用户不存在".into()));
     }
-    Ok(UserResp::from(user.unwrap()))
+    Ok(user.unwrap())
 }
 
 /// 更新用户（发起人 `actor_id` 需拥有 `system:user:update` 权限）。
@@ -169,7 +166,7 @@ pub async fn update_user_with_links(
     db: &DatabaseConnection,
     actor_id: u64,
     req: UpdateUserReq,
-) -> Result<UserResp, AppError> {
+) -> Result<sys_user::Model, AppError> {
     if !permission_service::has_permission(db, actor_id, SYSTEM_USER_UPDATE).await? {
         return Err(AppError::Biz("用户没有更新用户权限".into()));
     }
@@ -256,7 +253,7 @@ pub async fn update_user_with_links(
     )
     .await?;
 
-    Ok(UserResp::from(model))
+    Ok(model)
 }
 
 /// 更新用户状态（启用/禁用）；内置超管 admin 不允许修改状态（审计字段由 repo 盖章）。
@@ -748,11 +745,7 @@ mod tests {
         mark_deleted.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         mark_deleted.update(&db).await.unwrap();
 
-        let auth = AuthUser {
-            user_id: user.id,
-            roles: vec![],
-        };
-        let result = get_user_info(&db, &auth).await;
+        let result = get_user_info(&db, user.id).await;
 
         // 先物理清理，避免断言失败时残留测试数据。
         sys_user::Entity::delete_by_id(user.id)
