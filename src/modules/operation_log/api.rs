@@ -8,6 +8,7 @@ use crate::modules::operation_log::dto::{
     DeleteBatchReq, OperationLogDetail, OperationLogItem, OperationLogListReq,
 };
 use crate::modules::operation_log::service as operation_log_service;
+use crate::modules::user::service as user_service;
 use crate::utils::request::JsonBody;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
@@ -32,7 +33,10 @@ pub async fn get_operation_log(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let model = operation_log_service::get_operation_log(&state.db, req.id).await?;
-    Ok(ApiResponse::ok(model.into()))
+    let user = user_service::get_user(&state.db, model.user_id).await?;
+    let mut res: OperationLogDetail = model.into();
+    res.user_name = user.username;
+    Ok(ApiResponse::ok(res))
 }
 
 /// 删除操作日志（POST + JSON body：`{ "id": ... }`，软删）。

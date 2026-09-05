@@ -11,6 +11,8 @@ pub fn build(state: AppState) -> Router {
         .push(
             Router::with_path("api/v1")
                 .push(crate::modules::system::routes())
+                // 图形验证码：POST /api/v1/captcha/generate（公开，登录前调用）
+                .push(Router::with_path("captcha").push(crate::modules::captcha::routes()))
                 .push(crate::modules::auth::routes())
                 // W2 起 user 域整体需要登录（login/health 公开，不挂本中间件）
                 .push(

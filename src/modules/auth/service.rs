@@ -1,4 +1,4 @@
-//! 认证业务：登录（查用户 → 校验密码 → 取角色 → 签发 JWT）。
+//! 认证业务：登录（验证码 → 查用户 → 校验密码 → 取角色 → 签发 JWT）。
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::DatabaseConnection;
@@ -7,17 +7,34 @@ use crate::entity::sys_login_log;
 use crate::infra::config::Jwt as JwtConfig;
 use crate::modules::auth::dto::{LoginMeta, LoginReq, LoginResp};
 use crate::modules::user::repo as user_repo;
+use crate::utils::cache::Cache;
 use crate::utils::error::AppError;
 use crate::utils::{crypt, jwt};
 
-/// 登录：查用户 → 校验密码与状态 → 取角色 → 签发 JWT，全程落登录日志。
-/// 用户不存在 / 密码错误 / 已禁用对外统一返回「用户名或密码错误」，防账号枚举。
+/// 登录：验证码 → 查用户 → 校验密码与状态 → 取角色 → 签发 JWT，全程落登录日志。
+/// 用户不存在 / 密码错误 / 已禁用对外统一返回「用户名或密码错误」，防账号枚举；
+/// 验证码失败单独提示（不泄露账号信息），原因分级进日志。
 pub async fn login(
     db: &DatabaseConnection,
     jwt_cfg: &JwtConfig,
+    cache: &dyn Cache,
     req: LoginReq,
     meta: LoginMeta,
 ) -> Result<LoginResp, AppError> {
+    // 先验码后查库：注定失败的登录不浪费一次 DB 查询；
+    // 验证码一次性消费发生在 captcha::service 内部（无论成败）。
+    if let Err(err) =
+        crate::modules::captcha::service::verify_captcha(cache, &req.captcha_id, &req.captcha_value)
+    {
+        // 失败原因下探到登录日志分级，对外透传 captcha 层的原始文案
+        let msg = match &err {
+            AppError::Biz(m) if m.contains("已过期") => "验证码已过期",
+            _ => "验证码错误",
+        };
+        record_login(db, &req, 0, 0, msg, &meta).await;
+        return Err(err);
+    }
+
     // 用户不存在：对外统一提示，日志内部分级
     let user = match user_repo::find_by_username(db, &req.username).await {
         Ok(Some(user)) => user,
@@ -94,6 +111,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use crate::entity::{sys_login_log, sys_role, sys_user, sys_user_role};
+    use crate::utils::cache::MemoryCache;
     use crate::utils::crypt;
     use sea_orm::{
         ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, QueryOrder, Set,
@@ -193,6 +211,20 @@ mod tests {
             .unwrap();
     }
 
+    /// 造一个带有效验证码的登录请求：generate 后从 cache 直读答案（生成接口不回传答案）。
+    fn login_req_with_captcha(cache: &MemoryCache, username: &str, password: &str) -> LoginReq {
+        let resp = crate::modules::captcha::service::generate_captcha(cache).unwrap();
+        let answer = cache
+            .get(&format!("captcha:{}", resp.captcha_id))
+            .expect("验证码答案应已入 cache");
+        LoginReq {
+            username: username.to_string(),
+            password: password.to_string(),
+            captcha_id: resp.captcha_id,
+            captcha_value: answer,
+        }
+    }
+
     async fn latest_login_log(
         db: &sea_orm::DatabaseConnection,
         username: &str,
@@ -210,14 +242,13 @@ mod tests {
     async fn login_success_returns_token_with_roles() {
         let db = test_db().await;
         let (uid, rid, username, role_key) = seed_user(&db).await;
+        let cache = MemoryCache::new();
 
         let resp = login(
             &db,
             &test_jwt_cfg(),
-            LoginReq {
-                username: username.clone(),
-                password: "pass123".into(),
-            },
+            &cache,
+            login_req_with_captcha(&cache, &username, "pass123"),
             test_meta(),
         )
         .await
@@ -239,14 +270,13 @@ mod tests {
     async fn login_wrong_password_returns_biz_error() {
         let db = test_db().await;
         let (uid, rid, username, _) = seed_user(&db).await;
+        let cache = MemoryCache::new();
 
         let err = login(
             &db,
             &test_jwt_cfg(),
-            LoginReq {
-                username: username.clone(),
-                password: "bad".into(),
-            },
+            &cache,
+            login_req_with_captcha(&cache, &username, "bad"),
             test_meta(),
         )
         .await
@@ -268,13 +298,12 @@ mod tests {
     async fn login_unknown_user_returns_biz_error() {
         let db = test_db().await;
         let username = unique_name("login_unknown");
+        let cache = MemoryCache::new();
         let err = login(
             &db,
             &test_jwt_cfg(),
-            LoginReq {
-                username: username.clone(),
-                password: "x".into(),
-            },
+            &cache,
+            login_req_with_captcha(&cache, &username, "x"),
             test_meta(),
         )
         .await
@@ -296,6 +325,7 @@ mod tests {
     async fn login_disabled_user_returns_biz_error() {
         let db = test_db().await;
         let username = unique_name("login_disabled");
+        let cache = MemoryCache::new();
         let user = sys_user::ActiveModel {
             username: Set(username.clone()),
             password: Set(crypt::hash_password("pass123").unwrap()),
@@ -310,10 +340,8 @@ mod tests {
         let err = login(
             &db,
             &test_jwt_cfg(),
-            LoginReq {
-                username: username.clone(),
-                password: "pass123".into(),
-            },
+            &cache,
+            login_req_with_captcha(&cache, &username, "pass123"),
             test_meta(),
         )
         .await
@@ -333,5 +361,70 @@ mod tests {
         assert_eq!(log.status, 0);
         assert_eq!(log.user_id, user.id);
         assert_eq!(log.msg, "用户已被禁用", "日志内部分级记录禁用");
+    }
+
+    /// 验证码答案错误：对外明确提示（不并入「用户名或密码错误」），且码被消费。
+    #[tokio::test]
+    async fn login_with_wrong_captcha_returns_biz_error() {
+        let db = test_db().await;
+        let username = unique_name("login_bad_captcha");
+        let cache = MemoryCache::new();
+        let resp = crate::modules::captcha::service::generate_captcha(&cache).unwrap();
+
+        let err = login(
+            &db,
+            &test_jwt_cfg(),
+            &cache,
+            LoginReq {
+                username: username.clone(),
+                password: "pass123".into(),
+                captcha_id: resp.captcha_id,
+                captcha_value: "0000".into(),
+            },
+            test_meta(),
+        )
+        .await
+        .unwrap_err();
+        let log = latest_login_log(&db, &username).await;
+        cleanup_login_logs(&db, &username).await;
+
+        assert!(
+            matches!(&err, AppError::Biz(message) if message.contains("验证码错误")),
+            "验证码错误应单独提示，实际：{err:?}"
+        );
+        assert_eq!(log.status, 0);
+        assert_eq!(log.user_id, 0, "验证码失败发生在查库之前，user_id 为 0");
+        assert_eq!(log.msg, "验证码错误", "日志内部分级记录验证码错误");
+    }
+
+    /// 验证码 id 不存在（未生成 / 已过期）：提示刷新，日志记录过期。
+    #[tokio::test]
+    async fn login_with_unknown_captcha_id_reports_expired() {
+        let db = test_db().await;
+        let username = unique_name("login_expired_captcha");
+        let cache = MemoryCache::new();
+
+        let err = login(
+            &db,
+            &test_jwt_cfg(),
+            &cache,
+            LoginReq {
+                username: username.clone(),
+                password: "pass123".into(),
+                captcha_id: "ghost-id".into(),
+                captcha_value: "1234".into(),
+            },
+            test_meta(),
+        )
+        .await
+        .unwrap_err();
+        let log = latest_login_log(&db, &username).await;
+        cleanup_login_logs(&db, &username).await;
+
+        assert!(
+            matches!(&err, AppError::Biz(message) if message.contains("已过期")),
+            "未知验证码 id 应提示过期刷新，实际：{err:?}"
+        );
+        assert_eq!(log.msg, "验证码已过期", "日志内部分级记录验证码过期");
     }
 }

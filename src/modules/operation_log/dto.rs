@@ -61,6 +61,8 @@ pub struct OperationLogDetail {
     pub id: u64,
     /// 操作用户 id
     pub user_id: u64,
+    /// 操作用户名称
+    pub user_name: String,
     /// 客户端 IP
     pub ip: String,
     /// HTTP 方法（GET / POST 等）
@@ -124,6 +126,7 @@ impl From<sys_operation_log::Model> for OperationLogDetail {
             created_at: crate::utils::serde_format::format_datetime(m.created_at),
             body: m.body,
             resp: m.resp,
+            user_name: String::new(),
         }
     }
 }

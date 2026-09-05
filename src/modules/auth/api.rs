@@ -33,7 +33,15 @@ pub async fn login(
             .unwrap_or_default()
             .to_string(),
     };
-    let resp = auth_service::login(&state.db, &state.config.jwt, body.into_inner(), meta).await?;
+    let resp = auth_service::login(
+        &state.db,
+        &state.config.jwt,
+        // Arc<dyn Cache> → &dyn Cache：显式 as_ref，编译器不做跨智能指针的自动强转
+        state.cache.as_ref(),
+        body.into_inner(),
+        meta,
+    )
+    .await?;
     Ok(ApiResponse::ok(resp))
 }
 
