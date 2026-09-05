@@ -7,18 +7,18 @@
 ## 1. 背景与目标
 
 系统配置 = **键值参数配置**（运行时可增删改查的参数）+ **网站设置**（单行站点级
-配置，登录页等公开场景可读）。对齐 GVA 的 sys_config / sys_system 能力，
+配置，登录页等公开场景可读）。对齐 GVA 的 sys_config / sys_site_config 能力，
 遵守本项目既有约定：POST + JSON body、软删、审计盖章、codegen 出表、TDD。
 
 ## 2. 决策记录
 
 | # | 决策点 | 结论 |
 |---|---|---|
-| 1 | 数据形态 | **两者都做**：`sys_config` 键值参数表 + `sys_system` 单行网站设置表 |
-| 2 | 网站设置字段 | GVA sys_system 对齐全量（11 业务字段，见 §3.2），后续加字段走迁移 |
+| 1 | 数据形态 | **两者都做**：`sys_config` 键值参数表 + `sys_site_config` 单行网站设置表 |
+| 2 | 网站设置字段 | GVA sys_site_config 对齐全量（11 业务字段，见 §3.2），后续加字段走迁移 |
 | 3 | 读取权限 | 网站设置 `GET /site-config/get` **公开**（登录页展示站点名/logo）；其余端点全部登录态 |
 | 4 | 域名 | `src/modules/config/`（避开已存在的 `system` 域名） |
-| 5 | 单行表实现 | sys_system 手写 entity + service（codegen 模板是 CRUD 型，不适用单行） |
+| 5 | 单行表实现 | sys_site_config 手写 entity + service（codegen 模板是 CRUD 型，不适用单行） |
 | 6 | 单行保障 | 迁移种子插入 `id=1` 默认行；更新恒按 id=1，不提供 create/delete |
 | 7 | cache 联动 | 不做（配置量小直查库，backlog） |
 | 8 | 权限码按钮 | 不做（后续 API 授权层统一补齐） |
@@ -40,7 +40,7 @@
 
 索引：`uk_sys_config_config_key`（唯一）、`idx_sys_config_created_at`。
 
-### 3.2 `sys_system`（网站设置，单行 id=1，手写迁移 + entity）
+### 3.2 `sys_site_config`（网站设置，单行 id=1，手写迁移 + entity）
 
 | 列 | 类型 | 说明 |
 |---|---|---|
@@ -87,11 +87,11 @@
 两组。router.rs：`/config` 包 AuthRequired + OperationLog；`/site-config` 的 get
 不挂中间件、update 挂 AuthRequired（参考 auth 域 logout 的子路由挂法）。
 
-命名（避免与 captcha 等冲突，按层统一）：repo `find_param_page / find_param_by_key_... /
-create_param / update_param / soft_delete_param / find_site_config / update_site_config`；
-service `page_params / create_param / update_param / get_param / delete_param /
-get_site_config / update_site_config`；handler `list_params / create_param / update_param /
-get_param / delete_param / get_site_config / update_site_config`。
+命名（避免与 captcha 等冲突，按层统一）：repo `find_config_page / find_param_by_key_... /
+create_config / update_config / soft_delete_config / find_site_config / update_site_config`；
+service `page_configs / create_config / update_config / get_config / delete_config /
+get_site_config / update_site_config`；handler `list_configs / create_config / update_config /
+get_config / delete_config / get_site_config / update_site_config`。
 
 ## 6. 测试策略
 
