@@ -42,6 +42,7 @@ fn build_menu_tree(menus: Vec<sys_menu::Model>) -> Vec<VbenMenuItem> {
         by_parent.entry(m.parent_id).or_default().push(m);
     }
 
+    // 递归构建子树；depth 超过 MAX_MENU_DEPTH 时截断（防超深异常数据栈溢出）
     fn build(
         parent_id: u64,
         by_parent: &HashMap<u64, Vec<sys_menu::Model>>,
@@ -182,17 +183,6 @@ pub async fn update_menu(
     Ok(menu)
 }
 
-/// 删除菜单：判存在后软删，repo 层级联软删全部子孙菜单并清空角色关联。
-pub async fn delete_menu(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
-    // 检查菜单是否存在
-    let Some(_) = menu_repo::find_by_id(db, id).await? else {
-        return Err(AppError::Biz("菜单不存在".to_string()));
-    };
-
-    menu_repo::soft_delete_menu(db, id).await?;
-    Ok(())
-}
-
 /// 查询单个菜单详情（排除软删除）；不存在返回业务错误。
 pub async fn get_menu(db: &DatabaseConnection, id: u64) -> Result<sys_menu::Model, AppError> {
     let Some(menu) = menu_repo::find_by_id(db, id).await? else {
@@ -211,6 +201,17 @@ fn validate_component(component: &str, menu_type: i8) -> Result<(), AppError> {
             "component 必须为 #/views/xxx.vue 格式".to_string(),
         ));
     }
+    Ok(())
+}
+
+/// 删除菜单：判存在后软删，repo 层级联软删全部子孙菜单并清空角色关联。
+pub async fn delete_menu(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
+    // 检查菜单是否存在
+    let Some(_) = menu_repo::find_by_id(db, id).await? else {
+        return Err(AppError::Biz("菜单不存在".to_string()));
+    };
+
+    menu_repo::soft_delete_menu(db, id).await?;
     Ok(())
 }
 

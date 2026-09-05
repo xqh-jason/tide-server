@@ -7,6 +7,25 @@ use crate::modules::sys_api::repo as api_repo;
 use crate::utils::PageData;
 use crate::{entity::sys_api, modules::sys_api::dto::CreateApiReq, utils::error::AppError};
 
+/// 分页查询 API（keyword 匹配 path/description/api_group，status/method 精确）。
+pub async fn page_apis(
+    db: &DatabaseConnection,
+    req: &ApiListReq,
+) -> Result<PageData<sys_api::Model>, AppError> {
+    let model = api_repo::find_page(
+        db,
+        &ApiFilter {
+            method: req.method.clone(),
+            status: req.status,
+            keyword: req.keyword.clone(),
+        },
+        req.page.page_index(),
+        req.page.page_size(),
+    )
+    .await?;
+    Ok(model)
+}
+
 /// 创建 API：path + method 查重（含软删占位）→ 写入主表并维护角色授权关联（审计字段由 repo 盖章）。
 pub async fn create_api(
     db: &DatabaseConnection,
@@ -68,22 +87,11 @@ pub async fn update_api(
     Ok(model)
 }
 
-/// 分页查询 API（keyword 匹配 path/description/api_group，status/method 精确）。
-pub async fn page_apis(
-    db: &DatabaseConnection,
-    req: &ApiListReq,
-) -> Result<PageData<sys_api::Model>, AppError> {
-    let model = api_repo::find_page(
-        db,
-        &ApiFilter {
-            method: req.method.clone(),
-            status: req.status,
-            keyword: req.keyword.clone(),
-        },
-        req.page.page_index(),
-        req.page.page_size(),
-    )
-    .await?;
+/// 查询单个 API 详情（排除软删除）；不存在返回业务错误。
+pub async fn get_api(db: &DatabaseConnection, id: u64) -> Result<sys_api::Model, AppError> {
+    let Some(model) = api_repo::find_by_id(db, id).await? else {
+        return Err(AppError::Biz(format!("API 不存在：{id}")));
+    };
     Ok(model)
 }
 
@@ -94,14 +102,6 @@ pub async fn delete_api(db: &DatabaseConnection, id: u64) -> Result<(), AppError
     };
     api_repo::soft_delete_api(db, id).await?;
     Ok(())
-}
-
-/// 查询单个 API 详情（排除软删除）；不存在返回业务错误。
-pub async fn get_api(db: &DatabaseConnection, id: u64) -> Result<sys_api::Model, AppError> {
-    let Some(model) = api_repo::find_by_id(db, id).await? else {
-        return Err(AppError::Biz(format!("API 不存在：{id}")));
-    };
-    Ok(model)
 }
 
 #[cfg(test)]

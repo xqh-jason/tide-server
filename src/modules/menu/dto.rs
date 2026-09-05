@@ -86,6 +86,7 @@ pub struct MenuResp {
     pub updated_by_name: String,
 }
 
+/// `sys_menu::Model` → `MenuResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
 impl From<sys_menu::Model> for MenuResp {
     fn from(m: sys_menu::Model) -> Self {
         Self {
@@ -112,6 +113,7 @@ impl From<sys_menu::Model> for MenuResp {
     }
 }
 
+/// 按名称映射填充 `MenuResp` 的创建人/更新人显示名（查不到给空串）。
 impl UserRefNames for MenuResp {
     fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
         self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();

@@ -71,23 +71,6 @@ pub async fn create_role(
     Ok(model)
 }
 
-/// 查询单个角色详情（排除软删除）；不存在返回业务错误。
-pub async fn get_role(db: &DatabaseConnection, id: u64) -> Result<sys_role::Model, AppError> {
-    let Some(role) = role_repo::find_by_id(db, id).await? else {
-        return Err(AppError::Biz(format!("角色不存在：{id}")));
-    };
-    Ok(role)
-}
-
-/// 删除角色：判存在后软删并物理清空菜单/API 关联。
-pub async fn delete_role(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
-    let Some(_) = role_repo::find_by_id(db, id).await? else {
-        return Err(AppError::Biz(format!("角色不存在：{id}")));
-    };
-    role_repo::soft_delete_role(db, id).await?;
-    Ok(())
-}
-
 /// 更新角色：判存在后键查重（排除自身），事务内全量重建菜单 / API 关联（审计字段由 repo 盖章）。
 pub async fn update_role(
     db: &DatabaseConnection,
@@ -141,6 +124,23 @@ pub async fn update_role(
     )
     .await?;
     Ok(model)
+}
+
+/// 查询单个角色详情（排除软删除）；不存在返回业务错误。
+pub async fn get_role(db: &DatabaseConnection, id: u64) -> Result<sys_role::Model, AppError> {
+    let Some(role) = role_repo::find_by_id(db, id).await? else {
+        return Err(AppError::Biz(format!("角色不存在：{id}")));
+    };
+    Ok(role)
+}
+
+/// 删除角色：判存在后软删并物理清空菜单/API 关联。
+pub async fn delete_role(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
+    let Some(_) = role_repo::find_by_id(db, id).await? else {
+        return Err(AppError::Biz(format!("角色不存在：{id}")));
+    };
+    role_repo::soft_delete_role(db, id).await?;
+    Ok(())
 }
 
 /// 更新角色状态（启用/禁用）；内置超管角色 `super` 不允许修改状态（审计字段由 repo 盖章）。

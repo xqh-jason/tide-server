@@ -40,6 +40,7 @@ pub struct UserResp {
     pub updated_by_name: String,
 }
 
+/// `sys_user::Model` → `UserResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
 impl From<sys_user::Model> for UserResp {
     fn from(m: sys_user::Model) -> Self {
         Self {
@@ -59,6 +60,7 @@ impl From<sys_user::Model> for UserResp {
     }
 }
 
+/// 按名称映射填充 `UserResp` 的创建人/更新人显示名（查不到给空串）。
 impl UserRefNames for UserResp {
     fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
         self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
@@ -106,6 +108,7 @@ pub struct UserInfoResp {
 }
 
 impl UserInfoResp {
+    /// 从用户 Model 与登录态组装用户信息响应（roles 取自 AuthUser）。
     pub fn from_model(user: sys_user::Model, auth: &AuthUser) -> Self {
         Self {
             user_info: UserResp::from(user),

@@ -89,6 +89,7 @@ pub struct DeleteBatchReq {
     pub ids: Vec<u64>,
 }
 
+/// `sys_operation_log::Model` → `OperationLogItem` 字段搬运；人名字段留空待 `UserRefNames` 填充。
 impl From<sys_operation_log::Model> for OperationLogItem {
     fn from(m: sys_operation_log::Model) -> Self {
         Self {
@@ -107,6 +108,7 @@ impl From<sys_operation_log::Model> for OperationLogItem {
     }
 }
 
+/// `sys_operation_log::Model` → `OperationLogDetail` 字段搬运；人名字段留空待 `UserRefNames` 填充。
 impl From<sys_operation_log::Model> for OperationLogDetail {
     fn from(m: sys_operation_log::Model) -> Self {
         Self {

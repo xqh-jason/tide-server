@@ -40,6 +40,7 @@ pub struct DictionaryResp {
     pub updated_by_name: String,
 }
 
+/// `sys_dictionary::Model` → `DictionaryResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
 impl From<sys_dictionary::Model> for DictionaryResp {
     fn from(m: sys_dictionary::Model) -> Self {
         Self {
@@ -58,6 +59,7 @@ impl From<sys_dictionary::Model> for DictionaryResp {
     }
 }
 
+/// 按名称映射填充 `DictionaryResp` 的创建人/更新人显示名（查不到给空串）。
 impl UserRefNames for DictionaryResp {
     fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
         self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
@@ -149,6 +151,7 @@ pub struct DictionaryDetailOption {
     pub sort: i32,
 }
 
+/// `sys_dictionary_detail::Model` → `DictionaryDetailOption` 字段搬运；人名字段留空待 `UserRefNames` 填充。
 impl From<sys_dictionary_detail::Model> for DictionaryDetailOption {
     fn from(m: sys_dictionary_detail::Model) -> Self {
         Self {
@@ -196,6 +199,7 @@ pub struct DictionaryDetailResp {
     pub updated_by_name: String,
 }
 
+/// `sys_dictionary_detail::Model` → `DictionaryDetailResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
 impl From<sys_dictionary_detail::Model> for DictionaryDetailResp {
     fn from(m: sys_dictionary_detail::Model) -> Self {
         Self {
@@ -216,6 +220,7 @@ impl From<sys_dictionary_detail::Model> for DictionaryDetailResp {
     }
 }
 
+/// 按名称映射填充 `DictionaryDetailResp` 的创建人/更新人显示名（查不到给空串）。
 impl UserRefNames for DictionaryDetailResp {
     fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
         self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();

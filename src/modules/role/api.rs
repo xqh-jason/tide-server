@@ -55,19 +55,6 @@ pub async fn update_role(depot: &mut Depot, body: JsonBody<UpdateRoleReq>) -> Ap
     Ok(ApiResponse::ok(resp))
 }
 
-/// 更新角色状态（POST + JSON body：`{ "id": ... }`）：判存在后更新状态，不存在返回业务错误。
-#[endpoint]
-pub async fn update_role_status(
-    depot: &mut Depot,
-    body: JsonBody<UpdateRoleStatusReq>,
-) -> ApiResult<()> {
-    let state = AppState::from_depot(depot)?;
-    let req = body.into_inner();
-    let auth = AuthUser::from_depot(depot)?;
-    role_service::update_role_status(&state.db, auth.user_id, &req).await?;
-    Ok(ApiResponse::ok(()))
-}
-
 /// 角色详情（POST + JSON body：`{ "id": ... }`）：按 id 查询单个角色，不存在返回业务错误。
 #[endpoint]
 pub async fn get_role(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<RoleResp> {
@@ -86,5 +73,18 @@ pub async fn delete_role(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     role_service::delete_role(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(()))
+}
+
+/// 更新角色状态（POST + JSON body：`{ "id": ... }`）：判存在后更新状态，不存在返回业务错误。
+#[endpoint]
+pub async fn update_role_status(
+    depot: &mut Depot,
+    body: JsonBody<UpdateRoleStatusReq>,
+) -> ApiResult<()> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let auth = AuthUser::from_depot(depot)?;
+    role_service::update_role_status(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(()))
 }
