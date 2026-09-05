@@ -1,0 +1,293 @@
+//! 系统配置数据访问：键值参数（sys_config）与网站设置（sys_site_config）。
+//!
+//! 审计字段由 repo 统一盖章；查重含软删占位与 dictionary 的 type 同语义。规格依据：
+//! docs/superpowers/specs/2026-09-05-w5-config-design.md §3 / §6。
+
+use sea_orm::ActiveValue::Set;
+use sea_orm::entity::prelude::*;
+use sea_orm::{Condition, DatabaseConnection, QueryOrder};
+
+use crate::entity::{sys_config, sys_site_config};
+use crate::modules::config::dto::ConfigFilter;
+
+// —— 键值参数 ——
+
+/// 参数：按主键查有效记录（排除软删）。
+pub async fn find_config_by_id(
+    db: &DatabaseConnection,
+    id: u64,
+) -> anyhow::Result<Option<sys_config::Model>> {
+    let model = sys_config::Entity::find()
+        .filter(sys_config::Column::Id.eq(id))
+        .filter(sys_config::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+    Ok(model)
+}
+
+/// 参数：分页 + 动态过滤（keyword 对 name / key 模糊），排除软删，created_at 倒序。
+pub async fn find_config_page(
+    db: &DatabaseConnection,
+    filter: &ConfigFilter,
+    page_index: u64,
+    page_size: u64,
+) -> anyhow::Result<crate::utils::PageData<sys_config::Model>> {
+    let mut cond = Condition::all();
+
+    if let Some(keyword) = filter.keyword.as_deref() {
+        cond = cond.add(
+            Condition::any()
+                .add(sys_config::Column::ConfigName.like(format!("%{}%", keyword)))
+                .add(sys_config::Column::ConfigKey.like(format!("%{}%", keyword))),
+        );
+    }
+    let select = sys_config::Entity::find()
+        .filter(cond)
+        .filter(sys_config::Column::DeletedAt.is_null())
+        .order_by_desc(sys_config::Column::CreatedAt);
+
+    let page = crate::utils::paginate(select, db, page_index, page_size).await?;
+    Ok(page)
+}
+
+/// 参数：按 config_key 查记录——**含软删占位**，不过滤 deleted_at。
+/// 供创建/更新查重：键名删除后仍占位，防止历史引用歧义。
+pub async fn find_config_by_key_include_deleted(
+    db: &DatabaseConnection,
+    key: &str,
+) -> anyhow::Result<Option<sys_config::Model>> {
+    let model = sys_config::Entity::find()
+        .filter(sys_config::Column::ConfigKey.eq(key))
+        .one(db)
+        .await?;
+    Ok(model)
+}
+
+/// 参数：创建。`actor_id` 为操作人，审计字段由 repo 统一盖章双写。
+pub async fn create_config(
+    db: &DatabaseConnection,
+    model: sys_config::ActiveModel,
+    actor_id: u64,
+) -> anyhow::Result<sys_config::Model> {
+    let mut model = model;
+    model.created_by = Set(actor_id);
+    model.updated_by = Set(actor_id);
+    let model = model.insert(db).await?;
+    Ok(model)
+}
+
+/// 参数：更新（主键必须已设置）。审计字段由 repo 统一盖章：只刷新更新人。
+pub async fn update_config(
+    db: &DatabaseConnection,
+    model: sys_config::ActiveModel,
+    actor_id: u64,
+) -> anyhow::Result<sys_config::Model> {
+    let mut model = model;
+    model.updated_by = Set(actor_id);
+    let model = model.update(db).await?;
+    Ok(model)
+}
+
+/// 参数：软删单条，返回是否实际删除（不存在或已软删返回 false）。
+pub async fn soft_delete_config(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
+    let model = find_config_by_id(db, id).await?;
+    if let Some(model) = model {
+        let mut model: sys_config::ActiveModel = model.into();
+        model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
+        model.update(db).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+// —— 网站设置 ——
+
+/// 网站设置：查单行（恒 id=1）。
+pub async fn find_site_config(
+    db: &DatabaseConnection,
+) -> anyhow::Result<Option<sys_site_config::Model>> {
+    let model = sys_site_config::Entity::find()
+        .filter(sys_site_config::Column::Id.eq(1))
+        .one(db)
+        .await?;
+    Ok(model)
+}
+
+/// 网站设置：更新单行（主键必须已设置 id=1）。审计字段由 repo 统一盖章：只刷新更新人。
+pub async fn update_site_config(
+    db: &DatabaseConnection,
+    model: sys_site_config::ActiveModel,
+    actor_id: u64,
+) -> anyhow::Result<sys_site_config::Model> {
+    let mut model = model;
+    model.updated_by = Set(actor_id);
+    let model = model.update(db).await?;
+    Ok(model)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::sys_config;
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    };
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn unique(prefix: &str) -> String {
+        format!(
+            "{prefix}_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    async fn test_db() -> DatabaseConnection {
+        let config = crate::infra::config::Config::load().unwrap();
+        Database::connect(&config.database.url).await.unwrap()
+    }
+
+    /// 造一条参数记录；key 用唯一名防测试间冲突。
+    async fn seed_config(
+        db: &DatabaseConnection,
+        key: &str,
+        created_at: chrono::NaiveDateTime,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_config::Model {
+        sys_config::ActiveModel {
+            config_name: Set(format!("参数{key}")),
+            config_key: Set(key.to_string()),
+            config_value: Set("v".to_string()),
+            remark: Set(String::new()),
+            created_at: Set(created_at),
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {
+        sys_config::Entity::delete_many()
+            .filter(sys_config::Column::Id.is_in(ids.iter().copied()))
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn find_config_page_filters_by_keyword_sorts_desc_excludes_deleted() {
+        let db = test_db().await;
+        let kw = unique("repo_cfg");
+        let base = chrono::Local::now().naive_local();
+
+        // 插入顺序（id 升序）与 created_at 新旧相反：a 最新 id 最小，
+        // 「按 created_at 倒序」得 [a,b,c]，「按 id 倒序」得 [c,b,a]，两实现可区分。
+        let a = seed_config(&db, &format!("{kw}a"), base, None).await;
+        let b = seed_config(
+            &db,
+            &format!("{kw}b"),
+            base - chrono::Duration::seconds(2),
+            None,
+        )
+        .await;
+        let c = seed_config(
+            &db,
+            &format!("{kw}c"),
+            base - chrono::Duration::seconds(3),
+            None,
+        )
+        .await;
+        let deleted = seed_config(
+            &db,
+            &format!("{kw}d"),
+            base,
+            Some(chrono::Local::now().naive_local()),
+        )
+        .await;
+
+        let page = find_config_page(&db, &ConfigFilter { keyword: Some(kw) }, 0, 10)
+            .await
+            .unwrap();
+
+        cleanup(&db, &[a.id, b.id, c.id, deleted.id]).await;
+
+        assert_eq!(page.total, 3, "keyword 应命中 3 条活记录，软删不进分页");
+        let ids: Vec<u64> = page.items.iter().map(|m| m.id).collect();
+        assert_eq!(
+            ids,
+            vec![a.id, b.id, c.id],
+            "应按 created_at 倒序（a 最新 id 最小）"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_config_by_key_includes_soft_deleted_placeholder() {
+        let db = test_db().await;
+        let key = unique("cfg_key");
+        let deleted = seed_config(
+            &db,
+            &key,
+            chrono::Local::now().naive_local(),
+            Some(chrono::Local::now().naive_local()),
+        )
+        .await;
+
+        let hit = find_config_by_key_include_deleted(&db, &key).await.unwrap();
+        cleanup(&db, &[deleted.id]).await;
+
+        assert!(
+            hit.is_some(),
+            "查重必须含软删占位：键名删除后仍应视为已占用"
+        );
+    }
+
+    #[tokio::test]
+    async fn soft_delete_config_marks_deleted_and_second_call_returns_false() {
+        let db = test_db().await;
+        let a = seed_config(
+            &db,
+            &unique("cfg_del"),
+            chrono::Local::now().naive_local(),
+            None,
+        )
+        .await;
+
+        let first = soft_delete_config(&db, a.id).await.unwrap();
+        let after = find_config_by_id(&db, a.id).await.unwrap();
+        let second = soft_delete_config(&db, a.id).await.unwrap();
+
+        cleanup(&db, &[a.id]).await;
+
+        assert!(first, "首次软删应返回 true");
+        assert!(after.is_none(), "软删后 find_config_by_id 不可见");
+        assert!(!second, "重复软删应返回 false");
+    }
+
+    #[tokio::test]
+    async fn site_config_seed_row_exists_and_update_succeeds() {
+        let db = test_db().await;
+
+        let before = find_site_config(&db).await.unwrap();
+        assert!(before.is_some(), "迁移种子行应存在（id=1）");
+        assert_eq!(before.unwrap().id, 1);
+
+        // 更新：主键已设置（从查到的 Model 转 ActiveModel），走 repo 盖章路径
+        let model = find_site_config(&db).await.unwrap().unwrap();
+        let mut am: sys_site_config::ActiveModel = model.into();
+        am.name = Set("迁移验证临时名".to_string());
+        let updated = update_site_config(&db, am, 0).await.unwrap();
+
+        // 恢复种子行的展示名，避免污染默认站点设置
+        let model = find_site_config(&db).await.unwrap().unwrap();
+        let mut am: sys_site_config::ActiveModel = model.into();
+        am.name = Set("salvo-vben-admin".to_string());
+        update_site_config(&db, am, 0).await.unwrap();
+
+        assert_eq!(updated.name, "迁移验证临时名");
+    }
+}

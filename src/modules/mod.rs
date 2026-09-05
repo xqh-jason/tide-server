@@ -41,6 +41,7 @@
 
 pub mod auth;
 pub mod captcha;
+pub mod config;
 pub mod dictionary;
 pub mod file;
 pub mod login_log;

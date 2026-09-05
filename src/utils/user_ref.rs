@@ -9,7 +9,8 @@
 //! 本文件当前仅含失败测试（TDD 红阶段），待实现符号：`UserRefIds`、
 //! `UserRefNames`、`dedup_ids`、`find_user_name_map_by_ids`、`fill_user_names`。
 use crate::entity::{
-    sys_api, sys_dictionary, sys_dictionary_detail, sys_file, sys_menu, sys_role, sys_user,
+    sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_menu, sys_role,
+    sys_site_config, sys_user,
 };
 use std::collections::HashMap;
 
@@ -113,6 +114,18 @@ impl UserRefIds for sys_dictionary_detail::Model {
 }
 
 impl UserRefIds for sys_file::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for sys_config::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for sys_site_config::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         vec![self.created_by, self.updated_by]
     }

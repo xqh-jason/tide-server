@@ -76,6 +76,15 @@ pub fn build(state: AppState) -> Router {
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
                         .push(crate::modules::file::routes()),
-                ),
+                )
+                // 参数配置：POST /api/v1/config/{list,create,update,get,delete}
+                .push(
+                    Router::with_path("config")
+                        .hoop(AuthRequired)
+                        .hoop(OperationLog)
+                        .push(crate::modules::config::routes()),
+                )
+                // 网站设置：GET /api/v1/site-config/get（公开）+ POST update（子路由自挂中间件）
+                .push(Router::with_path("site-config").push(crate::modules::config::site_routes())),
         )
 }
