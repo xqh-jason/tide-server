@@ -6,6 +6,7 @@ pub struct Config {
     pub server: Server,
     pub database: Database,
     pub jwt: Jwt,
+    pub upload: Upload,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -14,6 +15,31 @@ pub struct Server {
     pub port: u16,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct Upload {
+    /// 文件落盘目录（相对进程工作目录或绝对路径均可）
+    #[serde(default = "default_upload_dir")]
+    pub dir: String,
+    /// 单文件大小上限（MB）
+    #[serde(default = "default_max_size_mb")]
+    pub max_size_mb: u64,
+    /// 扩展名白名单（小写、去点）；必填，缺失时启动即失败，避免静默拒绝所有上传
+    pub allows: Vec<String>,
+}
+
+fn default_upload_dir() -> String {
+    "./uploads".to_string()
+}
+
+fn default_max_size_mb() -> u64 {
+    10
+}
+
+impl Upload {
+    pub fn max_size_bytes(&self) -> u64 {
+        self.max_size_mb * 1024 * 1024
+    }
+}
 #[derive(Debug, Clone, Deserialize)]
 pub struct Database {
     pub url: String,
@@ -37,6 +63,12 @@ impl Config {
             .try_deserialize()?;
         if cfg.jwt.ttl_seconds <= 0 {
             anyhow::bail!("config.jwt.ttl_seconds 必须大于 0");
+        }
+        if cfg.upload.max_size_mb == 0 {
+            anyhow::bail!("config.upload.max_size_mb 必须大于 0");
+        }
+        if cfg.upload.dir.trim().is_empty() {
+            anyhow::bail!("config.upload.dir 不能为空");
         }
         Ok(cfg)
     }

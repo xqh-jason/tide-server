@@ -41,6 +41,7 @@
 
 pub mod auth;
 pub mod dictionary;
+pub mod file;
 pub mod login_log;
 pub mod menu;
 pub mod operation_log;

@@ -31,6 +31,8 @@ sea-orm = { version = "1", features = [
     "with-json",
 ] }
 chrono = { version = "0.4.20", features = ["serde"] }
+# W5-4 文件上传：存储名 <uuid v4>.<ext> 生成（simple hex，防覆盖与路径穿越）
+uuid = { version = "1", features = ["v4"] }
 # 密码哈希（W2 认证底座：注册/登录共用）
 argon2 = "0.5"
 # JWT（W2 认证：签发/校验）。10.x 必须显式指定一个加密提供者：

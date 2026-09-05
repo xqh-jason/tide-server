@@ -67,6 +67,13 @@ pub fn build(state: AppState) -> Router {
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
                         .push(crate::modules::login_log::routes()),
+                )
+                // 文件上传：POST /api/v1/file/{list,upload,get,delete} + GET /api/v1/file/download
+                .push(
+                    Router::with_path("file")
+                        .hoop(AuthRequired)
+                        .hoop(OperationLog)
+                        .push(crate::modules::file::routes()),
                 ),
         )
 }

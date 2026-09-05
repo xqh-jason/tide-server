@@ -1,0 +1,22 @@
+{
+  "domain": "file",
+  "table": "sys_file",
+  "comment": "文件上传记录",
+  "fields": [
+    { "name": "id", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "primary": true, "auto_increment": true },
+    { "name": "name", "rust_type": "String", "sql_type": "VARCHAR(255)", "optional": false, "comment": "原始文件名（含扩展名，下载时用于 Content-Disposition）" },
+    { "name": "stored_name", "rust_type": "String", "sql_type": "VARCHAR(255)", "optional": false, "comment": "磁盘存储名：<uuid>.<ext>（唯一，列表按此定位文件）" },
+    { "name": "ext", "rust_type": "String", "sql_type": "VARCHAR(20)", "optional": true, "default": "", "comment": "小写扩展名（白名单校验依据）" },
+    { "name": "mime", "rust_type": "String", "sql_type": "VARCHAR(100)", "optional": true, "default": "", "comment": "Content-Type" },
+    { "name": "size", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "optional": true, "default": 0, "comment": "字节数" },
+    { "name": "created_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
+    { "name": "updated_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
+    { "name": "created_by", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "上传人 ID" },
+    { "name": "updated_by", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "更新人 ID" },
+    { "name": "deleted_at", "rust_type": "Option<DateTime>", "sql_type": "DATETIME", "readonly": true, "soft_delete": true }
+  ],
+  "unique_fields": ["stored_name"],
+  "filters": [
+    { "field": "name", "kind": "keyword" }
+  ]
+}
