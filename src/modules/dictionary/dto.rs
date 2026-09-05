@@ -40,7 +40,7 @@ pub struct DictionaryResp {
     pub updated_by_name: String,
 }
 
-/// `sys_dictionary::Model` → `DictionaryResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
+/// `sys_dictionary::Model` → `DictionaryResp` 字段搬运。
 impl From<sys_dictionary::Model> for DictionaryResp {
     fn from(m: sys_dictionary::Model) -> Self {
         Self {
@@ -151,7 +151,7 @@ pub struct DictionaryDetailOption {
     pub sort: i32,
 }
 
-/// `sys_dictionary_detail::Model` → `DictionaryDetailOption` 字段搬运；人名字段留空待 `UserRefNames` 填充。
+/// `sys_dictionary_detail::Model` → `DictionaryDetailOption` 字段搬运。
 impl From<sys_dictionary_detail::Model> for DictionaryDetailOption {
     fn from(m: sys_dictionary_detail::Model) -> Self {
         Self {
@@ -199,7 +199,7 @@ pub struct DictionaryDetailResp {
     pub updated_by_name: String,
 }
 
-/// `sys_dictionary_detail::Model` → `DictionaryDetailResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
+/// `sys_dictionary_detail::Model` → `DictionaryDetailResp` 字段搬运。
 impl From<sys_dictionary_detail::Model> for DictionaryDetailResp {
     fn from(m: sys_dictionary_detail::Model) -> Self {
         Self {

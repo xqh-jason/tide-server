@@ -29,7 +29,7 @@ pub struct LoginLogResp {
     pub updated_at: String,
 }
 
-/// `sys_login_log::Model` → `LoginLogResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
+/// `sys_login_log::Model` → `LoginLogResp` 字段搬运。
 impl From<sys_login_log::Model> for LoginLogResp {
     fn from(m: sys_login_log::Model) -> Self {
         Self {

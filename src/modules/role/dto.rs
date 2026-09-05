@@ -39,7 +39,7 @@ pub struct RoleResp {
     pub updated_by_name: String,
 }
 
-/// `sys_role::Model` → `RoleResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
+/// `sys_role::Model` → `RoleResp` 字段搬运。
 impl From<sys_role::Model> for RoleResp {
     fn from(m: sys_role::Model) -> Self {
         Self {

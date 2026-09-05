@@ -86,7 +86,7 @@ pub struct MenuResp {
     pub updated_by_name: String,
 }
 
-/// `sys_menu::Model` → `MenuResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
+/// `sys_menu::Model` → `MenuResp` 字段搬运。
 impl From<sys_menu::Model> for MenuResp {
     fn from(m: sys_menu::Model) -> Self {
         Self {

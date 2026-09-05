@@ -39,7 +39,7 @@ pub struct ApiResp {
     pub updated_by_name: String,
 }
 
-/// `sys_api::Model` → `ApiResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
+/// `sys_api::Model` → `ApiResp` 字段搬运。
 impl From<sys_api::Model> for ApiResp {
     fn from(m: sys_api::Model) -> Self {
         Self {

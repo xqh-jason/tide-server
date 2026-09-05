@@ -40,7 +40,7 @@ pub struct UserResp {
     pub updated_by_name: String,
 }
 
-/// `sys_user::Model` → `UserResp` 字段搬运；人名字段留空待 `UserRefNames` 填充。
+/// `sys_user::Model` → `UserResp` 字段搬运。
 impl From<sys_user::Model> for UserResp {
     fn from(m: sys_user::Model) -> Self {
         Self {
