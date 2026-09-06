@@ -137,6 +137,18 @@ pub struct MenuListReq {
     pub status: Option<i8>,
     /// 菜单类型精确过滤：`1` 目录/页面、`2` 外链、`3` 按钮；不传查全部
     pub menu_type: Option<i8>,
+    /// 创建人 ID 精确过滤（前端用户选择器回填 id）；不传查全部
+    pub created_by: Option<u64>,
+    /// 更新人 ID 精确过滤；不传查全部
+    pub updated_by: Option<u64>,
+    /// 创建时间范围起（yyyy-MM-dd[ HH:mm:ss]，含边界）；不传查全部
+    pub created_at_begin: Option<String>,
+    /// 创建时间范围止（含边界）；不传查全部
+    pub created_at_end: Option<String>,
+    /// 更新时间范围起（同上格式）；不传查全部
+    pub updated_at_begin: Option<String>,
+    /// 更新时间范围止（含边界）；不传查全部
+    pub updated_at_end: Option<String>,
 }
 
 /// 菜单分页过滤条件（repo 层入参）：过滤字段与分页参数分离。
@@ -145,6 +157,12 @@ pub struct MenuFilter {
     pub keyword: Option<String>,
     pub status: Option<i8>,
     pub menu_type: Option<i8>,
+    pub created_by: Option<u64>,
+    pub updated_by: Option<u64>,
+    pub created_at_begin: Option<chrono::NaiveDateTime>,
+    pub created_at_end: Option<chrono::NaiveDateTime>,
+    pub updated_at_begin: Option<chrono::NaiveDateTime>,
+    pub updated_at_end: Option<chrono::NaiveDateTime>,
 }
 
 /// 创建菜单请求：可选字段有默认值（sort=0 / keep_alive=0 / hidden=0 / menu_type=1 / status=1）。

@@ -165,9 +165,7 @@ pub async fn update_site_config(
 mod tests {
     use super::*;
     use crate::entity::sys_config;
-    use sea_orm::{
-        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
-    };
+    use sea_orm::{ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

@@ -31,6 +31,25 @@ pub async fn find_page(
 
     if let Some(keyword) = filter.keyword.as_deref() {
         cond = cond.add(sys_file::Column::Name.like(format!("%{}%", keyword)));
+        // 审计过滤：人字段精确（种子/系统写入为 0），时间为含边界范围
+        if let Some(v) = filter.created_by {
+            cond = cond.add(sys_file::Column::CreatedBy.eq(v));
+        }
+        if let Some(v) = filter.updated_by {
+            cond = cond.add(sys_file::Column::UpdatedBy.eq(v));
+        }
+        if let Some(v) = filter.created_at_begin {
+            cond = cond.add(sys_file::Column::CreatedAt.gte(v));
+        }
+        if let Some(v) = filter.created_at_end {
+            cond = cond.add(sys_file::Column::CreatedAt.lte(v));
+        }
+        if let Some(v) = filter.updated_at_begin {
+            cond = cond.add(sys_file::Column::UpdatedAt.gte(v));
+        }
+        if let Some(v) = filter.updated_at_end {
+            cond = cond.add(sys_file::Column::UpdatedAt.lte(v));
+        }
     }
     let select = sys_file::Entity::find()
         .filter(cond)
@@ -153,9 +172,17 @@ mod tests {
         .await;
         let other = seed(&db, "其他文件.txt", base, None).await;
 
-        let page = find_page(&db, &FileFilter { keyword: Some(kw) }, 0, 10)
-            .await
-            .unwrap();
+        let page = find_page(
+            &db,
+            &FileFilter {
+                keyword: Some(kw),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
 
         cleanup(&db, &[a.id, b.id, c.id, deleted.id, other.id]).await;
 
@@ -192,5 +219,160 @@ mod tests {
         assert!(first, "首次软删应返回 true");
         assert!(after.is_none(), "软删后 find_by_id 不可见");
         assert!(!second, "重复软删应返回 false");
+    }
+
+    /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
+    #[tokio::test]
+    async fn find_page_filters_by_audit_columns_and_time_range() {
+        let db = test_db().await;
+        let kw = unique("audit_page");
+        let a = seed(
+            &db,
+            &format!("{kw}a.txt"),
+            chrono::Local::now().naive_local(),
+            None,
+        )
+        .await;
+        let b = seed(
+            &db,
+            &format!("{kw}b.txt"),
+            chrono::Local::now().naive_local(),
+            None,
+        )
+        .await;
+
+        let base = chrono::Local::now().naive_local();
+        // update_many 盖不同的审计人与时间：避免为测试改各域 seed 夹具
+        use sea_orm::sea_query::Expr;
+        for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
+            sys_file::Entity::update_many()
+                .filter(sys_file::Column::Id.eq(row))
+                .col_expr(sys_file::Column::CreatedBy, Expr::value(by))
+                .col_expr(sys_file::Column::UpdatedBy, Expr::value(by))
+                .col_expr(
+                    sys_file::Column::CreatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .col_expr(
+                    sys_file::Column::UpdatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        let all = find_page(
+            &db,
+            &FileFilter {
+                keyword: Some(kw.clone()),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(all.total, 2, "前置：keyword 应命中两行");
+        let by_creator = find_page(
+            &db,
+            &FileFilter {
+                keyword: Some(kw.clone()),
+                created_by: Some(7),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_creator.total, 1, "created_by=7 应只命中 a");
+        let by_updater = find_page(
+            &db,
+            &FileFilter {
+                keyword: Some(kw.clone()),
+                updated_by: Some(8),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_updater.total, 1, "updated_by=8 应只命中 b");
+        let ghost = find_page(
+            &db,
+            &FileFilter {
+                keyword: Some(kw.clone()),
+                created_by: Some(9_999_999_999),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ghost.total, 0, "不存在的创建人应过滤为空");
+        let created_after = find_page(
+            &db,
+            &FileFilter {
+                keyword: Some(kw.clone()),
+                created_at_begin: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created_after.total, 1, "begin=base-7s 应只剩 b（晚于阈值）");
+        let created_before = find_page(
+            &db,
+            &FileFilter {
+                keyword: Some(kw.clone()),
+                created_at_end: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created_before.total, 1, "end=base-7s 应只剩 a（早于阈值）");
+        let updated_after = find_page(
+            &db,
+            &FileFilter {
+                keyword: Some(kw.clone()),
+                updated_at_begin: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            updated_after.total, 1,
+            "updated_at 范围与 created_at 同机制"
+        );
+        let updated_before = find_page(
+            &db,
+            &FileFilter {
+                keyword: Some(kw.clone()),
+                updated_at_end: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated_before.total, 1);
+
+        sys_file::Entity::delete_many()
+            .filter(sys_file::Column::Id.is_in([a.id, b.id]))
+            .exec(&db)
+            .await
+            .unwrap();
     }
 }

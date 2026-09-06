@@ -18,6 +18,24 @@ pub async fn page_apis(
             method: req.method.clone(),
             status: req.status,
             keyword: req.keyword.clone(),
+            created_by: req.created_by,
+            updated_by: req.updated_by,
+            created_at_begin: crate::utils::datetime::parse_datetime(
+                "createdAtBegin",
+                &req.created_at_begin,
+            )?,
+            created_at_end: crate::utils::datetime::parse_datetime(
+                "createdAtEnd",
+                &req.created_at_end,
+            )?,
+            updated_at_begin: crate::utils::datetime::parse_datetime(
+                "updatedAtBegin",
+                &req.updated_at_begin,
+            )?,
+            updated_at_end: crate::utils::datetime::parse_datetime(
+                "updatedAtEnd",
+                &req.updated_at_end,
+            )?,
         },
         req.page.page_index(),
         req.page.page_size(),

@@ -79,6 +79,25 @@ pub async fn find_page(
         cond = cond.add(sys_user::Column::Status.eq(s));
     }
 
+    // 审计过滤：人字段精确（种子/系统写入为 0），时间为含边界范围
+    if let Some(v) = filter.created_by {
+        cond = cond.add(sys_user::Column::CreatedBy.eq(v));
+    }
+    if let Some(v) = filter.updated_by {
+        cond = cond.add(sys_user::Column::UpdatedBy.eq(v));
+    }
+    if let Some(v) = filter.created_at_begin {
+        cond = cond.add(sys_user::Column::CreatedAt.gte(v));
+    }
+    if let Some(v) = filter.created_at_end {
+        cond = cond.add(sys_user::Column::CreatedAt.lte(v));
+    }
+    if let Some(v) = filter.updated_at_begin {
+        cond = cond.add(sys_user::Column::UpdatedAt.gte(v));
+    }
+    if let Some(v) = filter.updated_at_end {
+        cond = cond.add(sys_user::Column::UpdatedAt.lte(v));
+    }
     let select = sys_user::Entity::find()
         .filter(cond)
         .filter(sys_user::Column::DeletedAt.is_null());
@@ -273,6 +292,7 @@ mod tests {
             &UserFilter {
                 keyword: Some(username.clone()),
                 status: None,
+                ..Default::default()
             },
             0,
             10,
@@ -288,6 +308,7 @@ mod tests {
             &UserFilter {
                 keyword: Some("no_such_keyword_xyz".to_string()),
                 status: None,
+                ..Default::default()
             },
             0,
             10,
@@ -411,6 +432,7 @@ mod tests {
             &UserFilter {
                 keyword: Some(keyword),
                 status: None,
+                ..Default::default()
             },
             0,
             10,
@@ -678,6 +700,165 @@ mod tests {
 
         cleanup_users(&db, &[created.id, actor_id]).await;
         sys_role::Entity::delete_by_id(role.id)
+            .exec(&db)
+            .await
+            .unwrap();
+    }
+
+    /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
+    #[tokio::test]
+    async fn find_page_filters_by_audit_columns_and_time_range() {
+        let db = test_db().await;
+        let kw = unique_name("audit_page");
+        let a = sys_user::ActiveModel {
+            username: Set(format!("{kw}a")),
+            password: Set("x".to_string()),
+            nickname: Set("审计过滤".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let b = sys_user::ActiveModel {
+            username: Set(format!("{kw}b")),
+            password: Set("x".to_string()),
+            nickname: Set("审计过滤".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let base = chrono::Local::now().naive_local();
+        // update_many 盖不同的审计人与时间：避免为测试改各域 seed 夹具
+        use sea_orm::sea_query::Expr;
+        for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
+            sys_user::Entity::update_many()
+                .filter(sys_user::Column::Id.eq(row))
+                .col_expr(sys_user::Column::CreatedBy, Expr::value(by))
+                .col_expr(sys_user::Column::UpdatedBy, Expr::value(by))
+                .col_expr(
+                    sys_user::Column::CreatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .col_expr(
+                    sys_user::Column::UpdatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        let all = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(kw.clone()),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(all.total, 2, "前置：keyword 应命中两行");
+        let by_creator = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(kw.clone()),
+                created_by: Some(7),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_creator.total, 1, "created_by=7 应只命中 a");
+        let by_updater = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(kw.clone()),
+                updated_by: Some(8),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_updater.total, 1, "updated_by=8 应只命中 b");
+        let ghost = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(kw.clone()),
+                created_by: Some(9_999_999_999),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ghost.total, 0, "不存在的创建人应过滤为空");
+        let created_after = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(kw.clone()),
+                created_at_begin: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created_after.total, 1, "begin=base-7s 应只剩 b（晚于阈值）");
+        let created_before = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(kw.clone()),
+                created_at_end: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created_before.total, 1, "end=base-7s 应只剩 a（早于阈值）");
+        let updated_after = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(kw.clone()),
+                updated_at_begin: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            updated_after.total, 1,
+            "updated_at 范围与 created_at 同机制"
+        );
+        let updated_before = find_page(
+            &db,
+            &UserFilter {
+                keyword: Some(kw.clone()),
+                updated_at_end: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated_before.total, 1);
+
+        sys_user::Entity::delete_many()
+            .filter(sys_user::Column::Id.is_in([a.id, b.id]))
             .exec(&db)
             .await
             .unwrap();

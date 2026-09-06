@@ -82,6 +82,18 @@ pub struct UserListReq {
     pub keyword: Option<String>,
     /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,
+    /// 创建人 ID 精确过滤（前端用户选择器回填 id）；不传查全部
+    pub created_by: Option<u64>,
+    /// 更新人 ID 精确过滤；不传查全部
+    pub updated_by: Option<u64>,
+    /// 创建时间范围起（yyyy-MM-dd[ HH:mm:ss]，含边界）；不传查全部
+    pub created_at_begin: Option<String>,
+    /// 创建时间范围止（含边界）；不传查全部
+    pub created_at_end: Option<String>,
+    /// 更新时间范围起（同上格式）；不传查全部
+    pub updated_at_begin: Option<String>,
+    /// 更新时间范围止（含边界）；不传查全部
+    pub updated_at_end: Option<String>,
 }
 
 /// 用户分页过滤条件（repo 层入参）：过滤字段与分页参数分离，
@@ -90,6 +102,12 @@ pub struct UserListReq {
 pub struct UserFilter {
     pub keyword: Option<String>,
     pub status: Option<i8>,
+    pub created_by: Option<u64>,
+    pub updated_by: Option<u64>,
+    pub created_at_begin: Option<chrono::NaiveDateTime>,
+    pub created_at_end: Option<chrono::NaiveDateTime>,
+    pub updated_at_begin: Option<chrono::NaiveDateTime>,
+    pub updated_at_end: Option<chrono::NaiveDateTime>,
 }
 
 /// 按用户名查询请求（JSON body 源）：`{ "username": "..." }`。

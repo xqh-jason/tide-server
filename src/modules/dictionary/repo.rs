@@ -45,6 +45,25 @@ pub async fn find_dictionary_page(
         cond = cond.add(kw_cond);
     }
 
+    // 审计过滤：人字段精确（种子/系统写入为 0），时间为含边界范围
+    if let Some(v) = filter.created_by {
+        cond = cond.add(sys_dictionary::Column::CreatedBy.eq(v));
+    }
+    if let Some(v) = filter.updated_by {
+        cond = cond.add(sys_dictionary::Column::UpdatedBy.eq(v));
+    }
+    if let Some(v) = filter.created_at_begin {
+        cond = cond.add(sys_dictionary::Column::CreatedAt.gte(v));
+    }
+    if let Some(v) = filter.created_at_end {
+        cond = cond.add(sys_dictionary::Column::CreatedAt.lte(v));
+    }
+    if let Some(v) = filter.updated_at_begin {
+        cond = cond.add(sys_dictionary::Column::UpdatedAt.gte(v));
+    }
+    if let Some(v) = filter.updated_at_end {
+        cond = cond.add(sys_dictionary::Column::UpdatedAt.lte(v));
+    }
     let select = sys_dictionary::Entity::find()
         .filter(cond)
         .filter(sys_dictionary::Column::DeletedAt.is_null())
@@ -152,6 +171,25 @@ pub async fn find_detail_page(
     }
     if let Some(v) = &filter.status {
         cond = cond.add(sys_dictionary_detail::Column::Status.eq(*v));
+    }
+    // 审计过滤：人字段精确（种子/系统写入为 0），时间为含边界范围
+    if let Some(v) = filter.created_by {
+        cond = cond.add(sys_dictionary_detail::Column::CreatedBy.eq(v));
+    }
+    if let Some(v) = filter.updated_by {
+        cond = cond.add(sys_dictionary_detail::Column::UpdatedBy.eq(v));
+    }
+    if let Some(v) = filter.created_at_begin {
+        cond = cond.add(sys_dictionary_detail::Column::CreatedAt.gte(v));
+    }
+    if let Some(v) = filter.created_at_end {
+        cond = cond.add(sys_dictionary_detail::Column::CreatedAt.lte(v));
+    }
+    if let Some(v) = filter.updated_at_begin {
+        cond = cond.add(sys_dictionary_detail::Column::UpdatedAt.gte(v));
+    }
+    if let Some(v) = filter.updated_at_end {
+        cond = cond.add(sys_dictionary_detail::Column::UpdatedAt.lte(v));
     }
     let select = sys_dictionary_detail::Entity::find()
         .filter(cond)
@@ -356,6 +394,7 @@ mod tests {
             &DictionaryFilter {
                 keyword: Some(kw.clone()),
                 status: None,
+                ..Default::default()
             },
             0,
             10,
@@ -368,6 +407,7 @@ mod tests {
             &DictionaryFilter {
                 keyword: Some(kw.clone()),
                 status: Some(1),
+                ..Default::default()
             },
             0,
             10,
@@ -454,6 +494,7 @@ mod tests {
                 dictionary_id: Some(d1.id),
                 keyword: Some(kw.clone()),
                 status: None,
+                ..Default::default()
             },
             0,
             10,
@@ -466,6 +507,7 @@ mod tests {
                 dictionary_id: Some(d2.id),
                 keyword: None,
                 status: None,
+                ..Default::default()
             },
             0,
             10,
@@ -692,5 +734,313 @@ mod tests {
 
         cleanup(&db, &[dict.id]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;
+    }
+
+    /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
+    #[tokio::test]
+    async fn find_page_filters_by_audit_columns_and_time_range() {
+        let db = test_db().await;
+        let kw = unique("audit_page");
+        let a = seed_dictionary(&db, &format!("{kw}a"), &unique("audit_type"), 1, None).await;
+        let b = seed_dictionary(&db, &format!("{kw}b"), &unique("audit_type"), 1, None).await;
+
+        let base = chrono::Local::now().naive_local();
+        // update_many 盖不同的审计人与时间：避免为测试改各域 seed 夹具
+        use sea_orm::sea_query::Expr;
+        for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
+            sys_dictionary::Entity::update_many()
+                .filter(sys_dictionary::Column::Id.eq(row))
+                .col_expr(sys_dictionary::Column::CreatedBy, Expr::value(by))
+                .col_expr(sys_dictionary::Column::UpdatedBy, Expr::value(by))
+                .col_expr(
+                    sys_dictionary::Column::CreatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .col_expr(
+                    sys_dictionary::Column::UpdatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        let all = find_dictionary_page(
+            &db,
+            &DictionaryFilter {
+                keyword: Some(kw.clone()),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(all.total, 2, "前置：keyword 应命中两行");
+        let by_creator = find_dictionary_page(
+            &db,
+            &DictionaryFilter {
+                keyword: Some(kw.clone()),
+                created_by: Some(7),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_creator.total, 1, "created_by=7 应只命中 a");
+        let by_updater = find_dictionary_page(
+            &db,
+            &DictionaryFilter {
+                keyword: Some(kw.clone()),
+                updated_by: Some(8),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_updater.total, 1, "updated_by=8 应只命中 b");
+        let ghost = find_dictionary_page(
+            &db,
+            &DictionaryFilter {
+                keyword: Some(kw.clone()),
+                created_by: Some(9_999_999_999),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ghost.total, 0, "不存在的创建人应过滤为空");
+        let created_after = find_dictionary_page(
+            &db,
+            &DictionaryFilter {
+                keyword: Some(kw.clone()),
+                created_at_begin: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created_after.total, 1, "begin=base-7s 应只剩 b（晚于阈值）");
+        let created_before = find_dictionary_page(
+            &db,
+            &DictionaryFilter {
+                keyword: Some(kw.clone()),
+                created_at_end: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created_before.total, 1, "end=base-7s 应只剩 a（早于阈值）");
+        let updated_after = find_dictionary_page(
+            &db,
+            &DictionaryFilter {
+                keyword: Some(kw.clone()),
+                updated_at_begin: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            updated_after.total, 1,
+            "updated_at 范围与 created_at 同机制"
+        );
+        let updated_before = find_dictionary_page(
+            &db,
+            &DictionaryFilter {
+                keyword: Some(kw.clone()),
+                updated_at_end: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated_before.total, 1);
+
+        sys_dictionary::Entity::delete_many()
+            .filter(sys_dictionary::Column::Id.is_in([a.id, b.id]))
+            .exec(&db)
+            .await
+            .unwrap();
+    }
+
+    /// 字典项审计过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
+    #[tokio::test]
+    async fn find_detail_page_filters_by_audit_columns_and_time_range() {
+        let db = test_db().await;
+        let kw = unique("audit_detail");
+        let dict =
+            seed_dictionary(&db, &unique("audit_dict"), &unique("audit_dtype"), 1, None).await;
+        let a = seed_detail(
+            &db,
+            dict.id,
+            &format!("{kw}a"),
+            &format!("项{kw}a"),
+            0,
+            1,
+            None,
+        )
+        .await;
+        let b = seed_detail(
+            &db,
+            dict.id,
+            &format!("{kw}b"),
+            &format!("项{kw}b"),
+            0,
+            1,
+            None,
+        )
+        .await;
+        let base = chrono::Local::now().naive_local();
+        use sea_orm::sea_query::Expr;
+        for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
+            sys_dictionary_detail::Entity::update_many()
+                .filter(sys_dictionary_detail::Column::Id.eq(row))
+                .col_expr(sys_dictionary_detail::Column::CreatedBy, Expr::value(by))
+                .col_expr(sys_dictionary_detail::Column::UpdatedBy, Expr::value(by))
+                .col_expr(
+                    sys_dictionary_detail::Column::CreatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .col_expr(
+                    sys_dictionary_detail::Column::UpdatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+        let P = find_detail_page;
+        let all = find_detail_page(
+            &db,
+            &DictionaryDetailFilter {
+                keyword: Some(kw.clone()),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(all.total, 2, "前置：keyword 应命中两行");
+        let by_creator = find_detail_page(
+            &db,
+            &DictionaryDetailFilter {
+                keyword: Some(kw.clone()),
+                created_by: Some(7),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_creator.total, 1, "created_by=7 应只命中 a");
+        let by_updater = find_detail_page(
+            &db,
+            &DictionaryDetailFilter {
+                keyword: Some(kw.clone()),
+                updated_by: Some(8),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_updater.total, 1, "updated_by=8 应只命中 b");
+        let ghost = find_detail_page(
+            &db,
+            &DictionaryDetailFilter {
+                keyword: Some(kw.clone()),
+                created_by: Some(9_999_999_999),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ghost.total, 0, "不存在的创建人应过滤为空");
+        let created_after = find_detail_page(
+            &db,
+            &DictionaryDetailFilter {
+                keyword: Some(kw.clone()),
+                created_at_begin: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created_after.total, 1, "begin=base-7s 应只剩 b（晚于阈值）");
+        let created_before = find_detail_page(
+            &db,
+            &DictionaryDetailFilter {
+                keyword: Some(kw.clone()),
+                created_at_end: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created_before.total, 1, "end=base-7s 应只剩 a（早于阈值）");
+        let updated_after = find_detail_page(
+            &db,
+            &DictionaryDetailFilter {
+                keyword: Some(kw.clone()),
+                updated_at_begin: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            updated_after.total, 1,
+            "updated_at 范围与 created_at 同机制"
+        );
+        let updated_before = find_detail_page(
+            &db,
+            &DictionaryDetailFilter {
+                keyword: Some(kw.clone()),
+                updated_at_end: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated_before.total, 1);
+        sys_dictionary_detail::Entity::delete_many()
+            .filter(sys_dictionary_detail::Column::Id.is_in([a.id, b.id]))
+            .exec(&db)
+            .await
+            .unwrap();
+        sys_dictionary::Entity::delete_many()
+            .filter(sys_dictionary::Column::Id.eq(dict.id))
+            .exec(&db)
+            .await
+            .unwrap();
     }
 }
