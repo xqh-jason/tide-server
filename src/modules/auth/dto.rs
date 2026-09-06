@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// 登录请求：`{ "username": "...", "password": "...", "captcha_id": "...", "captcha_value": "..." }`。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginReq {
     /// 用户名
     pub username: String,
@@ -18,6 +19,7 @@ pub struct LoginReq {
 
 /// 登录响应：vben 期望 `{ token }`。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginResp {
     /// JWT 访问令牌，后续请求放入 `Authorization: Bearer <token>`
     pub token: String,

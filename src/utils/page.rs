@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// 由 `JsonBody<T>` 一个提取器整体反序列化；后续改字段名只改这里，
 /// 所有列表接口自动生效（机制保证统一，而非靠约定）。
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct PageQuery {
     /// 页码，从 1 开始；缺省 1
     pub page: Option<u64>,
@@ -34,6 +35,7 @@ impl PageQuery {
 /// 分页响应：`{ total, total_pages, items }`。
 /// `total` 为总条数，`total_pages` 为总页数，`items` 为当前页数据。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct PageResult<T> {
     /// 总条数
     pub total: u64,

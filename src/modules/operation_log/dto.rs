@@ -8,6 +8,7 @@ use crate::utils::PageQuery;
 
 /// 操作日志列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct OperationLogListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
@@ -30,6 +31,7 @@ pub struct OperationLogFilter {
 
 /// 操作日志列表项响应：不含 body / resp。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct OperationLogItem {
     /// 日志 id
     pub id: u64,
@@ -56,6 +58,7 @@ pub struct OperationLogItem {
 }
 /// 操作日志详情响应：含脱敏截断后的 body / resp。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct OperationLogDetail {
     /// 日志 id
     pub id: u64,
@@ -86,6 +89,7 @@ pub struct OperationLogDetail {
 }
 /// 批量删除请求。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteBatchReq {
     /// 要删除的记录 id 列表（软删；不存在的 id 自动忽略）
     pub ids: Vec<u64>,

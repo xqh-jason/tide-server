@@ -11,6 +11,7 @@ use crate::utils::user_ref::UserRefNames;
 
 /// 用户响应体（不含密码等敏感字段）。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UserResp {
     /// 用户 id
     pub id: u64,
@@ -72,6 +73,7 @@ impl UserRefNames for UserResp {
 /// 分页字段用 `#[serde(flatten)]` 内嵌 `PageQuery`（单点定义在 utils），
 /// 域过滤条件只在这里声明；handler 用一个 `JsonBody<UserListReq>` 提取全部。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UserListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
@@ -92,6 +94,7 @@ pub struct UserFilter {
 
 /// 按用户名查询请求（JSON body 源）：`{ "username": "..." }`。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UsernameReq {
     /// 要查询的用户名
     pub username: String,
@@ -99,6 +102,7 @@ pub struct UsernameReq {
 
 /// 用户信息响应（契约 §3.2）：`{ userInfo, roles }`，vben 的 fetchUserInfo 消费。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UserInfoResp {
     /// 用户基本信息（不含密码）
     #[serde(rename = "userInfo")]
@@ -119,6 +123,7 @@ impl UserInfoResp {
 
 /// 创建用户请求：`{ username, password, nickname?, phone?, email?, status?, role_ids?: [] }`
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateUserReq {
     /// 用户名（登录账号，全局唯一，含软删占位）
     pub username: String,
@@ -140,6 +145,7 @@ pub struct CreateUserReq {
 
 /// 更新用户请求。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateUserReq {
     /// 目标用户 id
     pub id: u64,
@@ -164,6 +170,7 @@ pub struct UpdateUserReq {
 /// 更新用户状态
 /// `{ id, status }`
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateUserStatusReq {
     /// 目标用户 id（内置 admin 不允许修改）
     pub id: u64,

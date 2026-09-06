@@ -5,6 +5,7 @@ use serde::Serialize;
 
 /// 验证码生成响应：`image` 为裸 base64 PNG（前端拼 `data:image/png;base64,` 前缀）。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CaptchaGenerateResp {
     /// 验证码 id，登录时原样回传
     pub captcha_id: String,

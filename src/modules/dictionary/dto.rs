@@ -13,6 +13,7 @@ use crate::utils::user_ref::UserRefNames;
 
 /// 字典类型响应体。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DictionaryResp {
     /// 字典类型 id
     pub id: u64,
@@ -69,6 +70,7 @@ impl UserRefNames for DictionaryResp {
 
 /// 字典类型列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DictionaryListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
@@ -88,6 +90,7 @@ pub struct DictionaryFilter {
 
 /// 创建字典类型请求。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateDictionaryReq {
     /// 类型名称（显示名）
     pub name: String,
@@ -101,6 +104,7 @@ pub struct CreateDictionaryReq {
 
 /// 更新字典类型请求（编辑表单全量提交）。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateDictionaryReq {
     /// 目标字典类型 id
     pub id: u64,
@@ -118,6 +122,7 @@ pub struct UpdateDictionaryReq {
 
 /// 按类型编码取启用字典项的请求。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DictionaryTypeReq {
     /// 字典类型编码（类型不存在或已停用返回业务错误）
     pub r#type: String,
@@ -125,6 +130,7 @@ pub struct DictionaryTypeReq {
 
 /// `get-by-type` 响应：类型信息 + 启用字典项（前端下拉一次拿全）。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DictionaryOptionResp {
     /// 字典类型 id
     pub id: u64,
@@ -138,6 +144,7 @@ pub struct DictionaryOptionResp {
 
 /// 下拉项：只带前端渲染需要的字段。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DictionaryDetailOption {
     /// 字典项 id
     pub id: u64,
@@ -168,6 +175,7 @@ impl From<sys_dictionary_detail::Model> for DictionaryDetailOption {
 
 /// 字典项响应体。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DictionaryDetailResp {
     /// 字典项 id
     pub id: u64,
@@ -230,6 +238,7 @@ impl UserRefNames for DictionaryDetailResp {
 
 /// 字典项列表请求。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DictionaryDetailListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
@@ -252,6 +261,7 @@ pub struct DictionaryDetailFilter {
 
 /// 创建字典项请求。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateDictionaryDetailReq {
     /// 所属字典类型 id（必须存在且未软删）
     pub dictionary_id: u64,
@@ -269,6 +279,7 @@ pub struct CreateDictionaryDetailReq {
 
 /// 更新字典项请求（编辑表单全量提交）。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateDictionaryDetailReq {
     /// 目标字典项 id
     pub id: u64,

@@ -8,6 +8,7 @@ use crate::utils::PageQuery;
 
 /// 登录日志响应体。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginLogResp {
     /// 日志 id
     pub id: u64,
@@ -48,6 +49,7 @@ impl From<sys_login_log::Model> for LoginLogResp {
 
 /// 登录日志列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginLogListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
@@ -70,6 +72,7 @@ pub struct LoginLogFilter {
 
 /// 批量删除请求。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteBatchReq {
     /// 要删除的记录 id 列表（软删；不存在的 id 自动忽略）
     pub ids: Vec<u64>,

@@ -14,6 +14,7 @@ use crate::utils::user_ref::UserRefNames;
 
 /// 文件响应体（列表 / 详情项）。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FileResp {
     /// 文件记录 id
     pub id: u64,
@@ -66,6 +67,7 @@ impl UserRefNames for FileResp {
 
 /// 上传响应体：列表字段基础上增加 `url`（前端拼接站点域名后可直接使用）。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FileUploadResp {
     #[serde(flatten)]
     pub file: FileResp,
@@ -75,6 +77,7 @@ pub struct FileUploadResp {
 
 /// 文件列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FileListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]

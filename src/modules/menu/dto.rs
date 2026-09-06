@@ -10,6 +10,7 @@ use crate::utils::user_ref::UserRefNames;
 
 /// vben 菜单树节点。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct VbenMenuItem {
     /// 路由路径（如 `/system`）
     pub path: String,
@@ -26,6 +27,7 @@ pub struct VbenMenuItem {
 
 /// 菜单节点 meta（vben 使用 camelCase 字段）。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct VbenMenuMeta {
     /// 菜单标题（侧边栏显示名）
     pub title: String,
@@ -43,6 +45,7 @@ pub struct VbenMenuMeta {
 
 /// 菜单管理响应体（含菜单完整字段）。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct MenuResp {
     /// 菜单 id
     pub id: u64,
@@ -123,6 +126,7 @@ impl UserRefNames for MenuResp {
 
 /// 菜单列表请求：分页 + keyword（title/name/path 模糊）/ status / menu_type 过滤。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct MenuListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
@@ -145,6 +149,7 @@ pub struct MenuFilter {
 
 /// 创建菜单请求：可选字段有默认值（sort=0 / keep_alive=0 / hidden=0 / menu_type=1 / status=1）。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateMenuReq {
     /// 父菜单 id；缺省 0（顶级）
     pub parent_id: Option<u64>,
@@ -175,6 +180,7 @@ pub struct CreateMenuReq {
 
 /// 更新菜单请求（编辑表单全量提交）：所有字段必填，语义同角色域全量更新。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateMenuReq {
     /// 目标菜单 id
     pub id: u64,

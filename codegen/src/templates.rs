@@ -801,6 +801,7 @@ use crate::utils::PageQuery;
 
 /// {comment}响应体。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct {camel}Resp {{
 {resp_fields}}}
 
@@ -813,6 +814,7 @@ impl From<{entity}::Model> for {camel}Resp {{
 
 /// {comment}列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct {camel}ListReq {{
     #[serde(flatten)]
     pub page: PageQuery,
@@ -825,11 +827,13 @@ pub struct {camel}Filter {{
 
 /// 创建{comment}请求。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Create{camel}Req {{
 {create_fields}}}
 
 /// 更新{comment}请求（编辑表单全量提交）。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Update{camel}Req {{
     pub id: u64,
 {update_fields}}}

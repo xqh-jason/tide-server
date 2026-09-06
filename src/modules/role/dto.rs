@@ -10,6 +10,7 @@ use crate::utils::user_ref::UserRefNames;
 
 /// 角色响应体。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct RoleResp {
     /// 角色 id
     pub id: u64,
@@ -69,6 +70,7 @@ impl UserRefNames for RoleResp {
 
 /// 角色列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct RoleListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
@@ -88,6 +90,7 @@ pub struct RoleFilter {
 
 /// 创建角色请求：`menu_ids` / `api_ids` 为 `Some` 时全量替换关联，`None` 表示不设置。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateRoleReq {
     /// 角色名称（显示名，全局唯一）
     pub role_name: String,
@@ -108,6 +111,7 @@ pub struct CreateRoleReq {
 /// 更新角色请求（编辑表单全量提交）：所有字段必填；
 /// `menu_ids` / `api_ids` 全量替换关联，传空数组即清空关联。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateRoleReq {
     /// 目标角色 id
     pub id: u64,
@@ -129,6 +133,7 @@ pub struct UpdateRoleReq {
 
 /// 更新角色状态请求：仅传 `id` / `status` 即可。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateRoleStatusReq {
     /// 目标角色 id（内置 `super` 不允许修改）
     pub id: u64,

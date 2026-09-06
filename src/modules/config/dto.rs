@@ -14,6 +14,7 @@ use crate::utils::user_ref::UserRefNames;
 
 /// 参数响应体。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ConfigResp {
     /// 参数 id
     pub id: u64,
@@ -70,6 +71,7 @@ impl UserRefNames for ConfigResp {
 
 /// 参数列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ConfigListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
@@ -86,6 +88,7 @@ pub struct ConfigFilter {
 
 /// 创建参数请求。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateConfigReq {
     /// 参数名称（展示）
     pub config_name: String,
@@ -99,6 +102,7 @@ pub struct CreateConfigReq {
 
 /// 更新参数请求（编辑表单全量提交）。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateConfigReq {
     /// 目标参数 id
     pub id: u64,
@@ -116,6 +120,7 @@ pub struct UpdateConfigReq {
 
 /// 网站设置更新请求（编辑表单全量提交，恒更新 id=1 行）。
 #[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateSiteConfigReq {
     /// 站点名称
     pub name: String,
@@ -141,6 +146,7 @@ pub struct UpdateSiteConfigReq {
 
 /// 网站设置响应体（公开端点返回，不含审计人字段）。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SiteConfigResp {
     /// 恒为 1
     pub id: u64,

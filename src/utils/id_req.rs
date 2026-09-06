@@ -8,6 +8,7 @@ use serde::Deserialize;
 /// 各域的 `get_*` / `delete_*` 端点（用户、角色、菜单、API、字典等）统一复用本结构，
 /// 避免为每个域重复定义同构的 `XxxIdReq`；后续改字段名只改这里。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct IdReq {
     /// 目标记录主键 id
     pub id: u64,

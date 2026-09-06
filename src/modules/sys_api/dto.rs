@@ -10,6 +10,7 @@ use crate::utils::user_ref::UserRefNames;
 
 /// API 权限点响应体。
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiResp {
     /// API 权限点 id
     pub id: u64,
@@ -69,6 +70,7 @@ impl UserRefNames for ApiResp {
 
 /// API 列表请求：分页 + keyword（path/description/api_group 模糊）/ status / method 精确过滤。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
@@ -91,6 +93,7 @@ pub struct ApiFilter {
 
 /// 创建 API 请求：`role_ids` 为空表示暂不授权给任何角色。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateApiReq {
     /// 请求路径（path + method 组合唯一，含软删占位）
     pub path: String,
@@ -108,6 +111,7 @@ pub struct CreateApiReq {
 
 /// 更新 API 请求（编辑表单全量提交）：`role_ids` 全量替换角色授权（空数组即清空）。
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateApiReq {
     /// 目标 API 权限点 id
     pub id: u64,
