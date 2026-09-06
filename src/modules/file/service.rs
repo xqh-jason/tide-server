@@ -30,18 +30,22 @@ pub async fn page_files(
             created_at_begin: crate::utils::datetime::parse_datetime(
                 "createdAtBegin",
                 &req.created_at_begin,
+                false,
             )?,
             created_at_end: crate::utils::datetime::parse_datetime(
                 "createdAtEnd",
                 &req.created_at_end,
+                true,
             )?,
             updated_at_begin: crate::utils::datetime::parse_datetime(
                 "updatedAtBegin",
                 &req.updated_at_begin,
+                false,
             )?,
             updated_at_end: crate::utils::datetime::parse_datetime(
                 "updatedAtEnd",
                 &req.updated_at_end,
+                true,
             )?,
         },
         req.page.page_index(),
