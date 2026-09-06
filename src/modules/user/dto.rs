@@ -9,6 +9,26 @@ use crate::middleware::auth::AuthUser;
 use crate::utils::PageQuery;
 use crate::utils::user_ref::UserRefNames;
 
+/// 用户简要响应体：全量用户下拉 / 审计过滤选择器专用，只暴露 id 与 username
+/// （含软删用户，调用方按需渲染占位）。
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserBriefResp {
+    /// 用户 id
+    pub id: u64,
+    /// 用户名（显示名）
+    pub username: String,
+}
+
+impl From<sys_user::Model> for UserBriefResp {
+    fn from(m: sys_user::Model) -> Self {
+        Self {
+            id: m.id,
+            username: m.username,
+        }
+    }
+}
+
 /// 用户响应体（不含密码等敏感字段）。
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]

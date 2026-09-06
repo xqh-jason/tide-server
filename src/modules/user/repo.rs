@@ -3,7 +3,7 @@ use crate::entity::{sys_role, sys_user, sys_user_role};
 use crate::modules::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, TransactionTrait};
+use sea_orm::{Condition, DatabaseConnection, QueryOrder, TransactionTrait};
 
 /// 查询单个有效用户（排除软删除）。
 pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
@@ -210,6 +210,16 @@ pub async fn soft_delete_user(db: &DatabaseConnection, id: u64) -> anyhow::Resul
 
     txn.commit().await?;
     Ok(())
+}
+
+/// 全量用户（**含软删**）：审计过滤的用户选择器数据源——历史记录的
+/// 操作人即便已软删，仍需回显名字，故不过滤 `deleted_at`。
+pub async fn find_all_include_deleted(db: &DatabaseConnection) -> anyhow::Result<Vec<Model>> {
+    let models = sys_user::Entity::find()
+        .order_by_asc(sys_user::Column::Id)
+        .all(db)
+        .await?;
+    Ok(models)
 }
 
 #[cfg(test)]

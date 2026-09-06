@@ -8,7 +8,9 @@ use crate::modules::permission::{
     service as permission_service,
 };
 use crate::modules::role::service as role_service;
-use crate::modules::user::dto::{CreateUserReq, UpdateUserReq, UserFilter, UserListReq};
+use crate::modules::user::dto::{
+    CreateUserReq, UpdateUserReq, UserBriefResp, UserFilter, UserListReq,
+};
 use crate::modules::user::repo as user_repo;
 use crate::utils::PageData;
 use crate::utils::crypt;
@@ -292,6 +294,12 @@ pub async fn delete_user(db: &DatabaseConnection, user_id: u64) -> Result<(), Ap
 
     user_repo::soft_delete_user(db, user_id).await?;
     Ok(())
+}
+
+/// 全量用户（含软删）：审计过滤的用户选择器数据源，不做分页与脱敏以外的处理。
+pub async fn list_all_users(db: &DatabaseConnection) -> Result<Vec<UserBriefResp>, AppError> {
+    let models = user_repo::find_all_include_deleted(db).await?;
+    Ok(models.into_iter().map(UserBriefResp::from).collect())
 }
 
 /// 更新用户状态（启用/禁用）；内置超管 admin 不允许修改状态（审计字段由 repo 盖章）。
@@ -1369,5 +1377,48 @@ mod tests {
             matches!(missing_result, Err(AppError::Biz(ref message)) if message.contains("用户不存在")),
             "不存在的用户返回业务错误: {missing_result:?}"
         );
+    }
+
+    /// 全量用户（含软删）：软删用户必须出现，且只暴露 id / username。
+    #[tokio::test]
+    async fn list_all_users_includes_soft_deleted() {
+        use crate::entity::sys_user;
+        use sea_orm::ActiveModelTrait;
+
+        let db = test_db().await;
+        let name_a = unique_name("all_user_a");
+        let name_b = unique_name("all_user_b_del");
+
+        let a = sys_user::ActiveModel {
+            username: Set(name_a.clone()),
+            password: Set("x".to_string()),
+            nickname: Set("存活用户".to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let mut b = sys_user::ActiveModel {
+            username: Set(name_b.clone()),
+            password: Set("x".to_string()),
+            nickname: Set("软删用户".to_string()),
+            ..Default::default()
+        };
+        b.deleted_at = Set(Some(chrono::Local::now().naive_local()));
+        let b = b.insert(&db).await.unwrap();
+
+        let users = list_all_users(&db).await.unwrap();
+        sys_user::Entity::delete_many()
+            .filter(crate::entity::sys_user::Column::Id.is_in([a.id, b.id]))
+            .exec(&db)
+            .await
+            .unwrap();
+
+        let a_hit = users.iter().find(|u| u.id == a.id);
+        let b_hit = users.iter().find(|u| u.id == b.id);
+        assert!(a_hit.is_some(), "存活用户应出现");
+        assert!(b_hit.is_some(), "软删用户也应出现（历史引用回显场景）");
+        assert_eq!(a_hit.unwrap().username, name_a);
+        assert_eq!(b_hit.unwrap().username, name_b);
     }
 }
