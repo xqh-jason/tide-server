@@ -1,7 +1,7 @@
 //! 分页通用结构：请求 `PageQuery`（JSON body 内嵌）+ 响应 `PageResult`（跨模块复用）。
 
 use salvo::oapi::ToSchema;
-use sea_orm::{DatabaseConnection, EntityTrait, FromQueryResult, PaginatorTrait, Select};
+use sea_orm::{ConnectionTrait, EntityTrait, FromQueryResult, PaginatorTrait, Select};
 use serde::{Deserialize, Serialize};
 
 /// 分页请求（JSON body 源，通用）。字段**只在此定义一次**：
@@ -90,7 +90,7 @@ where
 /// - `page_size`：1..=100（`PageQuery::page_size()` 已 clamp）
 pub async fn paginate<E>(
     select: Select<E>,
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     page_index: u64,
     page_size: u64,
 ) -> anyhow::Result<PageData<E::Model>>

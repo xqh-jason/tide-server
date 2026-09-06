@@ -14,7 +14,8 @@ use crate::entity::{
 };
 use std::collections::HashMap;
 
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::entity::prelude::*;
+use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::utils::error::AppError;
 
@@ -41,7 +42,7 @@ pub fn dedup_ids(ids: Vec<u64>) -> Vec<u64> {
 }
 
 pub async fn find_user_name_map_by_ids(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     ids: Vec<u64>,
 ) -> anyhow::Result<HashMap<u64, String>> {
     let ids = dedup_ids(ids);
@@ -57,7 +58,7 @@ pub async fn find_user_name_map_by_ids(
 }
 
 pub async fn fill_user_names<M: UserRefIds, R: UserRefNames>(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     items: Vec<M>,
     convert: impl Fn(M) -> R,
 ) -> Result<Vec<R>, AppError> {
@@ -158,8 +159,14 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     /// 造一个测试用户，返回 (id, username)。
-    async fn seed_user(db: &DatabaseConnection) -> (u64, String) {
+    async fn seed_user(db: &impl ConnectionTrait) -> (u64, String) {
         let username = unique("user_ref");
         let model = sys_user::ActiveModel {
             username: Set(username.clone()),
@@ -172,7 +179,7 @@ mod tests {
 
     /// 造一个已软删用户，返回 (id, username)。
     /// 名称解析面向历史引用：操作人即便已软删，历史记录仍应带出名字。
-    async fn seed_deleted_user(db: &DatabaseConnection) -> (u64, String) {
+    async fn seed_deleted_user(db: &impl ConnectionTrait) -> (u64, String) {
         let username = unique("user_ref_del");
         let mut model = sys_user::ActiveModel {
             username: Set(username.clone()),
@@ -220,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_user_name_map_returns_username() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let (user_a, a_name) = seed_user(&db).await;
         let (user_b, b_name) = seed_user(&db).await;
 
@@ -243,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_user_name_map_includes_soft_deleted_for_history() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let (deleted_id, deleted_name) = seed_deleted_user(&db).await;
 
         let map = find_user_name_map_by_ids(&db, vec![deleted_id])
@@ -259,14 +266,14 @@ mod tests {
 
     #[tokio::test]
     async fn find_user_name_map_empty_input_returns_empty_map() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let map = find_user_name_map_by_ids(&db, vec![]).await.unwrap();
         assert!(map.is_empty(), "空入参不应发查询");
     }
 
     #[tokio::test]
     async fn fill_user_names_fills_all_records_in_one_batch() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let (a_id, a_name) = seed_user(&db).await;
         let (b_id, b_name) = seed_user(&db).await;
 
@@ -307,7 +314,7 @@ mod tests {
 
     #[tokio::test]
     async fn fill_user_names_missing_user_yields_empty_string() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let (a_id, a_name) = seed_user(&db).await;
         let ghost = 9_999_999_999;
 

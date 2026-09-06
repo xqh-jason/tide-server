@@ -53,14 +53,35 @@
   - 新增人字段 = 实体 impl 加一个 id + Resp 加一对字段，协议与管道零改动。
 - **写入口径**：审计字段由 repo 层统一盖章（create 双写 `created_by`/`updated_by`、
   update 只刷 `updated_by`），service 只透传 `actor_id`；请求体不接受人字段，防伪造。
-- 现状：`created_by` / `updated_by` 已落地；名称拼装协议待实现，实现后本节为唯一事实来源。
+- 现状：`created_by` / `updated_by` 已落地；名称拼装协议已实现（`utils/user_ref.rs`），
+  本节为唯一事实来源。
 
 ## 测试规范
 
 - 集成测试内联在各域 `repo.rs` / `service.rs`，直连 MySQL；纯单元测试在 `utils/`
-- 测试数据唯一命名（`<prefix>_<pid>_<seq>`），测后清理：先删关联表，再删主表
+- **事务回滚隔离（默认写法）**：业务层函数参数一律 `&impl ConnectionTrait`，
+  测试夹具 `test_txn()` = 真库连接 + `begin()`，测试结束（含 panic 时
+  `DatabaseTransaction` 的 Drop 自动 ROLLBACK）不留孤儿数据，**无需手写清理**：
+
+  ```rust
+  #[tokio::test]
+  async fn xxx_yyy() {
+      let db = test_txn().await;          // 替代旧 test_db() + 尾部 cleanup
+      /* seed / 断言，无需任何清理语句 */
+  }
+  ```
+- **例外**：内部自带事务的 repo 函数（`*_with_links` 系与 `soft_delete_user /
+  soft_delete_role / soft_delete_menu / soft_delete_api`）保持 `&DatabaseConnection`
+  —— sea-orm 1.1.20 真库无 savepoint，事务内嵌套 `begin()` 会被 MySQL 隐式提交，
+  破坏回滚隔离。它们的测试仍用 `test_db()` 真连接 + 手写清理（函数注释有标注）；
+  调用它们的 service 上游函数（`create/update/delete_user|role|api`、`delete_menu`）
+  同为例外。升级 sea-orm 或将事务边界上移 service 后可取消例外。
+- 测试数据唯一命名（`<prefix>_<pid>_<seq>`）仍保留：防止撞真实库的唯一键
+  （如 `sys_user.username`、`sys_dictionary.type`）
 - 命名格式：`<行为>_<场景>`，如 `find_page_filters_by_keyword_and_status_excludes_deleted`
 - 运行单个模块：`cargo test <模块名>`（如 `cargo test role`）
+- 业务层新增函数禁止新增 `db.begin()`：需要多表原子性时，先把事务边界上移到
+  service 层并同步评估测试影响
 
 ## 提交与 PR 规范
 

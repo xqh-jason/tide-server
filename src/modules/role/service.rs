@@ -8,13 +8,14 @@ use crate::{
     },
     utils::error::AppError,
 };
-use sea_orm::{ActiveValue::Set, DatabaseConnection};
+use sea_orm::entity::prelude::*;
+use sea_orm::{ActiveValue::Set, ConnectionTrait, DatabaseConnection};
 
 use crate::entity::sys_role;
 
 /// 分页查询角色（keyword 模糊匹配 role_name / role_key，status 精确），排除软删除。
 pub async fn page_roles(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &RoleListReq,
 ) -> Result<PageData<sys_role::Model>, AppError> {
     let model = role_repo::find_page(
@@ -54,7 +55,7 @@ pub async fn page_roles(
 
 /// 批量按 id 查询有效角色（排除软删除），供权限模块等按 id 集合取角色。
 pub async fn find_by_ids(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     ids: Vec<u64>,
 ) -> Result<Vec<sys_role::Model>, AppError> {
     let roles = role_repo::find_by_ids(db, ids).await?;
@@ -149,7 +150,7 @@ pub async fn update_role(
 }
 
 /// 查询单个角色详情（排除软删除）；不存在返回业务错误。
-pub async fn get_role(db: &DatabaseConnection, id: u64) -> Result<sys_role::Model, AppError> {
+pub async fn get_role(db: &impl ConnectionTrait, id: u64) -> Result<sys_role::Model, AppError> {
     let Some(role) = role_repo::find_by_id(db, id).await? else {
         return Err(AppError::Biz(format!("角色不存在：{id}")));
     };
@@ -167,7 +168,7 @@ pub async fn delete_role(db: &DatabaseConnection, id: u64) -> Result<(), AppErro
 
 /// 更新角色状态（启用/禁用）；内置超管角色 `super` 不允许修改状态（审计字段由 repo 盖章）。
 pub async fn update_role_status(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &UpdateRoleStatusReq,
 ) -> Result<bool, AppError> {
@@ -219,6 +220,12 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     /// 构造创建角色请求：默认启用、无菜单/API 关联。
     fn create_req(role_name: String, role_key: String) -> CreateRoleReq {
         CreateRoleReq {
@@ -233,7 +240,7 @@ mod tests {
     }
 
     async fn seed_role(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         role_name: &str,
         role_key: &str,
         status: i8,
@@ -253,7 +260,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_menu(db: &DatabaseConnection) -> sys_menu::Model {
+    async fn seed_menu(db: &impl ConnectionTrait) -> sys_menu::Model {
         sys_menu::ActiveModel {
             parent_id: Set(0),
             path: Set(format!("/{}", unique("menu_path"))),
@@ -274,7 +281,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_api(db: &DatabaseConnection) -> sys_api::Model {
+    async fn seed_api(db: &impl ConnectionTrait) -> sys_api::Model {
         sys_api::ActiveModel {
             path: Set(format!("/api/v1/{}/list", unique("svc_api"))),
             method: Set("POST".to_string()),
@@ -289,7 +296,12 @@ mod tests {
     }
 
     /// 清理顺序：先删关联表，再删角色/菜单/API 主表（关系表硬删除）。
-    async fn cleanup(db: &DatabaseConnection, role_ids: &[u64], menu_ids: &[u64], api_ids: &[u64]) {
+    async fn cleanup(
+        db: &impl ConnectionTrait,
+        role_ids: &[u64],
+        menu_ids: &[u64],
+        api_ids: &[u64],
+    ) {
         for role_id in role_ids {
             sys_role_menu::Entity::delete_many()
                 .filter(sys_role_menu::Column::RoleId.eq(*role_id))
@@ -321,6 +333,8 @@ mod tests {
 
     /// 创建时 role_key 重复（含软删除占位）应被业务层拒绝。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_role_rejects_duplicate_role_key_including_soft_deleted() {
         let db = test_db().await;
         // 数据库唯一索引不允许两条相同 role_key 共存（含软删），
@@ -364,6 +378,8 @@ mod tests {
 
     /// 更新时 role_key 与他人重复应被拒绝，但保留自身 key 不算重复。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_role_rejects_duplicate_role_key_excluding_self() {
         let db = test_db().await;
         let key_a = unique("key_a");
@@ -408,6 +424,8 @@ mod tests {
 
     /// 更新不存在的角色（或已软删角色）应返回业务错误。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_role_returns_biz_error_when_role_missing() {
         let db = test_db().await;
 
@@ -464,6 +482,8 @@ mod tests {
 
     /// 全量更新：主表字段被覆盖，menu_ids / api_ids 全量替换（空数组即清空）。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_role_full_replaces_links() {
         let db = test_db().await;
         let key = unique("keep_links");

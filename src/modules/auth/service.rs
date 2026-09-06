@@ -1,7 +1,8 @@
 //! 认证业务：登录（验证码 → 查用户 → 校验密码 → 取角色 → 签发 JWT）。
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::DatabaseConnection;
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::entity::sys_login_log;
 use crate::infra::config::Jwt as JwtConfig;
@@ -15,7 +16,7 @@ use crate::utils::{crypt, jwt};
 /// 用户不存在 / 密码错误 / 已禁用对外统一返回「用户名或密码错误」，防账号枚举；
 /// 验证码失败单独提示（不泄露账号信息），原因分级进日志。
 pub async fn login(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     jwt_cfg: &JwtConfig,
     cache: &dyn Cache,
     req: LoginReq,
@@ -81,7 +82,7 @@ pub async fn login(
 
 /// 登录日志落库：失败只降级，不影响登录结果。
 async fn record_login(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &LoginReq,
     user_id: u64,
     status: i8,
@@ -143,7 +144,7 @@ mod tests {
     }
 
     /// 造唯一用户 + 关联角色（唯一命名避免并行冲突），返回 (user_id, role_id, username, role_key)。
-    async fn seed_user(db: &sea_orm::DatabaseConnection) -> (u64, u64, String, String) {
+    async fn seed_user(db: &impl ConnectionTrait) -> (u64, u64, String, String) {
         let username = unique_name("login_test");
         let role_key = unique_name("super");
 
@@ -180,7 +181,7 @@ mod tests {
         (user.id, role.id, username, role_key)
     }
 
-    async fn cleanup(db: &sea_orm::DatabaseConnection, user_id: u64, role_id: u64) {
+    async fn cleanup(db: &impl ConnectionTrait, user_id: u64, role_id: u64) {
         sys_user_role::Entity::delete_many()
             .filter(sys_user_role::Column::UserId.eq(user_id))
             .exec(db)
@@ -203,7 +204,7 @@ mod tests {
         }
     }
 
-    async fn cleanup_login_logs(db: &sea_orm::DatabaseConnection, username: &str) {
+    async fn cleanup_login_logs(db: &impl ConnectionTrait, username: &str) {
         sys_login_log::Entity::delete_many()
             .filter(sys_login_log::Column::Username.eq(username))
             .exec(db)
@@ -225,10 +226,7 @@ mod tests {
         }
     }
 
-    async fn latest_login_log(
-        db: &sea_orm::DatabaseConnection,
-        username: &str,
-    ) -> sys_login_log::Model {
+    async fn latest_login_log(db: &impl ConnectionTrait, username: &str) -> sys_login_log::Model {
         sys_login_log::Entity::find()
             .filter(sys_login_log::Column::Username.eq(username))
             .order_by_desc(sys_login_log::Column::Id)
@@ -238,9 +236,14 @@ mod tests {
             .expect("登录日志应存在")
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
     #[tokio::test]
     async fn login_success_returns_token_with_roles() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let (uid, rid, username, role_key) = seed_user(&db).await;
         let cache = MemoryCache::new();
 
@@ -256,8 +259,6 @@ mod tests {
 
         let claims = crate::utils::jwt::verify(&resp.token, "test-secret").unwrap();
         let log = latest_login_log(&db, &username).await;
-        cleanup_login_logs(&db, &username).await;
-        cleanup(&db, uid, rid).await;
 
         assert_eq!(claims.user_id, uid);
         assert_eq!(claims.roles, vec![role_key]);
@@ -268,7 +269,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_wrong_password_returns_biz_error() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let (uid, rid, username, _) = seed_user(&db).await;
         let cache = MemoryCache::new();
 
@@ -282,8 +283,6 @@ mod tests {
         .await
         .unwrap_err();
         let log = latest_login_log(&db, &username).await;
-        cleanup_login_logs(&db, &username).await;
-        cleanup(&db, uid, rid).await;
 
         assert!(
             matches!(&err, AppError::Biz(message) if message == "用户名或密码错误"),
@@ -296,7 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_unknown_user_returns_biz_error() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let username = unique_name("login_unknown");
         let cache = MemoryCache::new();
         let err = login(
@@ -309,7 +308,6 @@ mod tests {
         .await
         .unwrap_err();
         let log = latest_login_log(&db, &username).await;
-        cleanup_login_logs(&db, &username).await;
 
         assert!(
             matches!(&err, AppError::Biz(message) if message == "用户名或密码错误"),
@@ -323,7 +321,7 @@ mod tests {
     /// 禁用用户（status=0）即使密码正确也不允许登录，且与用户不存在返回同一提示（防枚举）。
     #[tokio::test]
     async fn login_disabled_user_returns_biz_error() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let username = unique_name("login_disabled");
         let cache = MemoryCache::new();
         let user = sys_user::ActiveModel {
@@ -348,7 +346,6 @@ mod tests {
         .unwrap_err();
 
         let log = latest_login_log(&db, &username).await;
-        cleanup_login_logs(&db, &username).await;
         sys_user::Entity::delete_by_id(user.id)
             .exec(&db)
             .await
@@ -366,7 +363,7 @@ mod tests {
     /// 验证码答案错误：对外明确提示（不并入「用户名或密码错误」），且码被消费。
     #[tokio::test]
     async fn login_with_wrong_captcha_returns_biz_error() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let username = unique_name("login_bad_captcha");
         let cache = MemoryCache::new();
         let resp = crate::modules::captcha::service::generate_captcha(&cache).unwrap();
@@ -386,7 +383,6 @@ mod tests {
         .await
         .unwrap_err();
         let log = latest_login_log(&db, &username).await;
-        cleanup_login_logs(&db, &username).await;
 
         assert!(
             matches!(&err, AppError::Biz(message) if message.contains("验证码错误")),
@@ -400,7 +396,7 @@ mod tests {
     /// 验证码 id 不存在（未生成 / 已过期）：提示刷新，日志记录过期。
     #[tokio::test]
     async fn login_with_unknown_captcha_id_reports_expired() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let username = unique_name("login_expired_captcha");
         let cache = MemoryCache::new();
 
@@ -419,7 +415,6 @@ mod tests {
         .await
         .unwrap_err();
         let log = latest_login_log(&db, &username).await;
-        cleanup_login_logs(&db, &username).await;
 
         assert!(
             matches!(&err, AppError::Biz(message) if message.contains("已过期")),

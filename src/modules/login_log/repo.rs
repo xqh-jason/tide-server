@@ -2,13 +2,13 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, QueryOrder};
+use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QueryOrder};
 
 use crate::entity::{sys_login_log, sys_login_log::Model};
 use crate::modules::login_log::dto::LoginLogFilter;
 
 /// 查询单个有效记录（排除软删除）。
-pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
+pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
     let m = sys_login_log::Entity::find()
         .filter(sys_login_log::Column::Id.eq(id))
         .filter(sys_login_log::Column::DeletedAt.is_null())
@@ -19,7 +19,7 @@ pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Opti
 
 /// 分页 + 动态过滤查询（username / ip 模糊，status 精确，created_at 倒序）。
 pub async fn find_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &LoginLogFilter,
     page_index: u64,
     page_size: u64,
@@ -44,14 +44,14 @@ pub async fn find_page(
 
 /// 创建记录（登录 service 落库入口）。
 pub async fn create_login_log(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_login_log::ActiveModel,
 ) -> anyhow::Result<Model> {
     Ok(model.insert(db).await?)
 }
 
 /// 软删除：`deleted_at` 置为当前时间。
-pub async fn soft_delete_login_log(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
+pub async fn soft_delete_login_log(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<bool> {
     let Some(model) = find_by_id(db, id).await? else {
         return Ok(false);
     };
@@ -62,7 +62,7 @@ pub async fn soft_delete_login_log(db: &DatabaseConnection, id: u64) -> anyhow::
 }
 
 /// 批量软删：只处理存在且未删除的行，返回受影响行数。
-pub async fn soft_delete_batch(db: &DatabaseConnection, ids: &[u64]) -> anyhow::Result<u64> {
+pub async fn soft_delete_batch(db: &impl ConnectionTrait, ids: &[u64]) -> anyhow::Result<u64> {
     let now = chrono::Local::now().naive_local();
     let result = sys_login_log::Entity::update_many()
         .filter(sys_login_log::Column::Id.is_in(ids.iter().copied()))
@@ -95,9 +95,15 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn seed(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         username: &str,
         ip: &str,
         status: i8,
@@ -120,7 +126,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
         sys_login_log::Entity::delete_many()
             .filter(sys_login_log::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -130,7 +136,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_page_filters_by_username_ip_status_sorts_desc_excludes_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("repo_page");
         let base = chrono::Local::now().naive_local();
         let deleted_at = Some(chrono::Local::now().naive_local());
@@ -197,8 +203,6 @@ mod tests {
         .await
         .unwrap();
 
-        cleanup(&db, &[a.id, b.id, c.id, deleted.id]).await;
-
         assert_eq!(by_username.total, 3, "软删记录不应进入分页");
         let ids: Vec<u64> = by_username.items.iter().map(|m| m.id).collect();
         assert_eq!(ids, vec![c.id, b.id, a.id], "应按 created_at 倒序");
@@ -207,7 +211,7 @@ mod tests {
 
     #[tokio::test]
     async fn soft_delete_batch_only_marks_alive_rows() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("repo_batch");
         let base = chrono::Local::now().naive_local();
         let a = seed(
@@ -253,8 +257,6 @@ mod tests {
         )
         .await
         .unwrap();
-
-        cleanup(&db, &[a.id, b.id, deleted.id]).await;
 
         assert_eq!(affected, 2, "已软删记录不应重复计入");
         assert_eq!(after.total, 0, "批量软删后全部不可见");

@@ -7,10 +7,12 @@ use crate::modules::user::repo as user_repo;
 use crate::utils::PageData;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, QueryOrder, QuerySelect, TransactionTrait};
+use sea_orm::{
+    Condition, ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, TransactionTrait,
+};
 
 /// 查询全部启用菜单（W2 超管全量菜单树；按角色过滤 W3 再做）。
-pub async fn find_all_menus(db: &DatabaseConnection) -> anyhow::Result<Vec<Model>> {
+pub async fn find_all_menus(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Model>> {
     Ok(sys_menu::Entity::find()
         .filter(sys_menu::Column::Status.eq(1))
         .filter(sys_menu::Column::DeletedAt.is_null())
@@ -21,7 +23,7 @@ pub async fn find_all_menus(db: &DatabaseConnection) -> anyhow::Result<Vec<Model
 
 /// 分页 + 动态过滤查询（keyword 匹配 name，status/menu_type 精确，排除软删）。
 pub async fn find_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &MenuFilter,
     page_index: u64,
     page_size: u64,
@@ -67,7 +69,7 @@ pub async fn find_page(
 }
 
 /// 查询单个有效菜单（排除软删除）。
-pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
+pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
     let menu = sys_menu::Entity::find()
         .filter(sys_menu::Column::Id.eq(id))
         .filter(sys_menu::Column::DeletedAt.is_null())
@@ -79,7 +81,7 @@ pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Opti
 /// 创建菜单（ActiveModel 入参，默认值由 service 层负责）。
 /// 创建菜单。`actor_id` 为操作人，审计字段由 repo 统一盖章。
 pub async fn create_menu(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_menu::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<Model> {
@@ -94,7 +96,7 @@ pub async fn create_menu(
 /// 更新菜单（主键必须已设置，全量覆盖语义）。
 /// 审计字段由 repo 统一盖章：只刷新更新人，`created_by` 保持 NotSet 不被覆盖。
 pub async fn update_menu(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_menu::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<Model> {
@@ -154,7 +156,7 @@ pub async fn soft_delete_menu(db: &DatabaseConnection, id: u64) -> anyhow::Resul
 
 /// 查重辅助：菜单 name 唯一（含软删占位）。
 pub async fn find_by_name_include_deleted(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     name: &str,
 ) -> anyhow::Result<Option<Model>> {
     let menu = sys_menu::Entity::find()
@@ -166,7 +168,7 @@ pub async fn find_by_name_include_deleted(
 
 /// 普通用户可见菜单：有效角色 → sys_role_menu → 启用且未软删的菜单。
 pub async fn find_menus_by_user_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     user_id: u64,
 ) -> anyhow::Result<Vec<Model>> {
     let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
@@ -220,8 +222,14 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     async fn seed_menu(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         name: &str,
         status: i8,
         deleted_at: Option<chrono::NaiveDateTime>,
@@ -247,7 +255,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
         sys_menu::Entity::delete_many()
             .filter(sys_menu::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -258,7 +266,7 @@ mod tests {
     /// 创建菜单：ActiveModel 显式字段按值落库。
     #[tokio::test]
     async fn create_menu_persists_fields_and_defaults() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let name = unique("create_menu");
         let model = sys_menu::ActiveModel {
             parent_id: Set(0),
@@ -278,8 +286,6 @@ mod tests {
 
         let created = create_menu(&db, model, ACTOR_ID).await.unwrap();
 
-        cleanup(&db, &[created.id]).await;
-
         assert_eq!(created.name, name);
         assert_eq!(created.parent_id, 0);
         assert_eq!(created.icon, "mdi:test");
@@ -294,7 +300,7 @@ mod tests {
     /// find_by_id 应排除软删除菜单。
     #[tokio::test]
     async fn find_by_id_excludes_soft_deleted_menu() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let live = seed_menu(&db, &unique("find_live"), 1, None).await;
         let deleted = seed_menu(
             &db,
@@ -307,8 +313,6 @@ mod tests {
         let found_live = find_by_id(&db, live.id).await.unwrap();
         let found_deleted = find_by_id(&db, deleted.id).await.unwrap();
 
-        cleanup(&db, &[live.id, deleted.id]).await;
-
         assert_eq!(found_live.as_ref().map(|m| m.id), Some(live.id));
         assert!(found_deleted.is_none(), "软删除菜单不应被 find_by_id 查到");
     }
@@ -316,7 +320,7 @@ mod tests {
     /// 分页：keyword 命中 title/name/path，status/menu_type 精确过滤，排除软删。
     #[tokio::test]
     async fn find_page_filters_by_keyword_status_and_menu_type_excludes_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let keyword = unique("page_keyword");
         let live = seed_menu(&db, &format!("{keyword}_live"), 1, None).await;
         let disabled = seed_menu(&db, &format!("{keyword}_disabled"), 0, None).await;
@@ -368,8 +372,6 @@ mod tests {
         .await
         .unwrap();
 
-        cleanup(&db, &[live.id, disabled.id, deleted.id]).await;
-
         assert_eq!(data_all.total, 2, "软删除菜单不应进入分页");
         assert_eq!(data_enabled.total, 1, "status 过滤应只保留启用菜单");
         assert_eq!(data_buttons.total, 0, "menu_type 过滤应匹配按钮类型");
@@ -377,6 +379,8 @@ mod tests {
 
     /// 软删除：deleted_at 被置为当前时间，且随后 find_by_id 查不到。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn soft_delete_menu_sets_deleted_at() {
         let db = test_db().await;
         let menu = seed_menu(&db, &unique("soft_delete"), 1, None).await;
@@ -392,6 +396,8 @@ mod tests {
 
     /// 级联软删：删除父菜单时，所有子孙菜单一起软删（BFS 递归）。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn soft_delete_menu_cascades_to_all_descendants() {
         let db = test_db().await;
         let parent = seed_menu(&db, &unique("cascade_parent"), 1, None).await;
@@ -448,7 +454,7 @@ mod tests {
     /// 更新菜单：全量覆盖主表字段（与角色域全量更新语义一致）。
     #[tokio::test]
     async fn update_menu_overwrites_fields() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let menu = seed_menu(&db, &unique("update_before"), 1, None).await;
         let new_name = unique("update_after");
 
@@ -465,8 +471,6 @@ mod tests {
 
         let updated = update_menu(&db, model, ACTOR_ID).await.unwrap();
 
-        cleanup(&db, &[menu.id]).await;
-
         assert_eq!(updated.name, new_name);
         assert_eq!(updated.title, format!("T{new_name}"));
         assert_eq!(updated.icon, "mdi:updated");
@@ -477,19 +481,17 @@ mod tests {
     /// 查重辅助：包含软删除记录（唯一索引占位检查用）。
     #[tokio::test]
     async fn find_by_name_include_deleted_finds_soft_deleted_menu() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let name = unique("dup_name");
         let deleted = seed_menu(&db, &name, 1, Some(chrono::Local::now().naive_local())).await;
 
         let found = find_by_name_include_deleted(&db, &name).await.unwrap();
 
-        cleanup(&db, &[deleted.id]).await;
-
         assert_eq!(found.as_ref().map(|m| m.id), Some(deleted.id));
     }
 
     /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
-    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+    async fn seed_actor(db: &impl ConnectionTrait) -> u64 {
         crate::entity::sys_user::ActiveModel {
             username: Set(unique("audit_actor")),
             password: Set("x".to_string()),
@@ -502,7 +504,7 @@ mod tests {
         .id
     }
 
-    async fn delete_actors(db: &DatabaseConnection, ids: &[u64]) {
+    async fn delete_actors(db: &impl ConnectionTrait, ids: &[u64]) {
         crate::entity::sys_user::Entity::delete_many()
             .filter(crate::entity::sys_user::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -512,7 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_menu_stamps_actor_as_creator_and_updater() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let actor_id = seed_actor(&db).await;
 
         let created = create_menu(
@@ -535,13 +537,12 @@ mod tests {
         assert_eq!(created.created_by, actor_id);
         assert_eq!(created.updated_by, actor_id);
 
-        cleanup(&db, &[created.id]).await;
         delete_actors(&db, &[actor_id]).await;
     }
 
     #[tokio::test]
     async fn update_menu_refreshes_updated_by_and_keeps_created_by() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let creator_id = seed_actor(&db).await;
         let updater_id = seed_actor(&db).await;
 
@@ -577,14 +578,13 @@ mod tests {
         assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
         assert_eq!(updated.updated_by, updater_id);
 
-        cleanup(&db, &[created.id]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;
     }
 
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
     #[tokio::test]
     async fn find_page_filters_by_audit_columns_and_time_range() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("audit_page");
         let a = seed_menu(&db, &format!("{kw}a"), 1, None).await;
         let b = seed_menu(&db, &format!("{kw}b"), 1, None).await;

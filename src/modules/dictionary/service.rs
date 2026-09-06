@@ -7,6 +7,7 @@
 //! - `字典类型编码已存在：{type}` / `字典值已存在：{value}`
 //! - `字典类型不存在或已停用：{type}`
 
+use sea_orm::entity::prelude::*;
 use sea_orm::{ActiveValue::Set, DatabaseConnection};
 
 use crate::entity::{sys_dictionary, sys_dictionary_detail};
@@ -25,7 +26,7 @@ use crate::utils::error::AppError;
 ///
 /// 不做状态过滤以外的业务判断，纯透传；keyword 同时模糊 name 与 type。
 pub async fn page_dictionaries(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &DictionaryListReq,
 ) -> Result<PageData<sys_dictionary::Model>, AppError> {
     let filter = DictionaryFilter {
@@ -66,7 +67,7 @@ pub async fn page_dictionaries(
 /// 因此查重必须走 `*_include_deleted`（不过滤 deleted_at），
 /// 否则同一 type 在软删后会被误判为「可重建」而撞唯一键。
 pub async fn create_dictionary(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &CreateDictionaryReq,
 ) -> Result<sys_dictionary::Model, AppError> {
@@ -99,7 +100,7 @@ pub async fn create_dictionary(
 /// 「排除自身」是编辑表单的常见陷阱：用户不改 type 直接保存时，
 /// 查重命中的正是本行，必须放行——只有 `existing.id != req.id` 才算真重复。
 pub async fn update_dictionary(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &UpdateDictionaryReq,
 ) -> Result<sys_dictionary::Model, AppError> {
@@ -139,7 +140,7 @@ pub async fn update_dictionary(
 
 /// 查询单个类型（排除软删）；不存在返回 Biz。
 pub async fn get_dictionary(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     id: u64,
 ) -> Result<sys_dictionary::Model, AppError> {
     let Some(model) = dict_repo::find_dictionary_by_id(db, id).await? else {
@@ -153,7 +154,7 @@ pub async fn get_dictionary(
 ///
 /// 返回级联删除的字典项行数（而非是否成功），供前端提示「已删除 N 项」；
 /// 类型本体软删而非物理删，让 type 唯一键占位延续，避免历史数据引用悬空。
-pub async fn delete_dictionary(db: &DatabaseConnection, id: u64) -> Result<u64, AppError> {
+pub async fn delete_dictionary(db: &impl ConnectionTrait, id: u64) -> Result<u64, AppError> {
     // 1) 目标必须存在（软删视为不存在）
     if dict_repo::find_dictionary_by_id(db, id).await?.is_none() {
         return Err(AppError::Biz(format!("字典类型不存在：{}", id)));
@@ -173,7 +174,7 @@ pub async fn delete_dictionary(db: &DatabaseConnection, id: u64) -> Result<u64, 
 /// `字典类型不存在或已停用`；类型存在但无可用字典项时返回空 `details`，
 /// 不报错（前端下拉显示空选项即可）。
 pub async fn get_dictionary_by_type(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     r#type: &str,
 ) -> Result<(sys_dictionary::Model, Vec<sys_dictionary_detail::Model>), AppError> {
     // 1) 取未软删的类型（repo 已过滤 deleted_at）
@@ -195,7 +196,7 @@ pub async fn get_dictionary_by_type(
 
 /// 字典项分页查询：请求参数（dictionary_id / keyword / status）透传 repo。
 pub async fn page_dictionary_details(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &DictionaryDetailListReq,
 ) -> Result<PageData<sys_dictionary_detail::Model>, AppError> {
     let filter = DictionaryDetailFilter {
@@ -237,7 +238,7 @@ pub async fn page_dictionary_details(
 /// 因此查重必须用 `find_alive_detail_by_value`（过滤 deleted_at），
 /// 不能依赖数据库唯一键（表上刻意不加）。
 pub async fn create_dictionary_detail(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &CreateDictionaryDetailReq,
 ) -> Result<sys_dictionary_detail::Model, AppError> {
@@ -280,7 +281,7 @@ pub async fn create_dictionary_detail(
 
 /// 更新字典项：判存在 → 类型校验 → value 查重排除自身 → 全量覆盖。
 pub async fn update_dictionary_detail(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &UpdateDictionaryDetailReq,
 ) -> Result<sys_dictionary_detail::Model, AppError> {
@@ -328,7 +329,7 @@ pub async fn update_dictionary_detail(
 
 /// 查询单个字典项（排除软删）；不存在返回 Biz。
 pub async fn get_dictionary_detail(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     id: u64,
 ) -> Result<sys_dictionary_detail::Model, AppError> {
     let Some(model) = dict_repo::find_detail_by_id(db, id).await? else {
@@ -339,7 +340,7 @@ pub async fn get_dictionary_detail(
 }
 
 /// 删除字典项：判存在后软删（软删行让出 value 唯一占位）。
-pub async fn delete_dictionary_detail(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
+pub async fn delete_dictionary_detail(db: &impl ConnectionTrait, id: u64) -> Result<(), AppError> {
     // 目标必须存在（软删视为不存在）
     if dict_repo::find_detail_by_id(db, id).await?.is_none() {
         return Err(AppError::Biz(format!("字典项不存在：{}", id)));
@@ -382,12 +383,18 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     fn now() -> chrono::NaiveDateTime {
         chrono::Local::now().naive_local()
     }
 
     async fn seed_dictionary(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         name: &str,
         r#type: &str,
         status: i8,
@@ -407,7 +414,7 @@ mod tests {
     }
 
     async fn seed_detail(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         dictionary_id: u64,
         value: &str,
         label: &str,
@@ -461,7 +468,7 @@ mod tests {
     }
 
     /// 测后清理：先物理删字典项，再删字典类型。
-    async fn cleanup(db: &DatabaseConnection, dictionary_ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, dictionary_ids: &[u64]) {
         sys_dictionary_detail::Entity::delete_many()
             .filter(
                 sys_dictionary_detail::Column::DictionaryId.is_in(dictionary_ids.iter().copied()),
@@ -478,15 +485,13 @@ mod tests {
 
     #[tokio::test]
     async fn create_dictionary_rejects_duplicate_type_including_soft_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let live = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let deleted = seed_dictionary(&db, &unique("nm"), &unique("tdel"), 1, Some(now())).await;
 
         let dup_live = create_dictionary(&db, ACTOR_ID, &create_req(live.r#type.clone())).await;
         let dup_deleted =
             create_dictionary(&db, ACTOR_ID, &create_req(deleted.r#type.clone())).await;
-
-        cleanup(&db, &[live.id, deleted.id]).await;
 
         assert!(
             matches!(dup_live, Err(AppError::Biz(_))),
@@ -500,14 +505,12 @@ mod tests {
 
     #[tokio::test]
     async fn update_dictionary_rejects_duplicate_type_excluding_self() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let a = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let b = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
 
         let dup = update_dictionary(&db, ACTOR_ID, &update_req(b.id, a.r#type.clone())).await;
         let keep_self = update_dictionary(&db, ACTOR_ID, &update_req(b.id, b.r#type.clone())).await;
-
-        cleanup(&db, &[a.id, b.id]).await;
 
         assert!(
             matches!(dup, Err(AppError::Biz(_))),
@@ -518,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_dictionary_cascade_soft_deletes_its_details() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let d = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let _x = seed_detail(&db, d.id, &unique("v"), "lb", 1, 1, None).await;
         let _y = seed_detail(&db, d.id, &unique("v"), "lb", 2, 1, None).await;
@@ -526,15 +529,13 @@ mod tests {
         let removed = delete_dictionary(&db, d.id).await.unwrap();
         let left = dict_repo::find_enabled_details(&db, d.id).await.unwrap();
 
-        cleanup(&db, &[d.id]).await;
-
         assert_eq!(removed, 2, "应返回级联软删的字典项数量");
         assert!(left.is_empty(), "删类型后其下字典项不应再可见");
     }
 
     #[tokio::test]
     async fn create_detail_rejects_missing_type_and_duplicate_value() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         let missing =
             create_dictionary_detail(&db, ACTOR_ID, &detail_req(9_999_999_999, "v")).await;
@@ -547,8 +548,6 @@ mod tests {
         let first = create_dictionary_detail(&db, ACTOR_ID, &detail_req(d.id, "dup_value")).await;
         let dup = create_dictionary_detail(&db, ACTOR_ID, &detail_req(d.id, "dup_value")).await;
 
-        cleanup(&db, &[d.id]).await;
-
         first.expect("首建同 value 应成功");
         assert!(
             matches!(dup, Err(AppError::Biz(_))),
@@ -558,13 +557,11 @@ mod tests {
 
     #[tokio::test]
     async fn create_detail_allows_reusing_value_of_soft_deleted_row() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let d = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let old = seed_detail(&db, d.id, "dup_value", "lb", 0, 1, Some(now())).await;
 
         let fresh = create_dictionary_detail(&db, ACTOR_ID, &detail_req(d.id, "dup_value")).await;
-
-        cleanup(&db, &[d.id]).await;
 
         let fresh = fresh.expect("软删占位不应阻塞同 value 重建");
         assert_ne!(fresh.id, old.id, "应新建记录而非复用软删行");
@@ -572,7 +569,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_dictionary_by_type_returns_enabled_details_sorted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let d = seed_dictionary(&db, "测试字典", &unique("t"), 1, None).await;
         let second = seed_detail(&db, d.id, &unique("v"), "lb", 2, 1, None).await;
         let first = seed_detail(&db, d.id, &unique("v"), "lb", 1, 1, None).await;
@@ -580,8 +577,6 @@ mod tests {
         let _deleted = seed_detail(&db, d.id, &unique("v"), "lb", 3, 1, Some(now())).await;
 
         let result = get_dictionary_by_type(&db, &d.r#type).await;
-
-        cleanup(&db, &[d.id]).await;
 
         let (model, details) = result.expect("启用类型应正常返回");
         assert_eq!(model.id, d.id);
@@ -591,14 +586,12 @@ mod tests {
 
     #[tokio::test]
     async fn get_dictionary_by_type_errors_when_type_missing_or_disabled() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         // 用唯一 type 保证「不存在」断言不受历史残留数据干扰
         let missing = get_dictionary_by_type(&db, &unique("miss")).await;
         let off = seed_dictionary(&db, &unique("nm"), &unique("t"), 0, None).await;
         let disabled = get_dictionary_by_type(&db, &off.r#type).await;
-
-        cleanup(&db, &[off.id]).await;
 
         assert!(
             matches!(missing, Err(AppError::Biz(_))),
@@ -612,7 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_update_and_delete_missing_return_biz_error() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         let get_type = get_dictionary(&db, 9_999_999_999).await;
         let get_detail = get_dictionary_detail(&db, 9_999_999_999).await;

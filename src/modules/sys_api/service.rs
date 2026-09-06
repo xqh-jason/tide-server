@@ -1,6 +1,7 @@
 //! API 权限点业务规则。
 
-use sea_orm::{ActiveValue::Set, DatabaseConnection};
+use sea_orm::entity::prelude::*;
+use sea_orm::{ActiveValue::Set, ConnectionTrait, DatabaseConnection};
 
 use crate::modules::sys_api::dto::{ApiFilter, ApiListReq, UpdateApiReq};
 use crate::modules::sys_api::repo as api_repo;
@@ -9,7 +10,7 @@ use crate::{entity::sys_api, modules::sys_api::dto::CreateApiReq, utils::error::
 
 /// 分页查询 API（keyword 匹配 path/description/api_group，status/method 精确）。
 pub async fn page_apis(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &ApiListReq,
 ) -> Result<PageData<sys_api::Model>, AppError> {
     let model = api_repo::find_page(
@@ -110,7 +111,7 @@ pub async fn update_api(
 }
 
 /// 查询单个 API 详情（排除软删除）；不存在返回业务错误。
-pub async fn get_api(db: &DatabaseConnection, id: u64) -> Result<sys_api::Model, AppError> {
+pub async fn get_api(db: &impl ConnectionTrait, id: u64) -> Result<sys_api::Model, AppError> {
     let Some(model) = api_repo::find_by_id(db, id).await? else {
         return Err(AppError::Biz(format!("API 不存在：{id}")));
     };
@@ -155,6 +156,12 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     fn create_req(path: String, method: String, role_ids: Vec<u64>) -> CreateApiReq {
         CreateApiReq {
             path,
@@ -166,7 +173,7 @@ mod tests {
         }
     }
 
-    async fn seed_api(db: &DatabaseConnection, path: &str, method: &str) -> sys_api::Model {
+    async fn seed_api(db: &impl ConnectionTrait, path: &str, method: &str) -> sys_api::Model {
         sys_api::ActiveModel {
             path: Set(path.to_string()),
             method: Set(method.to_string()),
@@ -180,7 +187,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_role(db: &DatabaseConnection) -> sys_role::Model {
+    async fn seed_role(db: &impl ConnectionTrait) -> sys_role::Model {
         sys_role::ActiveModel {
             role_name: Set(unique("api_svc_role")),
             role_key: Set(unique("api_svc_key")),
@@ -195,7 +202,7 @@ mod tests {
     }
 
     /// 清理顺序：先删关联表，再删主表。
-    async fn cleanup(db: &DatabaseConnection, api_ids: &[u64], role_ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, api_ids: &[u64], role_ids: &[u64]) {
         for api_id in api_ids {
             sys_role_api::Entity::delete_many()
                 .filter(sys_role_api::Column::ApiId.eq(*api_id))
@@ -217,6 +224,8 @@ mod tests {
 
     /// 创建时 path + method 重复（含软删占位）应被业务层拒绝。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_api_rejects_duplicate_path_method_including_soft_deleted() {
         let db = test_db().await;
         let path_live = format!("/api/v1/{}/dup_live", unique("create"));
@@ -254,6 +263,8 @@ mod tests {
 
     /// 更新时 path + method 与他人重复应被拒绝，但保留自身组合不算重复。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_api_rejects_duplicate_path_method_excluding_self() {
         let db = test_db().await;
         let path_a = format!("/api/v1/{}/a", unique("update"));
@@ -302,6 +313,8 @@ mod tests {
 
     /// 更新不存在的 API（或已软删 API）应返回业务错误。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_api_returns_biz_error_when_api_missing() {
         let db = test_db().await;
 
@@ -353,6 +366,8 @@ mod tests {
 
     /// 更新时 role_ids 全量替换授权关联（空数组即清空）。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_api_full_replaces_role_links() {
         let db = test_db().await;
         let role_old = seed_role(&db).await;

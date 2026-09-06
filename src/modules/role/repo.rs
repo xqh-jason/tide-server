@@ -1,13 +1,13 @@
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, TransactionTrait};
+use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, TransactionTrait};
 
 use crate::entity::{sys_role, sys_role_api, sys_role_menu};
 use crate::modules::role::dto::RoleFilter;
 
 /// 查询单个有效角色（排除软删除）。
 pub async fn find_by_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     id: u64,
 ) -> anyhow::Result<Option<sys_role::Model>> {
     let role = sys_role::Entity::find()
@@ -20,7 +20,7 @@ pub async fn find_by_id(
 
 /// 查重辅助：role_key 唯一（含软删占位）。
 pub async fn find_by_role_key_include_deleted(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     role_key: &str,
 ) -> anyhow::Result<Option<sys_role::Model>> {
     let role = sys_role::Entity::find()
@@ -32,7 +32,7 @@ pub async fn find_by_role_key_include_deleted(
 
 /// 查重辅助：role_name 唯一（含软删占位）。
 pub async fn find_by_role_name_include_deleted(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     role_name: &str,
 ) -> anyhow::Result<Option<sys_role::Model>> {
     let role = sys_role::Entity::find()
@@ -44,7 +44,7 @@ pub async fn find_by_role_name_include_deleted(
 
 /// 分页 + 动态过滤查询角色（keyword 模糊匹配 role_name/role_key，status 精确）。
 pub async fn find_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &RoleFilter,
     page_index: u64,
     page_size: u64,
@@ -224,7 +224,7 @@ pub async fn soft_delete_role(db: &DatabaseConnection, id: u64) -> anyhow::Resul
 
 /// 批量按 id 查询有效角色（排除软删除）；无匹配时返回空数组。
 pub async fn find_by_ids(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     ids: Vec<u64>,
 ) -> anyhow::Result<Vec<sys_role::Model>> {
     let roles = sys_role::Entity::find()
@@ -237,7 +237,7 @@ pub async fn find_by_ids(
 
 /// 通用更新（ActiveModel 入参，状态更新等单字段场景用）。
 pub async fn update_role(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     role: sys_role::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<bool> {
@@ -264,6 +264,12 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     fn unique(prefix: &str) -> String {
         format!(
             "{prefix}_{}_{}",
@@ -273,7 +279,7 @@ mod tests {
     }
 
     async fn seed_role(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         role_name: &str,
         status: i8,
         deleted_at: Option<chrono::NaiveDateTime>,
@@ -292,7 +298,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_menu(db: &DatabaseConnection) -> sys_menu::Model {
+    async fn seed_menu(db: &impl ConnectionTrait) -> sys_menu::Model {
         sys_menu::ActiveModel {
             parent_id: Set(0),
             title: Set(unique("role_menu")),
@@ -307,7 +313,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_api(db: &DatabaseConnection) -> sys_api::Model {
+    async fn seed_api(db: &impl ConnectionTrait) -> sys_api::Model {
         sys_api::ActiveModel {
             path: Set(format!("/api/{}", unique("role_api"))),
             method: Set("POST".to_string()),
@@ -322,7 +328,12 @@ mod tests {
     }
 
     /// 清理顺序：先删关联，再删角色主表，最后删菜单/API（关系表硬删除）。
-    async fn cleanup(db: &DatabaseConnection, role_ids: &[u64], menu_ids: &[u64], api_ids: &[u64]) {
+    async fn cleanup(
+        db: &impl ConnectionTrait,
+        role_ids: &[u64],
+        menu_ids: &[u64],
+        api_ids: &[u64],
+    ) {
         for role_id in role_ids {
             sys_role_menu::Entity::delete_many()
                 .filter(sys_role_menu::Column::RoleId.eq(*role_id))
@@ -354,6 +365,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_role_with_links_inserts_role_and_links() {
         let db = test_db().await;
         let menu_a = seed_menu(&db).await;
@@ -405,6 +418,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_role_with_links_supports_empty_link_lists() {
         let db = test_db().await;
         let role_name = unique("create_empty_role");
@@ -440,6 +455,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_role_with_links_rebuilds_links_in_transaction() {
         let db = test_db().await;
         let old_menu = seed_menu(&db).await;
@@ -508,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_by_id_excludes_soft_deleted_role() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let live = seed_role(&db, &unique("find_live"), 1, None).await;
         let disabled = seed_role(&db, &unique("find_disabled"), 0, None).await;
         let deleted = seed_role(
@@ -523,8 +540,6 @@ mod tests {
         let found_disabled = find_by_id(&db, disabled.id).await.unwrap();
         let found_deleted = find_by_id(&db, deleted.id).await.unwrap();
 
-        cleanup(&db, &[live.id, disabled.id, deleted.id], &[], &[]).await;
-
         assert_eq!(found_live.as_ref().map(|r| r.id), Some(live.id));
         assert_eq!(
             found_disabled.as_ref().map(|r| r.id),
@@ -536,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_page_filters_by_keyword_and_status_excludes_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let keyword = unique("page_keyword");
         let live = seed_role(&db, &format!("{keyword}_live"), 1, None).await;
         let disabled = seed_role(&db, &format!("{keyword}_disabled"), 0, None).await;
@@ -573,8 +588,6 @@ mod tests {
         .await
         .unwrap();
 
-        cleanup(&db, &[live.id, disabled.id, deleted.id], &[], &[]).await;
-
         assert_eq!(data_all.total, 2, "软删除角色不应进入分页");
         assert_eq!(data_all.items.len(), 2);
         assert_eq!(data_enabled.total, 1, "status 过滤应只保留启用角色");
@@ -582,6 +595,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn soft_delete_role_removes_links_and_excludes_role() {
         let db = test_db().await;
         let menu = seed_menu(&db).await;
@@ -628,7 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_by_ids_excludes_deleted_roles() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         let live_role = sys_role::ActiveModel {
             role_name: Set("正常角色".to_string()),
@@ -675,7 +690,7 @@ mod tests {
     }
 
     /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
-    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+    async fn seed_actor(db: &impl ConnectionTrait) -> u64 {
         crate::entity::sys_user::ActiveModel {
             username: Set(unique("audit_actor")),
             password: Set("x".to_string()),
@@ -688,7 +703,7 @@ mod tests {
         .id
     }
 
-    async fn delete_actors(db: &DatabaseConnection, ids: &[u64]) {
+    async fn delete_actors(db: &impl ConnectionTrait, ids: &[u64]) {
         for id in ids {
             crate::entity::sys_user::Entity::delete_by_id(*id)
                 .exec(db)
@@ -698,6 +713,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_role_with_links_stamps_actor_as_creator_and_updater() {
         let db = test_db().await;
         let actor_id = seed_actor(&db).await;
@@ -725,6 +742,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_role_with_links_refreshes_updated_by_and_keeps_created_by() {
         let db = test_db().await;
         let creator_id = seed_actor(&db).await;
@@ -767,6 +786,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_role_refreshes_updated_by_for_status_change() {
         let db = test_db().await;
         let creator_id = seed_actor(&db).await;
@@ -803,7 +824,7 @@ mod tests {
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
     #[tokio::test]
     async fn find_page_filters_by_audit_columns_and_time_range() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("audit_page");
         let a = seed_role(&db, &format!("{kw}a"), 1, None).await;
         let b = seed_role(&db, &format!("{kw}b"), 1, None).await;

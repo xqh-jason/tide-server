@@ -1,5 +1,6 @@
 use sea_orm::ActiveValue::Set;
-use sea_orm::DatabaseConnection;
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::entity::sys_user;
 use crate::modules::permission::repo as permission_repo;
@@ -69,7 +70,7 @@ pub async fn page_users(
 /// 当前登录用户完整信息（契约 §3.2 的 `/user/info`）；返回 Model，
 /// UserInfoResp 组装与创建人名称拼装统一在 handler 层完成。
 pub async fn get_user_info(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl ConnectionTrait,
     user_id: u64,
 ) -> Result<sys_user::Model, AppError> {
     user_repo::find_by_id(db, user_id)
@@ -80,7 +81,7 @@ pub async fn get_user_info(
 /// 权限码数组（契约 §3.2 的 `/user/access-codes`）：
 /// 超管返回 `['super']`；普通用户按角色查按钮权限码（W3 完善）。
 pub async fn get_access_codes(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     user_id: u64,
 ) -> Result<Vec<String>, AppError> {
     let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
@@ -173,7 +174,10 @@ pub async fn create_user(
 }
 
 /// 获取用户详情（排除软删除）；不存在返回业务错误。
-pub async fn get_user(db: &DatabaseConnection, user_id: u64) -> Result<sys_user::Model, AppError> {
+pub async fn get_user(
+    db: &impl ConnectionTrait,
+    user_id: u64,
+) -> Result<sys_user::Model, AppError> {
     let user = user_repo::find_by_id(db, user_id).await?;
 
     if user.is_none() {
@@ -297,14 +301,14 @@ pub async fn delete_user(db: &DatabaseConnection, user_id: u64) -> Result<(), Ap
 }
 
 /// 全量用户（含软删）：审计过滤的用户选择器数据源，不做分页与脱敏以外的处理。
-pub async fn list_all_users(db: &DatabaseConnection) -> Result<Vec<UserBriefResp>, AppError> {
+pub async fn list_all_users(db: &impl ConnectionTrait) -> Result<Vec<UserBriefResp>, AppError> {
     let models = user_repo::find_all_include_deleted(db).await?;
     Ok(models.into_iter().map(UserBriefResp::from).collect())
 }
 
 /// 更新用户状态（启用/禁用）；内置超管 admin 不允许修改状态（审计字段由 repo 盖章）。
 pub async fn update_user_status(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     user_id: u64,
     status: i8,
@@ -348,6 +352,12 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     fn request(username: String, role_ids: Vec<u64>) -> CreateUserReq {
         CreateUserReq {
             username,
@@ -376,7 +386,7 @@ mod tests {
     }
 
     /// 直接插入一个目标用户，供 update 测试使用（不依赖 create 权限）。
-    async fn seed_target_user(db: &DatabaseConnection, username: String) -> sys_user::Model {
+    async fn seed_target_user(db: &impl ConnectionTrait, username: String) -> sys_user::Model {
         sys_user::ActiveModel {
             username: Set(username),
             password: Set("x".to_string()),
@@ -391,7 +401,7 @@ mod tests {
     }
 
     /// 返回内置超管 admin（不存在时创建，返回 owned 标记以便测试后清理）。
-    async fn load_or_create_admin(db: &DatabaseConnection) -> (sys_user::Model, bool) {
+    async fn load_or_create_admin(db: &impl ConnectionTrait) -> (sys_user::Model, bool) {
         if let Some(user) = user_repo::find_by_username_include_deleted(db, ADMIN_USERNAME)
             .await
             .unwrap()
@@ -418,7 +428,7 @@ mod tests {
 
     /// 授权操作者（actor）：create_user 的发起人。
     async fn seed_actor(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         deleted_at: Option<chrono::NaiveDateTime>,
     ) -> sys_user::Model {
         sys_user::ActiveModel {
@@ -434,7 +444,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn load_super_role(db: &DatabaseConnection) -> SuperRoleFixture {
+    async fn load_super_role(db: &impl ConnectionTrait) -> SuperRoleFixture {
         let existing = sys_role::Entity::find()
             .filter(sys_role::Column::RoleKey.eq(SUPER_ROLE_KEY))
             .one(db)
@@ -467,7 +477,7 @@ mod tests {
     }
 
     async fn seed_role(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         status: i8,
         deleted_at: Option<chrono::NaiveDateTime>,
     ) -> sys_role::Model {
@@ -485,7 +495,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_button(db: &DatabaseConnection, permission: &str) -> sys_menu::Model {
+    async fn seed_button(db: &impl ConnectionTrait, permission: &str) -> sys_menu::Model {
         sys_menu::ActiveModel {
             parent_id: Set(0),
             title: Set(unique_name("actor_menu")),
@@ -500,7 +510,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn bind_user_role(db: &DatabaseConnection, user_id: u64, role_id: u64) {
+    async fn bind_user_role(db: &impl ConnectionTrait, user_id: u64, role_id: u64) {
         sys_user_role::ActiveModel {
             user_id: Set(user_id),
             role_id: Set(role_id),
@@ -510,7 +520,7 @@ mod tests {
         .unwrap();
     }
 
-    async fn bind_role_menu(db: &DatabaseConnection, role_id: u64, menu_id: u64) {
+    async fn bind_role_menu(db: &impl ConnectionTrait, role_id: u64, menu_id: u64) {
         sys_role_menu::ActiveModel {
             role_id: Set(role_id),
             menu_id: Set(menu_id),
@@ -522,7 +532,7 @@ mod tests {
 
     /// 清理 actor 及其绑定关系；super 角色共享时不物理删除。
     async fn cleanup_actor(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         user: &sys_user::Model,
         roles: &[sys_role::Model],
         menus: &[sys_menu::Model],
@@ -573,6 +583,8 @@ mod tests {
     /// create_user 授权测试。覆盖 W3 计划步骤 5 的 service 层场景；
     /// “无登录请求”与“发起人已软删除”由 AuthRequired 中间件保证，不在本层重复。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_denies_actor_without_permission_and_saves_nothing() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -598,6 +610,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_allows_actor_with_button_permission() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -631,6 +645,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_allows_super_actor() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -662,6 +678,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_denies_actor_whose_roles_are_disabled_or_deleted() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -689,6 +707,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_links_enabled_roles_and_stores_hashed_password() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -749,6 +769,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_rejects_unknown_role_ids_without_saving_user() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -774,7 +796,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_user_info_rejects_deleted_user() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let username = unique_name("deleted_info_user");
 
         let user = sys_user::ActiveModel {
@@ -806,6 +828,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_rejects_username_matching_soft_deleted_user() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -843,6 +867,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_rejects_duplicate_role_ids() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -892,6 +918,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_accepts_unsorted_distinct_role_ids() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -955,14 +983,12 @@ mod tests {
     /// access-codes 契约（W3 步骤 7）：super 返回超管标识，普通用户返回去重的按钮权限码。
     #[tokio::test]
     async fn access_codes_returns_super_flag_for_super_user() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let actor = seed_actor(&db, None).await;
         let super_fixture = load_super_role(&db).await;
         bind_user_role(&db, actor.id, super_fixture.role.id).await;
 
         let result = get_access_codes(&db, actor.id).await;
-
-        cleanup_actor(&db, &actor, &[], &[], Some(super_fixture)).await;
 
         assert_eq!(
             result.unwrap(),
@@ -973,7 +999,7 @@ mod tests {
 
     #[tokio::test]
     async fn access_codes_returns_deduped_sorted_button_codes_for_normal_user() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let actor = seed_actor(&db, None).await;
         let role_a = seed_role(&db, 1, None).await;
         let role_b = seed_role(&db, 1, None).await;
@@ -1010,26 +1036,22 @@ mod tests {
 
     #[tokio::test]
     async fn access_codes_returns_empty_for_user_without_permissions() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let actor = seed_actor(&db, None).await;
         let role = seed_role(&db, 1, None).await;
         bind_user_role(&db, actor.id, role.id).await;
 
         let result = get_access_codes(&db, actor.id).await;
 
-        cleanup_actor(&db, &actor, &[role], &[], None).await;
-
         assert!(result.unwrap().is_empty(), "无按钮权限的用户应返回空数组");
     }
 
     #[tokio::test]
     async fn access_codes_returns_empty_for_user_without_roles() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let actor = seed_actor(&db, None).await;
 
         let result = get_access_codes(&db, actor.id).await;
-
-        cleanup_actor(&db, &actor, &[], &[], None).await;
 
         assert!(
             result.unwrap().is_empty(),
@@ -1041,6 +1063,8 @@ mod tests {
 
     /// 无权限操作者调用 update 被拒，且目标用户数据不变。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_user_denies_actor_without_permission_and_saves_nothing() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -1090,6 +1114,8 @@ mod tests {
 
     /// 拥有 system:user:update 按钮权限的操作者可更新普通用户（含角色重绑与密码更新）。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_user_allows_actor_with_button_permission() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -1157,6 +1183,8 @@ mod tests {
 
     /// 更新内置超管 admin 被拒，且 admin 数据不变。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_user_rejects_builtin_admin() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -1205,6 +1233,8 @@ mod tests {
 
     /// 更新普通用户时，把用户名改成 admin 被拒。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_user_rejects_renaming_to_admin() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -1248,6 +1278,8 @@ mod tests {
 
     /// 更新普通用户时，用户名与他人重复（排除自身）被拒。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_user_rejects_duplicate_username_excluding_self() {
         let db = test_db().await;
         let actor = seed_actor(&db, None).await;
@@ -1319,6 +1351,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn delete_user_soft_deletes_and_keeps_username_occupancy() {
         let db = test_db().await;
         let target = sys_user::ActiveModel {
@@ -1355,6 +1389,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn delete_user_rejects_admin_and_missing() {
         let db = test_db().await;
         let (admin, owned) = load_or_create_admin(&db).await;
@@ -1385,7 +1421,7 @@ mod tests {
         use crate::entity::sys_user;
         use sea_orm::ActiveModelTrait;
 
-        let db = test_db().await;
+        let db = test_txn().await;
         let name_a = unique_name("all_user_a");
         let name_b = unique_name("all_user_b_del");
 

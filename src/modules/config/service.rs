@@ -4,7 +4,8 @@
 //! 规格依据：docs/superpowers/specs/2026-09-05-w5-config-design.md §4 / §6。
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::DatabaseConnection;
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::entity::{sys_config, sys_site_config};
 use crate::modules::config::dto::{
@@ -18,7 +19,7 @@ use crate::utils::error::AppError;
 
 /// 参数分页（keyword 透传 repo）。
 pub async fn page_configs(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &ConfigListReq,
 ) -> anyhow::Result<PageData<sys_config::Model>> {
     config_repo::find_config_page(
@@ -34,7 +35,7 @@ pub async fn page_configs(
 
 /// 创建参数：config_key 全局唯一（含软删占位查重）。
 pub async fn create_config(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &CreateConfigReq,
 ) -> Result<sys_config::Model, AppError> {
@@ -62,7 +63,7 @@ pub async fn create_config(
 
 /// 更新参数：记录必须存在；key 查重需排除自身。
 pub async fn update_config(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &UpdateConfigReq,
 ) -> Result<sys_config::Model, AppError> {
@@ -92,13 +93,13 @@ pub async fn update_config(
 }
 
 /// 参数详情（不存在 → Biz("配置不存在：{id}")）。
-pub async fn get_config(db: &DatabaseConnection, id: u64) -> Result<sys_config::Model, AppError> {
+pub async fn get_config(db: &impl ConnectionTrait, id: u64) -> Result<sys_config::Model, AppError> {
     let model = config_repo::find_config_by_id(db, id).await?;
     model.ok_or_else(|| AppError::Biz(format!("配置不存在：{}", id)))
 }
 
 /// 删除参数：软删（repo 返回 false 即不存在或已软删 → Biz）。
-pub async fn delete_config(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
+pub async fn delete_config(db: &impl ConnectionTrait, id: u64) -> Result<(), AppError> {
     if !config_repo::soft_delete_config(db, id).await? {
         return Err(AppError::Biz(format!("配置不存在：{}", id)));
     }
@@ -131,7 +132,9 @@ fn default_site_config() -> sys_site_config::Model {
 }
 
 /// 网站设置：查单行（None 时回退默认值）。
-pub async fn get_site_config(db: &DatabaseConnection) -> Result<sys_site_config::Model, AppError> {
+pub async fn get_site_config(
+    db: &impl ConnectionTrait,
+) -> Result<sys_site_config::Model, AppError> {
     Ok(config_repo::find_site_config(db)
         .await?
         .unwrap_or_else(default_site_config))
@@ -139,7 +142,7 @@ pub async fn get_site_config(db: &DatabaseConnection) -> Result<sys_site_config:
 
 /// 网站设置：全量更新 id=1 行（行缺失 → Biz("网站设置记录缺失，请执行迁移种子")）。
 pub async fn update_site_config(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &UpdateSiteConfigReq,
 ) -> Result<sys_site_config::Model, AppError> {
@@ -183,6 +186,12 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     fn create_req(key: &str) -> CreateConfigReq {
         CreateConfigReq {
             config_name: format!("参数{key}"),
@@ -193,7 +202,7 @@ mod tests {
     }
 
     /// 清理：连软删行一并硬删，避免唯一键残留影响其他测试。
-    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
         sys_config::Entity::delete_many()
             .filter(sys_config::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -203,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_config_rejects_duplicate_key_including_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let key = unique("svc_cfg");
         let actor = 1;
 
@@ -212,8 +221,6 @@ mod tests {
         // 软删后键名仍占位：再建同键依旧被拒
         delete_config(&db, first.id).await.unwrap();
         let dup_after_delete = create_config(&db, actor, &create_req(&key)).await;
-
-        cleanup(&db, &[first.id]).await;
 
         assert!(
             matches!(dup,
@@ -229,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_config_allows_own_key_rejects_foreign_key() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let key1 = unique("svc_k1");
         let key2 = unique("svc_k2");
         let actor = 1;
@@ -255,8 +262,6 @@ mod tests {
         };
         let own_ok = update_config(&db, actor, &own).await.unwrap();
 
-        cleanup(&db, &[a.id, _b.id]).await;
-
         assert!(
             matches!(foreign,
             Err(AppError::Biz(ref m)) if m.contains("配置键已存在")),
@@ -269,7 +274,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_and_delete_missing_return_biz_error() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         let get_missing = get_config(&db, 9_999_999_999).await;
         let delete_missing = delete_config(&db, 9_999_999_999).await;
@@ -288,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn site_config_get_returns_seed_and_update_stamps_actor() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         let seeded = get_site_config(&db).await.unwrap();
         assert_eq!(seeded.id, 1, "种子行应存在（迁移保障）");

@@ -8,7 +8,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::entity::sys_file;
 use crate::modules::file::dto::{FileFilter, FileListReq, UploadInput};
@@ -18,7 +18,7 @@ use crate::utils::error::AppError;
 
 /// 分页查询（keyword 透传 repo）。
 pub async fn page_files(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &FileListReq,
 ) -> Result<PageData<sys_file::Model>, AppError> {
     let models = file_repo::find_page(
@@ -61,7 +61,7 @@ pub async fn page_files(
 /// → Biz("不支持的文件类型：{ext}")；size 超限 → Biz("文件大小超出限制：{size} 字节")。
 /// 磁盘 IO 失败 → `AppError::Internal`（规格 §7）。
 pub async fn upload_file(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     dir: &Path,
     max_size: u64,
     allows: &[String],
@@ -157,7 +157,7 @@ pub async fn upload_file(
 }
 
 /// 查询单个详情（不存在 → Biz("文件不存在：{id}")）。
-pub async fn get_file(db: &DatabaseConnection, id: u64) -> Result<sys_file::Model, AppError> {
+pub async fn get_file(db: &impl ConnectionTrait, id: u64) -> Result<sys_file::Model, AppError> {
     if let Some(model) = file_repo::find_by_id(db, id).await? {
         Ok(model)
     } else {
@@ -168,7 +168,7 @@ pub async fn get_file(db: &DatabaseConnection, id: u64) -> Result<sys_file::Mode
 /// 删除：判存在（不存在 → Biz）→ 软删记录。
 /// 规格决策 6：delete = 软删记录 + 物理删除磁盘文件（`dir.join(stored_name)`），
 /// 磁盘删除步骤待补（对应测试 delete_file_soft_deletes_record_and_removes_disk_file 的红灯）。
-pub async fn delete_file(db: &DatabaseConnection, dir: &Path, id: u64) -> Result<(), AppError> {
+pub async fn delete_file(db: &impl ConnectionTrait, dir: &Path, id: u64) -> Result<(), AppError> {
     if let Some(model) = file_repo::find_by_id(db, id).await? {
         let path = dir.join(model.stored_name.clone());
         tokio::fs::try_exists(&path)
@@ -190,7 +190,7 @@ pub async fn delete_file(db: &DatabaseConnection, dir: &Path, id: u64) -> Result
 /// 不存在 → Biz("文件不存在：{id}")；记录在但磁盘文件缺失 → Biz("文件存储已丢失：{id}")。
 /// 路径只由服务端 stored_name 拼装，禁止信任前端传参（防路径穿越）。
 pub async fn download_path(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     dir: &Path,
     id: u64,
 ) -> Result<(sys_file::Model, PathBuf), AppError> {
@@ -234,6 +234,12 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     /// 默认白名单（与 config.toml [upload].allows 一致的子集即可）。
     fn allows() -> Vec<String> {
         ["png", "jpg", "pdf", "txt", "zip"]
@@ -272,7 +278,7 @@ mod tests {
     }
 
     /// 清理：删记录（含软删）+ 删临时目录。
-    async fn cleanup(db: &DatabaseConnection, ids: &[u64], dir: &Path) {
+    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64], dir: &Path) {
         sys_file::Entity::delete_many()
             .filter(sys_file::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -283,7 +289,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_file_rejects_unlisted_and_missing_extension() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let dir = tmp_dir("reject_ext");
 
         let bad_ext = upload_file(
@@ -310,8 +316,6 @@ mod tests {
         )
         .await;
 
-        cleanup(&db, &[], &dir).await;
-
         let bad_ext_msg = match bad_ext {
             Err(AppError::Biz(m)) => m,
             other => panic!("白名单外扩展名应返回 Biz，实际 {other:?}"),
@@ -332,7 +336,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_file_rejects_empty_name_and_oversize() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let dir = tmp_dir("reject_size");
 
         let no_file = upload_file(
@@ -354,8 +358,6 @@ mod tests {
         )
         .await;
 
-        cleanup(&db, &[], &dir).await;
-
         assert!(
             matches!(no_file, Err(AppError::Biz(ref m)) if m.contains("未选择文件")),
             "空文件名（无文件字段）应返回 Biz(未选择文件)，实际 {no_file:?}"
@@ -376,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_file_stores_with_uuid_name_stamps_actor_and_persists_disk_file() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let dir = tmp_dir("upload_ok");
         let temp = temp_file(&dir, b"hello upload");
 
@@ -395,7 +397,6 @@ mod tests {
         let on_disk = fs::read(&disk_path);
         let by_id = file_repo::find_by_id(&db, model.id).await.unwrap();
 
-        cleanup(&db, &[model.id], &dir).await;
         let _ = fs::remove_file(&temp);
 
         assert_eq!(model.name, "报告.txt", "原始名应原样入库");
@@ -426,7 +427,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_file_soft_deletes_record_and_removes_disk_file() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let dir = tmp_dir("delete");
         let temp = temp_file(&dir, b"to be deleted");
 
@@ -449,7 +450,6 @@ mod tests {
         // 磁盘存在性断言必须在 cleanup 之前：cleanup 会整目录删除，放在后面就是空断言
         let disk_gone = !disk_path.exists();
 
-        cleanup(&db, &[model.id], &dir).await;
         let _ = fs::remove_file(&temp);
 
         assert!(after.is_none(), "删除后记录不可见");
@@ -462,13 +462,11 @@ mod tests {
 
     #[tokio::test]
     async fn get_and_delete_missing_return_biz_error() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let dir = tmp_dir("missing");
 
         let get_missing = get_file(&db, 9_999_999_999).await;
         let delete_missing = delete_file(&db, &dir, 9_999_999_999).await;
-
-        cleanup(&db, &[], &dir).await;
 
         assert!(
             matches!(get_missing, Err(AppError::Biz(ref m)) if m.contains("文件不存在")),
@@ -482,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn download_path_resolves_record_and_reports_lost_storage() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let dir = tmp_dir("download");
         let temp = temp_file(&dir, b"downloadable");
 
@@ -504,7 +502,6 @@ mod tests {
         let lost = download_path(&db, &dir, model.id).await;
         let missing = download_path(&db, &dir, 9_999_999_999).await;
 
-        cleanup(&db, &[model.id], &dir).await;
         let _ = fs::remove_file(&temp);
 
         assert_eq!(

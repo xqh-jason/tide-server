@@ -2,13 +2,13 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, TransactionTrait};
+use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, TransactionTrait};
 
 use crate::entity::{sys_api, sys_api::Model, sys_role_api};
 use crate::modules::sys_api::dto::ApiFilter;
 
 /// 查询单个有效 API（排除软删除）。
-pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
+pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
     let api = sys_api::Entity::find()
         .filter(sys_api::Column::Id.eq(id))
         .filter(sys_api::Column::DeletedAt.is_null())
@@ -19,7 +19,7 @@ pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Opti
 
 /// 分页 + 动态过滤查询（keyword 匹配 path/description/api_group，status/method 精确）。
 pub async fn find_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &ApiFilter,
     page_index: u64,
     page_size: u64,
@@ -144,7 +144,7 @@ pub async fn soft_delete_api(db: &DatabaseConnection, id: u64) -> anyhow::Result
 
 /// 查重辅助：path + method 组合（含软删记录占位）。
 pub async fn find_by_path_method_include_deleted(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     path: &str,
     method: &str,
 ) -> anyhow::Result<Option<Model>> {
@@ -181,8 +181,14 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     async fn seed_api(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         path: &str,
         method: &str,
         status: i8,
@@ -202,7 +208,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_role(db: &DatabaseConnection) -> sys_role::Model {
+    async fn seed_role(db: &impl ConnectionTrait) -> sys_role::Model {
         sys_role::ActiveModel {
             role_name: Set(unique("api_role")),
             role_key: Set(unique("api_role_key")),
@@ -217,7 +223,7 @@ mod tests {
     }
 
     /// 清理顺序：先删关联表，再删主表。
-    async fn cleanup(db: &DatabaseConnection, api_ids: &[u64], role_ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, api_ids: &[u64], role_ids: &[u64]) {
         for api_id in api_ids {
             sys_role_api::Entity::delete_many()
                 .filter(sys_role_api::Column::ApiId.eq(*api_id))
@@ -239,6 +245,8 @@ mod tests {
 
     /// 创建 API：事务写入主表 + 角色授权关联。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_api_with_links_persists_api_and_links() {
         let db = test_db().await;
         let role_a = seed_role(&db).await;
@@ -275,6 +283,8 @@ mod tests {
 
     /// 空角色列表也能创建 API（不触发无效 SQL）。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_api_with_links_supports_empty_role_ids() {
         let db = test_db().await;
         let created = create_api_with_links(
@@ -301,7 +311,7 @@ mod tests {
     /// find_by_id 排除软删除。
     #[tokio::test]
     async fn find_by_id_excludes_soft_deleted_api() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let live = seed_api(&db, &format!("/live_{}", unique("find")), "POST", 1, None).await;
         let deleted = seed_api(
             &db,
@@ -315,8 +325,6 @@ mod tests {
         let found_live = find_by_id(&db, live.id).await.unwrap();
         let found_deleted = find_by_id(&db, deleted.id).await.unwrap();
 
-        cleanup(&db, &[live.id, deleted.id], &[]).await;
-
         assert_eq!(found_live.as_ref().map(|a| a.id), Some(live.id));
         assert!(found_deleted.is_none(), "软删除 API 不应被 find_by_id 查到");
     }
@@ -324,7 +332,7 @@ mod tests {
     /// 分页：keyword / status / method 过滤，排除软删。
     #[tokio::test]
     async fn find_page_filters_by_keyword_status_method_excludes_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let keyword = unique("page_keyword");
         let live = seed_api(&db, &format!("/{keyword}_live"), "POST", 1, None).await;
         let get_api = seed_api(&db, &format!("/{keyword}_get"), "GET", 1, None).await;
@@ -365,14 +373,14 @@ mod tests {
         .await
         .unwrap();
 
-        cleanup(&db, &[live.id, get_api.id, disabled.id, deleted.id], &[]).await;
-
         assert_eq!(data_all.total, 3, "软删除 API 不应进入分页");
         assert_eq!(data_post.total, 2, "method 过滤应只保留 POST 且启用");
     }
 
     /// 更新 API：事务内重建角色授权关联（旧关联清空、新关联落库）。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_api_with_links_rebuilds_links_in_transaction() {
         let db = test_db().await;
         let role_old = seed_role(&db).await;
@@ -414,6 +422,8 @@ mod tests {
 
     /// 软删除：物理清空授权关联，主表不可再被 find_by_id 查到。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn soft_delete_api_removes_links_and_excludes_api() {
         let db = test_db().await;
         let role = seed_role(&db).await;
@@ -451,7 +461,7 @@ mod tests {
     /// 查重辅助：path + method 组合（含软删记录占位）。
     #[tokio::test]
     async fn find_by_path_method_include_deleted_finds_soft_deleted_api() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let path = format!("/api/v1/{}/dup", unique("dup"));
         let deleted = seed_api(
             &db,
@@ -466,13 +476,11 @@ mod tests {
             .await
             .unwrap();
 
-        cleanup(&db, &[deleted.id], &[]).await;
-
         assert_eq!(found.as_ref().map(|a| a.id), Some(deleted.id));
     }
 
     /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
-    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+    async fn seed_actor(db: &impl ConnectionTrait) -> u64 {
         crate::entity::sys_user::ActiveModel {
             username: Set(unique("audit_actor")),
             password: Set("x".to_string()),
@@ -485,7 +493,7 @@ mod tests {
         .id
     }
 
-    async fn delete_actors(db: &DatabaseConnection, ids: &[u64]) {
+    async fn delete_actors(db: &impl ConnectionTrait, ids: &[u64]) {
         crate::entity::sys_user::Entity::delete_many()
             .filter(crate::entity::sys_user::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -494,6 +502,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_api_with_links_stamps_actor_as_creator_and_updater() {
         let db = test_db().await;
         let actor_id = seed_actor(&db).await;
@@ -522,6 +532,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_api_with_links_refreshes_updated_by_and_keeps_created_by() {
         let db = test_db().await;
         let creator_id = seed_actor(&db).await;
@@ -566,7 +578,7 @@ mod tests {
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
     #[tokio::test]
     async fn find_page_filters_by_audit_columns_and_time_range() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("audit_page");
         let a = seed_api(&db, &format!("/{kw}a"), "GET", 1, None).await;
         let b = seed_api(&db, &format!("/{kw}b"), "POST", 1, None).await;

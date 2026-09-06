@@ -5,7 +5,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, QueryOrder};
+use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QueryOrder};
 
 use crate::entity::{sys_config, sys_site_config};
 use crate::modules::config::dto::ConfigFilter;
@@ -14,7 +14,7 @@ use crate::modules::config::dto::ConfigFilter;
 
 /// 参数：按主键查有效记录（排除软删）。
 pub async fn find_config_by_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     id: u64,
 ) -> anyhow::Result<Option<sys_config::Model>> {
     let model = sys_config::Entity::find()
@@ -27,7 +27,7 @@ pub async fn find_config_by_id(
 
 /// 参数：分页 + 动态过滤（keyword 对 name / key 模糊），排除软删，created_at 倒序。
 pub async fn find_config_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &ConfigFilter,
     page_index: u64,
     page_size: u64,
@@ -53,7 +53,7 @@ pub async fn find_config_page(
 /// 参数：按 config_key 查记录——**含软删占位**，不过滤 deleted_at。
 /// 供创建/更新查重：键名删除后仍占位，防止历史引用歧义。
 pub async fn find_config_by_key_include_deleted(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     key: &str,
 ) -> anyhow::Result<Option<sys_config::Model>> {
     let model = sys_config::Entity::find()
@@ -65,7 +65,7 @@ pub async fn find_config_by_key_include_deleted(
 
 /// 参数：创建。`actor_id` 为操作人，审计字段由 repo 统一盖章双写。
 pub async fn create_config(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_config::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<sys_config::Model> {
@@ -78,7 +78,7 @@ pub async fn create_config(
 
 /// 参数：更新（主键必须已设置）。审计字段由 repo 统一盖章：只刷新更新人。
 pub async fn update_config(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_config::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<sys_config::Model> {
@@ -89,7 +89,7 @@ pub async fn update_config(
 }
 
 /// 参数：软删单条，返回是否实际删除（不存在或已软删返回 false）。
-pub async fn soft_delete_config(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
+pub async fn soft_delete_config(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<bool> {
     let model = find_config_by_id(db, id).await?;
     if let Some(model) = model {
         let mut model: sys_config::ActiveModel = model.into();
@@ -105,7 +105,7 @@ pub async fn soft_delete_config(db: &DatabaseConnection, id: u64) -> anyhow::Res
 
 /// 网站设置：查单行（恒 id=1）。
 pub async fn find_site_config(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
 ) -> anyhow::Result<Option<sys_site_config::Model>> {
     let model = sys_site_config::Entity::find()
         .filter(sys_site_config::Column::Id.eq(1))
@@ -116,7 +116,7 @@ pub async fn find_site_config(
 
 /// 网站设置：更新单行（主键必须已设置 id=1）。审计字段由 repo 统一盖章：只刷新更新人。
 pub async fn update_site_config(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_site_config::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<sys_site_config::Model> {
@@ -150,9 +150,15 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     /// 造一条参数记录；key 用唯一名防测试间冲突。
     async fn seed_config(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         key: &str,
         created_at: chrono::NaiveDateTime,
         deleted_at: Option<chrono::NaiveDateTime>,
@@ -171,7 +177,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
         sys_config::Entity::delete_many()
             .filter(sys_config::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -181,7 +187,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_config_page_filters_by_keyword_sorts_desc_excludes_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("repo_cfg");
         let base = chrono::Local::now().naive_local();
 
@@ -214,8 +220,6 @@ mod tests {
             .await
             .unwrap();
 
-        cleanup(&db, &[a.id, b.id, c.id, deleted.id]).await;
-
         assert_eq!(page.total, 3, "keyword 应命中 3 条活记录，软删不进分页");
         let ids: Vec<u64> = page.items.iter().map(|m| m.id).collect();
         assert_eq!(
@@ -227,7 +231,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_config_by_key_includes_soft_deleted_placeholder() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let key = unique("cfg_key");
         let deleted = seed_config(
             &db,
@@ -238,7 +242,6 @@ mod tests {
         .await;
 
         let hit = find_config_by_key_include_deleted(&db, &key).await.unwrap();
-        cleanup(&db, &[deleted.id]).await;
 
         assert!(
             hit.is_some(),
@@ -248,7 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn soft_delete_config_marks_deleted_and_second_call_returns_false() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let a = seed_config(
             &db,
             &unique("cfg_del"),
@@ -261,8 +264,6 @@ mod tests {
         let after = find_config_by_id(&db, a.id).await.unwrap();
         let second = soft_delete_config(&db, a.id).await.unwrap();
 
-        cleanup(&db, &[a.id]).await;
-
         assert!(first, "首次软删应返回 true");
         assert!(after.is_none(), "软删后 find_config_by_id 不可见");
         assert!(!second, "重复软删应返回 false");
@@ -270,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn site_config_seed_row_exists_and_update_succeeds() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         let before = find_site_config(&db).await.unwrap();
         assert!(before.is_some(), "迁移种子行应存在（id=1）");

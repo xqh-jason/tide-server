@@ -11,7 +11,7 @@ use crate::entity::{sys_file, sys_file::Model};
 use crate::modules::file::dto::FileFilter;
 
 /// 按主键查有效记录（排除软删）。
-pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
+pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
     let model = sys_file::Entity::find()
         .filter(sys_file::Column::Id.eq(id))
         .filter(sys_file::Column::DeletedAt.is_null())
@@ -22,7 +22,7 @@ pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Opti
 
 /// 分页 + 动态过滤（keyword 对 name 模糊），排除软删，created_at 倒序。
 pub async fn find_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &FileFilter,
     page_index: u64,
     page_size: u64,
@@ -62,7 +62,7 @@ pub async fn find_page(
 
 /// 创建记录（上传落库入口）。`actor_id` 为上传人，审计字段由 repo 统一盖章。
 pub async fn create_file(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_file::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<Model> {
@@ -75,7 +75,7 @@ pub async fn create_file(
 }
 
 /// 软删单条：`deleted_at` 置为当前时间，返回是否实际删除（不存在或已软删返回 false）。
-pub async fn soft_delete_file(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
+pub async fn soft_delete_file(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<bool> {
     if let Some(model) = find_by_id(db, id).await? {
         let mut mode: sys_file::ActiveModel = model.into();
         mode.deleted_at = Set(Some(chrono::Local::now().naive_local()));
@@ -107,10 +107,16 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     /// 造一条文件记录；`stored_name` 用唯一名防测试间冲突（真实 uuid 命名由 service 测试覆盖）。
     #[allow(clippy::too_many_arguments)]
     async fn seed(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         name: &str,
         created_at: chrono::NaiveDateTime,
         deleted_at: Option<chrono::NaiveDateTime>,
@@ -131,7 +137,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
         sys_file::Entity::delete_many()
             .filter(sys_file::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -141,7 +147,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_page_filters_by_keyword_sorts_desc_excludes_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("repo_page");
         let base = chrono::Local::now().naive_local();
 
@@ -184,8 +190,6 @@ mod tests {
         .await
         .unwrap();
 
-        cleanup(&db, &[a.id, b.id, c.id, deleted.id, other.id]).await;
-
         assert_eq!(
             page.total, 3,
             "keyword 应只命中 3 条活记录，软删与他名记录不进分页"
@@ -200,7 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn soft_delete_file_marks_deleted_and_second_call_returns_false() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("repo_del");
         let a = seed(
             &db,
@@ -214,8 +218,6 @@ mod tests {
         let after = find_by_id(&db, a.id).await.unwrap();
         let second = soft_delete_file(&db, a.id).await.unwrap();
 
-        cleanup(&db, &[a.id]).await;
-
         assert!(first, "首次软删应返回 true");
         assert!(after.is_none(), "软删后 find_by_id 不可见");
         assert!(!second, "重复软删应返回 false");
@@ -224,7 +226,7 @@ mod tests {
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
     #[tokio::test]
     async fn find_page_filters_by_audit_columns_and_time_range() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("audit_page");
         let a = seed(
             &db,

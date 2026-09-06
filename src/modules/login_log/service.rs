@@ -1,6 +1,7 @@
 //! 登录日志业务（codegen 生成后裁剪：只读 + 删除 + 批量删除）。
 
-use sea_orm::DatabaseConnection;
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::entity::sys_login_log;
 use crate::modules::login_log::dto::LoginLogListReq;
@@ -10,7 +11,7 @@ use crate::utils::error::AppError;
 
 /// 分页查询。
 pub async fn page_login_logs(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &LoginLogListReq,
 ) -> anyhow::Result<PageData<sys_login_log::Model>> {
     login_log_repo::find_page(
@@ -28,7 +29,7 @@ pub async fn page_login_logs(
 
 /// 查询单个详情（排除软删除）。
 pub async fn get_login_log(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     id: u64,
 ) -> Result<sys_login_log::Model, AppError> {
     let Some(model) = login_log_repo::find_by_id(db, id).await? else {
@@ -38,7 +39,7 @@ pub async fn get_login_log(
 }
 
 /// 删除：判存在后软删。
-pub async fn delete_login_log(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
+pub async fn delete_login_log(db: &impl ConnectionTrait, id: u64) -> Result<(), AppError> {
     let Some(_) = login_log_repo::find_by_id(db, id).await? else {
         return Err(AppError::Biz(format!("登录日志不存在：{id}")));
     };
@@ -47,7 +48,10 @@ pub async fn delete_login_log(db: &DatabaseConnection, id: u64) -> Result<(), Ap
 }
 
 /// 批量软删：空数组返回 0；repo 层忽略不存在的 id。
-pub async fn delete_login_log_batch(db: &DatabaseConnection, ids: &[u64]) -> Result<u64, AppError> {
+pub async fn delete_login_log_batch(
+    db: &impl ConnectionTrait,
+    ids: &[u64],
+) -> Result<u64, AppError> {
     if ids.is_empty() {
         return Ok(0);
     }
@@ -78,9 +82,15 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn seed(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         username: &str,
         ip: &str,
         status: i8,
@@ -119,7 +129,7 @@ mod tests {
         }
     }
 
-    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
         sys_login_log::Entity::delete_many()
             .filter(sys_login_log::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -129,7 +139,7 @@ mod tests {
 
     #[tokio::test]
     async fn page_login_logs_filters_by_username_ip_status() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("svc_page");
         let base = chrono::Local::now().naive_local();
         let deleted_at = Some(chrono::Local::now().naive_local());
@@ -173,8 +183,6 @@ mod tests {
         .await
         .unwrap();
 
-        cleanup(&db, &[hit.id, other_status.id, other_ip.id, deleted.id]).await;
-
         assert_eq!(by_username.total, 3, "keyword 应命中 3 条活记录");
         assert_eq!(by_ip_status.total, 1, "ip + status 精确过滤");
         assert_eq!(by_ip_status.items[0].id, hit.id);
@@ -182,7 +190,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_and_delete_missing_return_biz_error() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         let get_missing = get_login_log(&db, 9_999_999_999).await;
         let delete_missing = delete_login_log(&db, 9_999_999_999).await;
@@ -193,7 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_batch_skips_missing_and_empty_ok() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("svc_batch");
         let base = chrono::Local::now().naive_local();
         let a = seed(&db, &format!("svc{kw}a"), "10.0.0.1", 1, base, None).await;
@@ -223,8 +231,6 @@ mod tests {
                 .unwrap();
         let a_after = login_log_repo::find_by_id(&db, a.id).await.unwrap();
         let b_after = login_log_repo::find_by_id(&db, b.id).await.unwrap();
-
-        cleanup(&db, &[a.id, b.id, already_deleted.id]).await;
 
         assert_eq!(empty, 0, "空数组应返回 0 且不执行删除");
         assert_eq!(affected, 2, "只处理存在且未删除的行");

@@ -15,7 +15,7 @@ use crate::modules::dictionary::dto::{DictionaryDetailFilter, DictionaryFilter};
 
 /// 类型：按主键查有效记录（排除软删）。
 pub async fn find_dictionary_by_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     id: u64,
 ) -> anyhow::Result<Option<Dictionary>> {
     let model = sys_dictionary::Entity::find()
@@ -28,7 +28,7 @@ pub async fn find_dictionary_by_id(
 
 /// 类型：分页 + 动态过滤（keyword 对 name / type 模糊，status 精确），id 倒序。
 pub async fn find_dictionary_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &DictionaryFilter,
     page_index: u64,
     page_size: u64,
@@ -76,7 +76,7 @@ pub async fn find_dictionary_page(
 /// 注意与查重辅助 `find_dictionary_by_type_include_deleted` 的区别：
 /// 本函数过滤软删，只服务「取当前可用类型」；查重语义必须走 include_deleted 版本。
 pub async fn find_dictionary_by_type(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     r#type: &str,
 ) -> anyhow::Result<Option<Dictionary>> {
     let model = sys_dictionary::Entity::find()
@@ -90,7 +90,7 @@ pub async fn find_dictionary_by_type(
 
 /// 类型：查重辅助——type 唯一（含软删占位，不过滤 deleted_at）。
 pub async fn find_dictionary_by_type_include_deleted(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     r#type: &str,
 ) -> anyhow::Result<Option<Dictionary>> {
     let model = sys_dictionary::Entity::find()
@@ -103,7 +103,7 @@ pub async fn find_dictionary_by_type_include_deleted(
 /// 类型：创建。
 /// 类型：创建。`actor_id` 为操作人，审计字段由 repo 统一盖章。
 pub async fn create_dictionary(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_dictionary::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<Dictionary> {
@@ -117,7 +117,7 @@ pub async fn create_dictionary(
 
 /// 类型：更新（主键必须已设置）。审计字段由 repo 统一盖章：只刷新更新人。
 pub async fn update_dictionary(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_dictionary::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<Dictionary> {
@@ -128,7 +128,7 @@ pub async fn update_dictionary(
 }
 
 /// 类型：软删单条，返回是否实际删除（不存在或已软删返回 false）。
-pub async fn soft_delete_dictionary(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
+pub async fn soft_delete_dictionary(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<bool> {
     // 先查询是否存在，再软删
     let Some(model) = find_dictionary_by_id(db, id).await? else {
         return Ok(false);
@@ -142,7 +142,10 @@ pub async fn soft_delete_dictionary(db: &DatabaseConnection, id: u64) -> anyhow:
 // —— 字典项 ——
 
 /// 字典项：按主键查有效记录（排除软删）。
-pub async fn find_detail_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Detail>> {
+pub async fn find_detail_by_id(
+    db: &impl ConnectionTrait,
+    id: u64,
+) -> anyhow::Result<Option<Detail>> {
     let model = sys_dictionary_detail::Entity::find()
         .filter(sys_dictionary_detail::Column::Id.eq(id))
         .filter(sys_dictionary_detail::Column::DeletedAt.is_null())
@@ -154,7 +157,7 @@ pub async fn find_detail_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Resu
 /// 字典项：分页 + 动态过滤（dictionary_id 精确 + keyword 对 label/value 模糊
 /// + status 精确），sort 升序、id 升序。
 pub async fn find_detail_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &DictionaryDetailFilter,
     page_index: u64,
     page_size: u64,
@@ -201,7 +204,7 @@ pub async fn find_detail_page(
 
 /// 字典项：取某类型下全部启用且未软删的项，sort 升序、id 升序（`get-by-type` 用）。
 pub async fn find_enabled_details(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     dictionary_id: u64,
 ) -> anyhow::Result<Vec<Detail>> {
     let details = sys_dictionary_detail::Entity::find()
@@ -217,7 +220,7 @@ pub async fn find_enabled_details(
 
 /// 字典项：查重辅助——同类型同 value 的活记录（软删的不算，见规格 §3.3）。
 pub async fn find_alive_detail_by_value(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     dictionary_id: u64,
     value: &str,
 ) -> anyhow::Result<Option<Detail>> {
@@ -232,7 +235,7 @@ pub async fn find_alive_detail_by_value(
 
 /// 字典项：级联软删某类型下全部活记录，返回受影响行数。
 pub async fn soft_delete_details_by_dictionary_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     dictionary_id: u64,
 ) -> anyhow::Result<u64> {
     let now = chrono::Local::now().naive_local();
@@ -251,7 +254,7 @@ pub async fn soft_delete_details_by_dictionary_id(
 /// 字典项：创建。
 /// 字典项：创建。`actor_id` 为操作人，审计字段由 repo 统一盖章。
 pub async fn create_detail(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_dictionary_detail::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<Detail> {
@@ -264,7 +267,7 @@ pub async fn create_detail(
 
 /// 字典项：更新（主键必须已设置）。审计字段由 repo 统一盖章：只刷新更新人。
 pub async fn update_detail(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_dictionary_detail::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<Detail> {
@@ -274,7 +277,7 @@ pub async fn update_detail(
 }
 
 /// 字典项：软删单条，返回是否实际删除（不存在或已软删返回 false）。
-pub async fn soft_delete_detail(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
+pub async fn soft_delete_detail(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<bool> {
     let Some(model) = find_detail_by_id(db, id).await? else {
         return Ok(false);
     };
@@ -307,12 +310,18 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     fn now() -> chrono::NaiveDateTime {
         chrono::Local::now().naive_local()
     }
 
     async fn seed_dictionary(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         name: &str,
         r#type: &str,
         status: i8,
@@ -332,7 +341,7 @@ mod tests {
     }
 
     async fn seed_detail(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         dictionary_id: u64,
         value: &str,
         label: &str,
@@ -356,7 +365,7 @@ mod tests {
     }
 
     /// 测后清理：先物理删字典项，再删字典类型。
-    async fn cleanup(db: &DatabaseConnection, dictionary_ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, dictionary_ids: &[u64]) {
         sys_dictionary_detail::Entity::delete_many()
             .filter(
                 sys_dictionary_detail::Column::DictionaryId.is_in(dictionary_ids.iter().copied()),
@@ -373,7 +382,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_dictionary_page_filters_by_keyword_and_status_excludes_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("kw");
         // 命中 name，启用
         let by_name = seed_dictionary(&db, &format!("名称{kw}"), &unique("t"), 1, None).await;
@@ -445,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_dictionary_by_type_include_deleted_finds_soft_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let live = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let deleted = seed_dictionary(&db, &unique("nm"), &unique("tdel"), 1, Some(now())).await;
 
@@ -455,8 +464,6 @@ mod tests {
         let found_deleted = find_dictionary_by_type_include_deleted(&db, &deleted.r#type)
             .await
             .unwrap();
-
-        cleanup(&db, &[live.id, deleted.id]).await;
 
         assert_eq!(found_live.map(|m| m.id), Some(live.id));
         assert_eq!(
@@ -468,7 +475,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_detail_page_filters_by_dictionary_and_keyword_excludes_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let d1 = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let d2 = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let kw = unique("kw");
@@ -515,8 +522,6 @@ mod tests {
         .await
         .unwrap();
 
-        cleanup(&db, &[d1.id, d2.id]).await;
-
         assert_eq!(page.total, 2, "keyword 应命中 label 与 value 且排除软删");
         let mut ids: Vec<u64> = page.items.iter().map(|m| m.id).collect();
         ids.sort_unstable();
@@ -529,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_enabled_details_only_alive_and_enabled_sorted_by_sort() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let d = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let second = seed_detail(&db, d.id, &unique("v"), "lb", 2, 1, None).await;
         let first = seed_detail(&db, d.id, &unique("v"), "lb", 1, 1, None).await;
@@ -537,7 +542,6 @@ mod tests {
         let _deleted = seed_detail(&db, d.id, &unique("v"), "lb", 0, 1, Some(now())).await;
 
         let items = find_enabled_details(&db, d.id).await.unwrap();
-        cleanup(&db, &[d.id]).await;
 
         let ids: Vec<u64> = items.iter().map(|m| m.id).collect();
         assert_eq!(ids, vec![first.id, second.id], "只返回启用项且按 sort 升序");
@@ -545,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn soft_delete_details_by_dictionary_id_marks_all_alive_rows() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let d = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let _a = seed_detail(&db, d.id, &unique("v"), "lb", 1, 1, None).await;
         let _b = seed_detail(&db, d.id, &unique("v"), "lb", 2, 1, None).await;
@@ -555,7 +559,6 @@ mod tests {
             .await
             .unwrap();
         let left = find_enabled_details(&db, d.id).await.unwrap();
-        cleanup(&db, &[d.id]).await;
 
         assert_eq!(affected, 2, "只统计活记录，已软删的不重复处理");
         assert!(left.is_empty(), "级联软删后该类型下不应再有启用项");
@@ -563,7 +566,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_alive_detail_by_value_ignores_soft_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let d = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let _old = seed_detail(&db, d.id, "dup_value", "lb", 0, 1, Some(now())).await;
 
@@ -575,8 +578,6 @@ mod tests {
             .await
             .unwrap();
 
-        cleanup(&db, &[d.id]).await;
-
         assert!(
             found_deleted.is_none(),
             "软删占位不算活记录：同 value 应允许重建"
@@ -585,7 +586,7 @@ mod tests {
     }
 
     /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
-    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+    async fn seed_actor(db: &impl ConnectionTrait) -> u64 {
         crate::entity::sys_user::ActiveModel {
             username: Set(unique("audit_actor")),
             password: Set("x".to_string()),
@@ -598,7 +599,7 @@ mod tests {
         .id
     }
 
-    async fn delete_actors(db: &DatabaseConnection, ids: &[u64]) {
+    async fn delete_actors(db: &impl ConnectionTrait, ids: &[u64]) {
         crate::entity::sys_user::Entity::delete_many()
             .filter(crate::entity::sys_user::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -608,7 +609,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_dictionary_stamps_actor_as_creator_and_updater() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let actor_id = seed_actor(&db).await;
 
         let created = create_dictionary(
@@ -627,13 +628,12 @@ mod tests {
         assert_eq!(created.created_by, actor_id);
         assert_eq!(created.updated_by, actor_id);
 
-        cleanup(&db, &[created.id]).await;
         delete_actors(&db, &[actor_id]).await;
     }
 
     #[tokio::test]
     async fn update_dictionary_refreshes_updated_by_and_keeps_created_by() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let creator_id = seed_actor(&db).await;
         let updater_id = seed_actor(&db).await;
 
@@ -665,13 +665,12 @@ mod tests {
         assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
         assert_eq!(updated.updated_by, updater_id);
 
-        cleanup(&db, &[created.id]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;
     }
 
     #[tokio::test]
     async fn create_detail_stamps_actor_as_creator_and_updater() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let actor_id = seed_actor(&db).await;
         let dict = seed_dictionary(&db, "审计字典", &unique("audit_type"), 1, None).await;
 
@@ -692,13 +691,12 @@ mod tests {
         assert_eq!(created.created_by, actor_id);
         assert_eq!(created.updated_by, actor_id);
 
-        cleanup(&db, &[dict.id]).await;
         delete_actors(&db, &[actor_id]).await;
     }
 
     #[tokio::test]
     async fn update_detail_refreshes_updated_by_and_keeps_created_by() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let creator_id = seed_actor(&db).await;
         let updater_id = seed_actor(&db).await;
         let dict = seed_dictionary(&db, "审计字典", &unique("audit_type"), 1, None).await;
@@ -732,14 +730,13 @@ mod tests {
         assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
         assert_eq!(updated.updated_by, updater_id);
 
-        cleanup(&db, &[dict.id]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;
     }
 
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
     #[tokio::test]
     async fn find_page_filters_by_audit_columns_and_time_range() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("audit_page");
         let a = seed_dictionary(&db, &format!("{kw}a"), &unique("audit_type"), 1, None).await;
         let b = seed_dictionary(&db, &format!("{kw}b"), &unique("audit_type"), 1, None).await;
@@ -882,7 +879,7 @@ mod tests {
     /// 字典项审计过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
     #[tokio::test]
     async fn find_detail_page_filters_by_audit_columns_and_time_range() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("audit_detail");
         let dict =
             seed_dictionary(&db, &unique("audit_dict"), &unique("audit_dtype"), 1, None).await;
@@ -925,7 +922,6 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let P = find_detail_page;
         let all = find_detail_page(
             &db,
             &DictionaryDetailFilter {

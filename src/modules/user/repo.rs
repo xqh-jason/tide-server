@@ -3,10 +3,10 @@ use crate::entity::{sys_role, sys_user, sys_user_role};
 use crate::modules::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, QueryOrder, TransactionTrait};
+use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QueryOrder, TransactionTrait};
 
 /// 查询单个有效用户（排除软删除）。
-pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
+pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
     Ok(sys_user::Entity::find_by_id(id)
         .filter(sys_user::Column::DeletedAt.is_null())
         .one(db)
@@ -15,7 +15,7 @@ pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Opti
 
 /// 按用户名查询有效用户（登录用，排除软删除）。
 pub async fn find_by_username(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     username: &str,
 ) -> anyhow::Result<Option<Model>> {
     let user = sys_user::Entity::find()
@@ -29,7 +29,7 @@ pub async fn find_by_username(
 
 /// 按用户名查询（含软删占位，创建用户查重用）。
 pub async fn find_by_username_include_deleted(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     username: &str,
 ) -> anyhow::Result<Option<Model>> {
     let user = sys_user::Entity::find()
@@ -42,7 +42,7 @@ pub async fn find_by_username_include_deleted(
 
 /// 查询用户关联的所有启用角色（W2 登录取角色；先不做 join，W3 学 many-to-many 时再换 Linked）。
 pub async fn find_roles_by_user_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     user_id: u64,
 ) -> anyhow::Result<Vec<sys_role::Model>> {
     let links = sys_user_role::Entity::find()
@@ -66,7 +66,7 @@ pub async fn find_roles_by_user_id(
 /// - 分页用 `PaginatorTrait::paginate`，`page_index` 为 0-based
 /// 返回 `PageData<Model>`（总条数 / 总页数 / 当前页数据）。
 pub async fn find_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &UserFilter,
     page_index: u64,
     page_size: u64,
@@ -179,7 +179,7 @@ pub async fn update_user_with_links(
 
 /// 通用更新（ActiveModel 入参，状态更新等单字段场景用）。
 pub async fn update_user(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_user::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<bool> {
@@ -214,7 +214,7 @@ pub async fn soft_delete_user(db: &DatabaseConnection, id: u64) -> anyhow::Resul
 
 /// 全量用户（**含软删**）：审计过滤的用户选择器数据源——历史记录的
 /// 操作人即便已软删，仍需回显名字，故不过滤 `deleted_at`。
-pub async fn find_all_include_deleted(db: &DatabaseConnection) -> anyhow::Result<Vec<Model>> {
+pub async fn find_all_include_deleted(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Model>> {
     let models = sys_user::Entity::find()
         .order_by_asc(sys_user::Column::Id)
         .all(db)
@@ -248,9 +248,14 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
     #[tokio::test]
     async fn test_find_by_username_found() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let username = unique_name("test_user");
 
         // 1. 插入测试数据（ActiveModel 写入，NotSet 字段保持默认）
@@ -276,7 +281,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_by_username_not_found() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let found = find_by_username(&db, "definitely_not_exists_xyz")
             .await
             .unwrap();
@@ -285,7 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_page() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let username = unique_name("page_user");
 
         let model = sys_user::ActiveModel {
@@ -334,6 +339,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_with_links_supports_empty_role_ids() {
         let db = test_db().await;
         let username = unique_name("create_user_empty_roles");
@@ -378,7 +385,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_by_username_ignores_deleted_user() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let username = format!("deleted_find_user_{}", std::process::id());
 
         let inserted = sys_user::ActiveModel {
@@ -408,7 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_page_excludes_deleted_users() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let keyword = format!("soft_delete_page_{}", std::process::id());
         let live_username = format!("{keyword}_live");
         let deleted_username = format!("{keyword}_deleted");
@@ -472,7 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_roles_by_user_id_excludes_disabled_and_deleted_roles() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let username = format!("role_filter_user_{}", std::process::id());
 
         let user = sys_user::ActiveModel {
@@ -557,7 +564,7 @@ mod tests {
     }
 
     /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
-    async fn seed_actor(db: &DatabaseConnection) -> u64 {
+    async fn seed_actor(db: &impl ConnectionTrait) -> u64 {
         sys_user::ActiveModel {
             username: Set(unique_name("audit_actor")),
             password: Set("x".to_string()),
@@ -571,7 +578,7 @@ mod tests {
     }
 
     /// 清理：先删关联表，再删主表（含操作人）。
-    async fn cleanup_users(db: &DatabaseConnection, ids: &[u64]) {
+    async fn cleanup_users(db: &impl ConnectionTrait, ids: &[u64]) {
         for id in ids {
             sys_user_role::Entity::delete_many()
                 .filter(sys_user_role::Column::UserId.eq(*id))
@@ -585,6 +592,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn create_user_with_links_stamps_actor_as_creator_and_updater() {
         let db = test_db().await;
         let actor_id = seed_actor(&db).await;
@@ -610,6 +619,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn update_user_with_links_refreshes_updated_by_and_keeps_created_by() {
         let db = test_db().await;
         let creator_id = seed_actor(&db).await;
@@ -658,6 +669,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn soft_delete_user_clears_role_links_and_marks_deleted() {
         let db = test_db().await;
         let actor_id = seed_actor(&db).await;
@@ -718,7 +731,7 @@ mod tests {
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
     #[tokio::test]
     async fn find_page_filters_by_audit_columns_and_time_range() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique_name("audit_page");
         let a = sys_user::ActiveModel {
             username: Set(format!("{kw}a")),

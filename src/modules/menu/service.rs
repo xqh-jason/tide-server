@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::DatabaseConnection;
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::entity::sys_menu;
 use crate::modules::menu::dto::{
@@ -20,7 +21,7 @@ const MAX_MENU_DEPTH: usize = 10;
 
 /// vben 菜单树（契约 §3.2 的 `/user/menus`）：超管返回全量，普通用户 W3 按角色过滤。
 pub async fn get_menus(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     user_id: u64,
 ) -> Result<Vec<VbenMenuItem>, AppError> {
     let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
@@ -79,7 +80,7 @@ fn build_menu_tree(menus: Vec<sys_menu::Model>) -> Vec<VbenMenuItem> {
 
 /// 菜单分页查询：请求参数（keyword / status / menu_type）组装为 repo 过滤条件。
 pub async fn page_menus(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &MenuListReq,
 ) -> Result<PageData<sys_menu::Model>, AppError> {
     let model = menu_repo::find_page(
@@ -120,7 +121,7 @@ pub async fn page_menus(
 
 /// 创建菜单：name 查重（含软删占位）→ component 格式校验 → 落库（审计字段由 repo 盖章）。
 pub async fn create_menu(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &CreateMenuReq,
 ) -> Result<sys_menu::Model, AppError> {
@@ -160,7 +161,7 @@ pub async fn create_menu(
 
 /// 更新菜单：判存在 → name 查重排除自身 → component 校验 → 全量覆盖（审计字段由 repo 盖章）。
 pub async fn update_menu(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     actor_id: u64,
     req: &UpdateMenuReq,
 ) -> Result<sys_menu::Model, AppError> {
@@ -206,7 +207,7 @@ pub async fn update_menu(
 }
 
 /// 查询单个菜单详情（排除软删除）；不存在返回业务错误。
-pub async fn get_menu(db: &DatabaseConnection, id: u64) -> Result<sys_menu::Model, AppError> {
+pub async fn get_menu(db: &impl ConnectionTrait, id: u64) -> Result<sys_menu::Model, AppError> {
     let Some(menu) = menu_repo::find_by_id(db, id).await? else {
         return Err(AppError::Biz(format!("菜单不存在：{id}")));
     };
@@ -265,6 +266,12 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     fn create_req(name: String, component: String) -> CreateMenuReq {
         CreateMenuReq {
             parent_id: Some(0),
@@ -283,7 +290,7 @@ mod tests {
     }
 
     async fn seed_menu(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         name: &str,
         parent_id: u64,
         menu_type: i8,
@@ -310,7 +317,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_user(db: &DatabaseConnection) -> sys_user::Model {
+    async fn seed_user(db: &impl ConnectionTrait) -> sys_user::Model {
         sys_user::ActiveModel {
             username: Set(unique("menu_user")),
             password: Set("x".to_string()),
@@ -323,7 +330,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_role(db: &DatabaseConnection, role_key: &str) -> sys_role::Model {
+    async fn seed_role(db: &impl ConnectionTrait, role_key: &str) -> sys_role::Model {
         sys_role::ActiveModel {
             role_name: Set(unique("menu_role")),
             role_key: Set(role_key.to_string()),
@@ -338,7 +345,7 @@ mod tests {
     }
 
     /// 加载全局唯一的 super 角色：已存在则复用（测后不清理），由本测试创建才清理。
-    async fn load_super_role(db: &DatabaseConnection) -> (sys_role::Model, bool) {
+    async fn load_super_role(db: &impl ConnectionTrait) -> (sys_role::Model, bool) {
         let existing = sys_role::Entity::find()
             .filter(sys_role::Column::RoleKey.eq(SUPER_ROLE_KEY))
             .one(db)
@@ -351,7 +358,7 @@ mod tests {
         (role, true)
     }
 
-    async fn bind_user_role(db: &DatabaseConnection, user_id: u64, role_id: u64) {
+    async fn bind_user_role(db: &impl ConnectionTrait, user_id: u64, role_id: u64) {
         sys_user_role::ActiveModel {
             user_id: Set(user_id),
             role_id: Set(role_id),
@@ -361,7 +368,7 @@ mod tests {
         .unwrap();
     }
 
-    async fn bind_role_menu(db: &DatabaseConnection, role_id: u64, menu_id: u64) {
+    async fn bind_role_menu(db: &impl ConnectionTrait, role_id: u64, menu_id: u64) {
         sys_role_menu::ActiveModel {
             role_id: Set(role_id),
             menu_id: Set(menu_id),
@@ -373,7 +380,7 @@ mod tests {
 
     /// 清理顺序：先删关联表，再删主表。
     async fn cleanup(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         user_ids: &[u64],
         role_ids: &[u64],
         menu_ids: &[u64],
@@ -412,7 +419,7 @@ mod tests {
     /// 创建时 name 重复（含软删占位）应被业务层拒绝。
     #[tokio::test]
     async fn create_menu_rejects_duplicate_name_including_soft_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let deleted_name = unique("dup_deleted");
         let live_name = unique("dup_live");
         let deleted = seed_menu(
@@ -438,8 +445,6 @@ mod tests {
         )
         .await;
 
-        cleanup(&db, &[], &[], &[deleted.id, live.id]).await;
-
         assert!(
             matches!(result_deleted, Err(AppError::Biz(_))),
             "软删菜单占用的 name 应被拒绝，实际：{result_deleted:?}"
@@ -453,7 +458,7 @@ mod tests {
     /// component 必须 `#/views/` 开头且 `.vue` 结尾（vben glob 命中约束）。
     #[tokio::test]
     async fn create_menu_rejects_invalid_component_format() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         let missing_prefix = create_menu(
             &db,
@@ -481,7 +486,7 @@ mod tests {
     /// 更新时 name 与他人重复应被拒绝，但保留自身 name 不算重复。
     #[tokio::test]
     async fn update_menu_rejects_duplicate_name_excluding_self() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let name_a = unique("menu_a");
         let name_b = unique("menu_b");
         let menu_a = seed_menu(&db, &name_a, 0, 1, None).await;
@@ -506,8 +511,6 @@ mod tests {
         let dup = update_menu(&db, ACTOR_ID, &update_req(name_a.clone())).await;
         let keep_self = update_menu(&db, ACTOR_ID, &update_req(name_b.clone())).await;
 
-        cleanup(&db, &[], &[], &[menu_a.id, menu_b.id]).await;
-
         assert!(
             matches!(dup, Err(AppError::Biz(_))),
             "占用他人 name 应返回 Biz 业务错误，实际：{dup:?}"
@@ -519,7 +522,7 @@ mod tests {
     /// 更新不存在的菜单（或已软删菜单）应返回业务错误。
     #[tokio::test]
     async fn update_menu_returns_biz_error_when_menu_missing() {
-        let db = test_db().await;
+        let db = test_txn().await;
 
         let missing = update_menu(
             &db,
@@ -575,7 +578,6 @@ mod tests {
             },
         )
         .await;
-        cleanup(&db, &[], &[], &[deleted.id]).await;
         assert!(
             matches!(update_deleted, Err(AppError::Biz(_))),
             "更新已软删菜单应返回 Biz 业务错误，实际：{update_deleted:?}"
@@ -584,6 +586,8 @@ mod tests {
 
     /// 删除不存在的菜单应返回业务错误。
     #[tokio::test]
+    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
+    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
     async fn delete_menu_returns_biz_error_when_menu_missing() {
         let db = test_db().await;
 
@@ -597,7 +601,7 @@ mod tests {
     /// 普通用户只看到其角色绑定的菜单（父子结构完整），未绑定菜单不出现。
     #[tokio::test]
     async fn get_menus_regular_user_filters_by_role_bindings() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let user = seed_user(&db).await;
         let role = seed_role(&db, &unique("regular_key")).await;
         bind_user_role(&db, user.id, role.id).await;
@@ -626,7 +630,7 @@ mod tests {
     /// 超管返回全量菜单树（未绑定也可见），按钮（menu_type=3）不进树。
     #[tokio::test]
     async fn get_menus_super_returns_full_tree_without_buttons() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let user = seed_user(&db).await;
         let (super_role, owned_by_test) = load_super_role(&db).await;
         bind_user_role(&db, user.id, super_role.id).await;
@@ -636,7 +640,6 @@ mod tests {
         let tree = get_menus(&db, user.id).await.unwrap();
 
         let role_ids: &[u64] = if owned_by_test { &[super_role.id] } else { &[] };
-        cleanup(&db, &[user.id], role_ids, &[page.id, button.id]).await;
 
         assert!(
             contains_name(&tree, &page.name),

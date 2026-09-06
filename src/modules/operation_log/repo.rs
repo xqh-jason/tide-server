@@ -2,13 +2,13 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, QueryOrder};
+use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QueryOrder};
 
 use crate::entity::{sys_operation_log, sys_operation_log::Model};
 use crate::modules::operation_log::dto::OperationLogFilter;
 
 /// 查询单个有效记录（排除软删除）。
-pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {
+pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
     let m = sys_operation_log::Entity::find()
         .filter(sys_operation_log::Column::Id.eq(id))
         .filter(sys_operation_log::Column::DeletedAt.is_null())
@@ -19,7 +19,7 @@ pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Opti
 
 /// 分页 + 动态过滤查询（过滤条件由域定义驱动）。
 pub async fn find_page(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     filter: &OperationLogFilter,
     page_index: u64,
     page_size: u64,
@@ -45,14 +45,14 @@ pub async fn find_page(
 
 /// 创建记录。
 pub async fn create_operation_log(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     model: sys_operation_log::ActiveModel,
 ) -> anyhow::Result<Model> {
     Ok(model.insert(db).await?)
 }
 
 /// 软删除：`deleted_at` 置为当前时间。
-pub async fn soft_delete_operation_log(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
+pub async fn soft_delete_operation_log(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<bool> {
     let Some(model) = find_by_id(db, id).await? else {
         return Ok(false);
     };
@@ -63,7 +63,7 @@ pub async fn soft_delete_operation_log(db: &DatabaseConnection, id: u64) -> anyh
 }
 
 /// 批量软删：只处理存在且未删除的行，返回受影响行数。
-pub async fn soft_delete_batch(db: &DatabaseConnection, ids: &[u64]) -> anyhow::Result<u64> {
+pub async fn soft_delete_batch(db: &impl ConnectionTrait, ids: &[u64]) -> anyhow::Result<u64> {
     let now = chrono::Local::now().naive_local();
     let result = sys_operation_log::Entity::update_many()
         .filter(sys_operation_log::Column::Id.is_in(ids.iter().copied()))
@@ -97,9 +97,15 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn seed(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         path_kw: &str,
         user_id: u64,
         status: i32,
@@ -126,7 +132,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(db: &DatabaseConnection, ids: &[u64]) {
+    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
         sys_operation_log::Entity::delete_many()
             .filter(sys_operation_log::Column::Id.is_in(ids.iter().copied()))
             .exec(db)
@@ -136,7 +142,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_page_filters_by_keyword_user_and_status_and_sorts_desc_excludes_deleted() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("repo_page");
         let base = chrono::Local::now().naive_local();
         let deleted_at = Some(chrono::Local::now().naive_local());
@@ -185,8 +191,6 @@ mod tests {
         .await
         .unwrap();
 
-        cleanup(&db, &[older.id, middle.id, newer.id, deleted.id]).await;
-
         assert_eq!(by_keyword.total, 3, "keyword 应命中 3 条活记录");
         let ids: Vec<u64> = by_keyword.items.iter().map(|m| m.id).collect();
         assert_eq!(
@@ -202,7 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn soft_delete_batch_only_marks_alive_rows() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let kw = unique("repo_batch");
         let base = chrono::Local::now().naive_local();
         let a = seed(&db, &kw, 1, 200, base - chrono::Duration::seconds(2), None).await;
@@ -232,8 +236,6 @@ mod tests {
         )
         .await
         .unwrap();
-
-        cleanup(&db, &[a.id, b.id, deleted.id]).await;
 
         assert_eq!(affected, 2, "已软删记录不应重复计入");
         assert_eq!(after.total, 0, "批量软删后全部不可见");

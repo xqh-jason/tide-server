@@ -1,7 +1,8 @@
 //! 权限数据访问层。
 
+use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{DatabaseConnection, QueryOrder, QuerySelect};
+use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_menu, sys_role_menu};
 use crate::modules::user::repo as user_repo;
@@ -10,7 +11,7 @@ use crate::modules::user::repo as user_repo;
 ///
 /// 返回结果应去重；调用方如需稳定展示，可再做排序。
 pub async fn find_permission_codes_by_user_id(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     user_id: u64,
 ) -> anyhow::Result<Vec<String>> {
     let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
@@ -93,7 +94,13 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
-    async fn load_super_role(db: &DatabaseConnection) -> SuperRoleFixture {
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
+    async fn load_super_role(db: &impl ConnectionTrait) -> SuperRoleFixture {
         let existing = sys_role::Entity::find()
             .filter(sys_role::Column::RoleKey.eq(SUPER_ROLE_KEY))
             .one(db)
@@ -126,7 +133,7 @@ mod tests {
     }
 
     async fn seed_user(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         status: i8,
         deleted_at: Option<chrono::NaiveDateTime>,
     ) -> sys_user::Model {
@@ -144,7 +151,7 @@ mod tests {
     }
 
     async fn seed_role(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         status: i8,
         deleted_at: Option<chrono::NaiveDateTime>,
     ) -> sys_role::Model {
@@ -163,7 +170,7 @@ mod tests {
     }
 
     async fn seed_button(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         permission: &str,
         status: i8,
         deleted_at: Option<chrono::NaiveDateTime>,
@@ -172,7 +179,7 @@ mod tests {
     }
 
     async fn seed_menu(
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         permission: &str,
         status: i8,
         deleted_at: Option<chrono::NaiveDateTime>,
@@ -193,7 +200,7 @@ mod tests {
         .unwrap()
     }
 
-    async fn bind_user_role(db: &DatabaseConnection, user_id: u64, role_id: u64) {
+    async fn bind_user_role(db: &impl ConnectionTrait, user_id: u64, role_id: u64) {
         sys_user_role::ActiveModel {
             user_id: Set(user_id),
             role_id: Set(role_id),
@@ -203,7 +210,7 @@ mod tests {
         .unwrap();
     }
 
-    async fn bind_role_menu(db: &DatabaseConnection, role_id: u64, menu_id: u64) {
+    async fn bind_role_menu(db: &impl ConnectionTrait, role_id: u64, menu_id: u64) {
         sys_role_menu::ActiveModel {
             role_id: Set(role_id),
             menu_id: Set(menu_id),
@@ -213,7 +220,7 @@ mod tests {
         .unwrap();
     }
 
-    async fn cleanup(db: &DatabaseConnection, fixture: Fixture) {
+    async fn cleanup(db: &impl ConnectionTrait, fixture: Fixture) {
         if let Some(user) = fixture.user.as_ref() {
             sys_user_role::Entity::delete_many()
                 .filter(sys_user_role::Column::UserId.eq(user.id))
@@ -260,7 +267,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_permission_codes_returns_bound_active_button() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let user = seed_user(&db, 1, None).await;
         let role = seed_role(&db, 1, None).await;
         let menu = seed_button(&db, "system:user:create", 1, None).await;
@@ -286,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_permission_codes_excludes_disabled_and_deleted_roles() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let user = seed_user(&db, 1, None).await;
         let active_role = seed_role(&db, 1, None).await;
         let disabled_role = seed_role(&db, 0, None).await;
@@ -325,7 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_permission_codes_excludes_invalid_buttons() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let user = seed_user(&db, 1, None).await;
         let role = seed_role(&db, 1, None).await;
         let active_menu = seed_button(&db, "system:user:update", 1, None).await;
@@ -373,7 +380,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_permission_codes_only_accepts_button_type() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let user = seed_user(&db, 1, None).await;
         let role = seed_role(&db, 1, None).await;
         let button = seed_menu(&db, "system:user:create", 1, None, 3).await;
@@ -408,7 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn super_owner_has_permission_without_binding_a_button() {
-        let db = test_db().await;
+        let db = test_txn().await;
         let super_role_fixture = load_super_role(&db).await;
         let user = seed_user(&db, 1, None).await;
         bind_user_role(&db, user.id, super_role_fixture.role.id).await;
