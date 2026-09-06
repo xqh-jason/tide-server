@@ -128,3 +128,11 @@ pub async fn delete_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<
     user_service::delete_user(&state.db, req.id).await?;
     Ok(ApiResponse::ok(()))
 }
+
+/// 全量用户（含软删）：审计过滤的用户选择器数据源。
+#[endpoint]
+pub async fn list_all_users(depot: &mut Depot) -> ApiResult<Vec<UserBriefResp>> {
+    let state = AppState::from_depot(depot)?;
+    let users = user_service::list_all_users(&state.db).await?;
+    Ok(ApiResponse::ok(users))
+}

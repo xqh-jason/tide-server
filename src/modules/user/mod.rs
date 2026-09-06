@@ -9,7 +9,7 @@ pub mod dto;
 pub mod repo;
 pub mod service;
 
-/// 用户端点：`POST /api/v1/user/{list,by-username,info,access-codes,create,update,get,update-status}`。
+/// 用户端点：`POST /api/v1/user/{list,by-username,info,access-codes,create,update,get,update-status,all}`。
 /// 菜单契约端点 `menus` 在 menu 域的 `user_routes()` 中注册。
 pub fn routes() -> Router {
     Router::new()
@@ -23,4 +23,6 @@ pub fn routes() -> Router {
         .push(Router::with_path("get").post(api::get_user))
         .push(Router::with_path("update-status").post(api::update_user_status))
         .push(Router::with_path("delete").post(api::delete_user))
+        // 全量用户（含软删）：审计过滤的用户选择器数据源
+        .push(Router::with_path("all").post(api::list_all_users))
 }

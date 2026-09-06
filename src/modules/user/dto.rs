@@ -9,8 +9,7 @@ use crate::middleware::auth::AuthUser;
 use crate::utils::PageQuery;
 use crate::utils::user_ref::UserRefNames;
 
-/// 用户简要响应体：全量用户下拉 / 审计过滤选择器专用，只暴露 id 与 username
-/// （含软删用户，调用方按需渲染占位）。
+/// 用户简要响应体：全量用户下拉 / 审计过滤选择器专用（含软删用户）。
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UserBriefResp {
@@ -18,6 +17,8 @@ pub struct UserBriefResp {
     pub id: u64,
     /// 用户名（显示名）
     pub username: String,
+    /// 是否已软删：true 时前端选择器建议置灰或加「已删除」徽标
+    pub deleted: bool,
 }
 
 impl From<sys_user::Model> for UserBriefResp {
@@ -25,6 +26,7 @@ impl From<sys_user::Model> for UserBriefResp {
         Self {
             id: m.id,
             username: m.username,
+            deleted: m.deleted_at.is_some(),
         }
     }
 }

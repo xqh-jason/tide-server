@@ -1420,5 +1420,7 @@ mod tests {
         assert!(b_hit.is_some(), "软删用户也应出现（历史引用回显场景）");
         assert_eq!(a_hit.unwrap().username, name_a);
         assert_eq!(b_hit.unwrap().username, name_b);
+        assert!(!a_hit.unwrap().deleted, "存活用户 deleted 应为 false");
+        assert!(b_hit.unwrap().deleted, "软删用户 deleted 应为 true");
     }
 }
