@@ -102,10 +102,12 @@ pub async fn get_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<Use
 #[endpoint]
 pub async fn update_user(depot: &mut Depot, body: JsonBody<UpdateUserReq>) -> ApiResult<UserResp> {
     let state = AppState::from_depot(depot)?;
+    let auth = AuthUser::from_depot(depot)?;
     let req = body.into_inner();
+
     let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
     user_validate::validate_update_user(&req, &status_allowed).map_err(AppError::Biz)?;
-    let auth = AuthUser::from_depot(depot)?;
+
     let resp = user_service::update_user_with_links(&state.db, auth.user_id, req).await?;
     let resp = fill_user_names(&state.db, vec![resp], UserResp::from)
         .await?
@@ -121,10 +123,12 @@ pub async fn update_user_status(
     body: JsonBody<UpdateUserStatusReq>,
 ) -> ApiResult<bool> {
     let state = AppState::from_depot(depot)?;
+    let auth = AuthUser::from_depot(depot)?;
     let req = body.into_inner();
+
     let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
     user_validate::validate_update_user_status(&req, &status_allowed).map_err(AppError::Biz)?;
-    let auth = AuthUser::from_depot(depot)?;
+
     let resp =
         user_service::update_user_status(&state.db, auth.user_id, req.id, req.status).await?;
     Ok(ApiResponse::ok(resp))
