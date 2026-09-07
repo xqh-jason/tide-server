@@ -93,7 +93,7 @@
 - [x] **[AI]** 最终 review + 冒烟建议：经 sys-api 端点登记 `POST /api/v1/user/delete`、
   授权给某角色 → 未授权用户调该接口得 `code=0`、授权角色与超管放行、
   被拒请求在操作日志可见
-- [ ] Commit：`feat(permission): 接口级授权层，按 sys_api/sys_role_api 校验角色（W6）`
+- [x] Commit：`feat(permission): 接口级授权层，按 sys_api/sys_role_api 校验角色（W6）`
 
 ---
 
