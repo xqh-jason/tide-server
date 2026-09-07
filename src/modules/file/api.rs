@@ -100,8 +100,8 @@ pub async fn get_file(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<Fil
     Ok(ApiResponse::ok(resp.remove(0)))
 }
 
-/// 鉴权下载（GET + query `id`）：`NamedFile` 流式返回，非契约 JSON 体，故用 #[handler]
-/// 而非 #[endpoint]（NamedFile 未实现 OpenAPI 注册）。
+/// 鉴权下载（GET + query `id`）：`NamedFile` 流式返回，非契约 JSON 体，故用 `#[handler]`
+/// 而非 `#[endpoint]`（NamedFile 未实现 OpenAPI 注册）。
 ///
 /// 例外之二的 GET：浏览器直接以 `<img src>` / `window.open` 发起下载时无法
 /// 自定义 JSON body，只能走 query。响应头全部从记录取，禁止信任前端传路径。

@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QueryOrder};
+use sea_orm::{Condition, ConnectionTrait, QueryOrder};
 
 use crate::entity::{sys_operation_log, sys_operation_log::Model};
 use crate::modules::operation_log::dto::OperationLogFilter;
@@ -17,7 +17,7 @@ pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Op
     Ok(m)
 }
 
-/// 分页 + 动态过滤查询（过滤条件由域定义驱动）。
+/// 分页 + 动态过滤查询（user_id / status 精确，path 模糊），created_at 倒序。
 pub async fn find_page(
     db: &impl ConnectionTrait,
     filter: &OperationLogFilter,

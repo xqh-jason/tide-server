@@ -88,7 +88,7 @@ pub struct FileListReq {
     pub created_by: Option<u64>,
     /// 更新人 ID 精确过滤；不传查全部
     pub updated_by: Option<u64>,
-    /// 创建时间范围起（yyyy-MM-dd[ HH:mm:ss]，含边界）；不传查全部
+    /// 创建时间范围起（`yyyy-MM-dd[ HH:mm:ss]`，含边界）；不传查全部
     pub created_at_begin: Option<String>,
     /// 创建时间范围止（含边界）；不传查全部
     pub created_at_end: Option<String>,

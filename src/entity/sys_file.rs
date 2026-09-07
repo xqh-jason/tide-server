@@ -9,7 +9,7 @@ pub struct Model {
     pub id: u64,
     /// 原始文件名（含扩展名，下载时用于 Content-Disposition）
     pub name: String,
-    /// 磁盘存储名：<uuid>.<ext>（唯一，列表按此定位文件）
+    /// 磁盘存储名：`<uuid>.<ext>`（唯一，列表按此定位文件）
     pub stored_name: String,
     /// 小写扩展名（白名单校验依据）
     pub ext: String,

@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::entity::prelude::*;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::entity::sys_menu;
@@ -78,7 +77,7 @@ fn build_menu_tree(menus: Vec<sys_menu::Model>) -> Vec<VbenMenuItem> {
     build(0, &by_parent, 1)
 }
 
-/// 菜单分页查询：请求参数（keyword / status / menu_type）组装为 repo 过滤条件。
+/// 菜单分页查询：请求参数（keyword / status / menu_type / 审计过滤）组装为 repo 过滤条件。
 pub async fn page_menus(
     db: &impl ConnectionTrait,
     req: &MenuListReq,

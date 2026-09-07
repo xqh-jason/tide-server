@@ -1,4 +1,4 @@
-//! 角色域：W3 第二步实现 CRUD + 分配菜单/API（事务）。
+//! 角色域：CRUD + 分配菜单/API（事务维护关联）。
 pub mod api;
 pub mod dto;
 pub mod repo;

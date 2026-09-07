@@ -6,16 +6,14 @@
 //! - Resp 实现 `UserRefNames`：按名称映射填充人名字段（查不到给空串）；
 //! - `fill_user_names` 是全项目唯一拼装管道：收集 → 一次批量查 → 填充。
 //!
-//! 本文件当前仅含失败测试（TDD 红阶段），待实现符号：`UserRefIds`、
-//! `UserRefNames`、`dedup_ids`、`find_user_name_map_by_ids`、`fill_user_names`。
+
 use crate::entity::{
     sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_menu, sys_role,
     sys_site_config, sys_user,
 };
 use std::collections::HashMap;
 
-use sea_orm::entity::prelude::*;
-use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 
 use crate::utils::error::AppError;
 

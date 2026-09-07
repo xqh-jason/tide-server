@@ -8,12 +8,11 @@ use crate::{
     },
     utils::error::AppError,
 };
-use sea_orm::entity::prelude::*;
 use sea_orm::{ActiveValue::Set, ConnectionTrait, DatabaseConnection};
 
 use crate::entity::sys_role;
 
-/// 分页查询角色（keyword 模糊匹配 role_name / role_key，status 精确），排除软删除。
+/// 分页查询角色（keyword 模糊匹配 role_name / role_key，status 精确，审计过滤），排除软删除。
 pub async fn page_roles(
     db: &impl ConnectionTrait,
     req: &RoleListReq,

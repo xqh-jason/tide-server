@@ -1,8 +1,7 @@
 //! 认证业务：登录（验证码 → 查用户 → 校验密码 → 取角色 → 签发 JWT）。
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::ConnectionTrait;
 
 use crate::entity::sys_login_log;
 use crate::infra::config::Jwt as JwtConfig;

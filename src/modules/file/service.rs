@@ -1,6 +1,5 @@
 //! 文件业务：上传校验链、uuid 命名落盘、软删 + 物理删除、下载路径解析。
 //!
-//! 函数体由用户按计划任务 5 实现；下方 `#[cfg(test)]` 测试由 AI 编写（TDD 红阶段）。
 //! 磁盘操作放本层（业务规则），repo 只管库。规格依据：
 //! docs/superpowers/specs/2026-09-05-w5-file-upload-design.md §6 / §7 / §8.2。
 
@@ -8,7 +7,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::ConnectionTrait;
 
 use crate::entity::sys_file;
 use crate::modules::file::dto::{FileFilter, FileListReq, UploadInput};
@@ -16,7 +15,7 @@ use crate::modules::file::repo as file_repo;
 use crate::utils::PageData;
 use crate::utils::error::AppError;
 
-/// 分页查询（keyword 透传 repo）。
+/// 分页查询（keyword 与审计过滤透传 repo）。
 pub async fn page_files(
     db: &impl ConnectionTrait,
     req: &FileListReq,
@@ -115,11 +114,12 @@ pub async fn upload_file(
 
     // —— 落盘：优先 rename ——
     // 同一盘符下 rename 是零拷贝的元数据操作，比 copy 快得多；
-    // 但 rename 跨文件系统会失败（Linux EXDEV），所以失败时退化为 copy + 删临时文件。
+    // 但 rename 跨文件系统会失败（CrossesDevices），仅该错误退化为 copy + 删临时文件，
+    // 其余错误直接返回内部错误。
     // multipart 的临时文件 salvo 会在请求结束自动清理，copy 分支主动删只是让磁盘早一点释放。
     let dest = dir.join(&stored_name);
     if let Err(rename_err) = tokio::fs::rename(&input.temp_path, &dest).await {
-        tracing::debug!(error = %rename_err, "rename 落盘失败，退化为 copy（多为跨盘）");
+        tracing::debug!(error = %rename_err, "rename 落盘失败");
         if rename_err.kind() == ErrorKind::CrossesDevices {
             // 降级
             tokio::fs::copy(&input.temp_path, &dest)
@@ -127,7 +127,7 @@ pub async fn upload_file(
                 .map_err(|e| AppError::Internal(anyhow::anyhow!("写入上传目录失败：{e}")))?;
 
             if let Err(e) = tokio::fs::remove_file(&input.temp_path).await {
-                tracing::warn!("删除临时文件失败: {}", e);
+                tracing::warn!("删除临时文件失败：{}", e);
             }
         } else {
             return Err(AppError::Internal(anyhow::anyhow!(
@@ -165,9 +165,7 @@ pub async fn get_file(db: &impl ConnectionTrait, id: u64) -> Result<sys_file::Mo
     }
 }
 
-/// 删除：判存在（不存在 → Biz）→ 软删记录。
-/// 规格决策 6：delete = 软删记录 + 物理删除磁盘文件（`dir.join(stored_name)`），
-/// 磁盘删除步骤待补（对应测试 delete_file_soft_deletes_record_and_removes_disk_file 的红灯）。
+/// 删除：判存在（不存在 → Biz）→ 软删记录 + 物理删除磁盘文件（`dir.join(stored_name)`）。
 pub async fn delete_file(db: &impl ConnectionTrait, dir: &Path, id: u64) -> Result<(), AppError> {
     if let Some(model) = file_repo::find_by_id(db, id).await? {
         let path = dir.join(model.stored_name.clone());
@@ -184,7 +182,7 @@ pub async fn delete_file(db: &impl ConnectionTrait, dir: &Path, id: u64) -> Resu
     }
 }
 
-/// 下载解析：id → 记录 → `dir.join(stored_name)`，返回（记录, 磁盘路径）。
+/// 下载解析：id → 记录 → `dir.join(stored_name)`，返回（记录，磁盘路径）。
 /// 记录一并返回，供 handler 拼下载响应头（Content-Type 用 mime、
 /// Content-Disposition 用原始名），避免同一 id 查两次库。
 /// 不存在 → Biz("文件不存在：{id}")；记录在但磁盘文件缺失 → Biz("文件存储已丢失：{id}")。
@@ -240,7 +238,7 @@ mod tests {
         test_db().await.begin().await.unwrap()
     }
 
-    /// 默认白名单（与 config.toml [upload].allows 一致的子集即可）。
+    /// 默认白名单（与 config.toml `[upload].allows` 一致的子集即可）。
     fn allows() -> Vec<String> {
         ["png", "jpg", "pdf", "txt", "zip"]
             .iter()

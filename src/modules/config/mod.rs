@@ -11,7 +11,7 @@ pub mod repo;
 pub mod service;
 
 /// 参数配置端点：`POST /api/v1/config/{list,create,update,get,delete}`
-/// （AuthRequired + OperationLog 由 router.rs 挂载）。
+/// （AuthRequired + OperationLog + ApiPermission 由 router.rs 挂载）。
 /// 函数顺序 = 路由顺序 = `list → create → update → get → delete`。
 pub fn routes() -> Router {
     Router::new()

@@ -21,7 +21,8 @@ pub async fn find_all_menus(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Mod
         .await?)
 }
 
-/// 分页 + 动态过滤查询（keyword 匹配 name，status/menu_type 精确，排除软删）。
+/// 分页 + 动态过滤查询（keyword 匹配 name，status/menu_type 精确，
+/// created_by/updated_by/时间范围审计过滤），排除软删。
 pub async fn find_page(
     db: &impl ConnectionTrait,
     filter: &MenuFilter,

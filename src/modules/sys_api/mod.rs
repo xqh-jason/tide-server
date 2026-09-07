@@ -1,7 +1,8 @@
-//! API 权限域（对应 sys_api 表）：W3 实现权限点登记 CRUD + `sys_role_api` 关联维护。
+//! API 权限域（对应 sys_api 表）：权限点登记 CRUD + `sys_role_api` 关联维护。
 //!
-//! 注意：`sys_api` 仅作为权限点登记数据，W3 第一版主授权链路仍走按钮权限码；
-//! 接口级集中授权（path/method → 角色映射）留待后续引入。
+//! 授权链路为双通道：按钮权限码（`sys_menu.permission`，判定在 permission 域）+
+//! 接口级集中授权（`path/method` → `sys_role_api` 角色映射，由
+//! `middleware/api_permission.rs` 消费，未登记接口放行）。
 
 use salvo::Router;
 use salvo::oapi::RouterExt;

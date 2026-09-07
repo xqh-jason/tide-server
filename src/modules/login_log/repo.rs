@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QueryOrder};
+use sea_orm::{Condition, ConnectionTrait, QueryOrder};
 
 use crate::entity::{sys_login_log, sys_login_log::Model};
 use crate::modules::login_log::dto::LoginLogFilter;

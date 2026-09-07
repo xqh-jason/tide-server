@@ -1,4 +1,4 @@
-//! 认证域：登录（W2）。JWT 校验在黑名单/中间件，权限校验在 middleware/permission（W2 尾）。
+//! 认证域：登录（W2）。JWT 校验在黑名单/中间件，接口级授权在 middleware/api_permission（W6）。
 
 use salvo::oapi::RouterExt;
 use salvo::prelude::*;

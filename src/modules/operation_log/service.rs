@@ -1,7 +1,6 @@
 //! 操作日志业务（codegen 生成）。
 
-use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::ConnectionTrait;
 
 use crate::entity::sys_operation_log;
 use crate::modules::operation_log::dto::{OperationLogFilter, OperationLogListReq};
@@ -9,7 +8,7 @@ use crate::modules::operation_log::repo as operation_log_repo;
 use crate::utils::PageData;
 use crate::utils::error::AppError;
 
-/// 分页查询。
+/// 分页查询：请求参数透传 repo 过滤条件。
 pub async fn page_operation_logs(
     db: &impl ConnectionTrait,
     req: &OperationLogListReq,
@@ -64,7 +63,9 @@ mod tests {
     use crate::entity::sys_operation_log;
     use crate::utils::PageQuery;
     use crate::utils::error::AppError;
-    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

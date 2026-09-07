@@ -1,6 +1,5 @@
 //! API 权限点业务规则。
 
-use sea_orm::entity::prelude::*;
 use sea_orm::{ActiveValue::Set, ConnectionTrait, DatabaseConnection};
 
 use crate::modules::sys_api::dto::{ApiFilter, ApiListReq, UpdateApiReq};
@@ -8,7 +7,7 @@ use crate::modules::sys_api::repo as api_repo;
 use crate::utils::PageData;
 use crate::{entity::sys_api, modules::sys_api::dto::CreateApiReq, utils::error::AppError};
 
-/// 分页查询 API（keyword 匹配 path/description/api_group，status/method 精确）。
+/// 分页查询 API（keyword 匹配 path/description/api_group，status/method 精确，审计过滤）。
 pub async fn page_apis(
     db: &impl ConnectionTrait,
     req: &ApiListReq,

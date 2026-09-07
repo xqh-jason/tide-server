@@ -7,8 +7,8 @@
 //! - `字典类型编码已存在：{type}` / `字典值已存在：{value}`
 //! - `字典类型不存在或已停用：{type}`
 
+use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{ActiveValue::Set, DatabaseConnection};
 
 use crate::entity::{sys_dictionary, sys_dictionary_detail};
 use crate::modules::dictionary::dto::{
@@ -22,7 +22,7 @@ use crate::utils::error::AppError;
 
 // —— 字典类型 ——
 
-/// 字典类型分页查询：请求参数（keyword / status）组装为 repo 过滤条件。
+/// 字典类型分页查询：请求参数（keyword / status / 审计过滤）组装为 repo 过滤条件。
 ///
 /// 不做状态过滤以外的业务判断，纯透传；keyword 同时模糊 name 与 type。
 pub async fn page_dictionaries(
@@ -194,7 +194,7 @@ pub async fn get_dictionary_by_type(
 
 // —— 字典项 ——
 
-/// 字典项分页查询：请求参数（dictionary_id / keyword / status）透传 repo。
+/// 字典项分页查询：请求参数（dictionary_id / keyword / status / 审计过滤）透传 repo。
 pub async fn page_dictionary_details(
     db: &impl ConnectionTrait,
     req: &DictionaryDetailListReq,

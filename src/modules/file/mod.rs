@@ -1,7 +1,7 @@
 //! 文件域：本地磁盘上传 + 元数据管理（W5-4）。
 //!
 //! 端点：`POST /api/v1/file/{list,upload,get,delete}` + `GET /api/v1/file/download`，
-//! AuthRequired + OperationLog 在 `infra/router.rs` 统一挂载。
+//! AuthRequired + OperationLog + ApiPermission 在 `infra/router.rs` 统一挂载。
 
 use salvo::prelude::*;
 

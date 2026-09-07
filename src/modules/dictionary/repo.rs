@@ -4,7 +4,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, QueryOrder};
+use sea_orm::{Condition, QueryOrder};
 
 use crate::entity::sys_dictionary::Model as Dictionary;
 use crate::entity::sys_dictionary_detail::Model as Detail;
@@ -26,7 +26,8 @@ pub async fn find_dictionary_by_id(
     Ok(model)
 }
 
-/// 类型：分页 + 动态过滤（keyword 对 name / type 模糊，status 精确），id 倒序。
+/// 类型：分页 + 动态过滤（keyword 对 name / type 模糊，status 精确，
+/// created_by/updated_by/时间范围审计过滤），id 倒序。
 pub async fn find_dictionary_page(
     db: &impl ConnectionTrait,
     filter: &DictionaryFilter,
@@ -100,7 +101,6 @@ pub async fn find_dictionary_by_type_include_deleted(
     Ok(model)
 }
 
-/// 类型：创建。
 /// 类型：创建。`actor_id` 为操作人，审计字段由 repo 统一盖章。
 pub async fn create_dictionary(
     db: &impl ConnectionTrait,
@@ -155,7 +155,7 @@ pub async fn find_detail_by_id(
 }
 
 /// 字典项：分页 + 动态过滤（dictionary_id 精确 + keyword 对 label/value 模糊
-/// + status 精确），sort 升序、id 升序。
+/// + status 精确 + created_by/updated_by/时间范围审计过滤），sort 升序、id 升序。
 pub async fn find_detail_page(
     db: &impl ConnectionTrait,
     filter: &DictionaryDetailFilter,
@@ -251,7 +251,6 @@ pub async fn soft_delete_details_by_dictionary_id(
     Ok(result.rows_affected)
 }
 
-/// 字典项：创建。
 /// 字典项：创建。`actor_id` 为操作人，审计字段由 repo 统一盖章。
 pub async fn create_detail(
     db: &impl ConnectionTrait,
