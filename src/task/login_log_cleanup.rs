@@ -6,6 +6,9 @@ use tracing::info;
 
 use crate::infra::state::AppState;
 
+/// handler 名（= 文件名 = `sys_job.handler_name` 的合法值，三处保持一致）。
+pub const HANDLER_NAME: &str = "cleanup_login_logs";
+
 /// 任务入口。
 pub async fn run(state: &AppState) -> anyhow::Result<()> {
     let cutoff = chrono::Local::now().naive_local() - chrono::Duration::days(90);

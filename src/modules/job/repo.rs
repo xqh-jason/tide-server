@@ -171,7 +171,7 @@ mod tests {
             // uk_job_name 唯一（含软删行占位），每行用不同名称
             job_name: Set(unique("repo_job")),
             cron_expr: Set("0 0 3 * * *".to_string()),
-            handler_name: Set("cleanup_login_logs".to_string()),
+            handler_name: Set(crate::task::login_log_cleanup::HANDLER_NAME.to_string()),
             status: Set(status),
             remark: Set(String::new()),
             deleted_at: Set(deleted_at),
@@ -242,7 +242,7 @@ mod tests {
         let a = sys_job::ActiveModel {
             job_name: Set(format!("{kw}a")),
             cron_expr: Set("0 0 3 * * *".to_string()),
-            handler_name: Set("cleanup_login_logs".to_string()),
+            handler_name: Set(crate::task::login_log_cleanup::HANDLER_NAME.to_string()),
             status: Set(1),
             remark: Set(String::new()),
             ..Default::default()
@@ -253,7 +253,7 @@ mod tests {
         let b = sys_job::ActiveModel {
             job_name: Set(format!("{kw}b")),
             cron_expr: Set("0 0 4 * * *".to_string()),
-            handler_name: Set("cleanup_job_logs".to_string()),
+            handler_name: Set(crate::task::job_log_cleanup::HANDLER_NAME.to_string()),
             status: Set(0),
             remark: Set(String::new()),
             ..Default::default()

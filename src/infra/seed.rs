@@ -554,7 +554,7 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         sys_job::ActiveModel {
             job_name: Set(SEED_JOB_NAME.to_string()),
             cron_expr: Set("0 30 3 * * *".to_string()),
-            handler_name: Set("cleanup_login_logs".to_string()),
+            handler_name: Set(crate::task::login_log_cleanup::HANDLER_NAME.to_string()),
             status: Set(1),
             remark: Set("种子示例：每日 03:30:00 清理 90 天前登录日志".to_string()),
             created_by: Set(SEED_ACTOR_ID),

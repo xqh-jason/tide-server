@@ -225,7 +225,7 @@ mod tests {
         CreateJobReq {
             job_name: name,
             cron_expr: "0 0 3 * * *".to_string(),
-            handler_name: "cleanup_login_logs".to_string(),
+            handler_name: crate::task::login_log_cleanup::HANDLER_NAME.to_string(),
             status: Some(1),
             remark: None,
         }
