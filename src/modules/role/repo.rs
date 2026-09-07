@@ -42,7 +42,8 @@ pub async fn find_by_role_name_include_deleted(
     Ok(role)
 }
 
-/// 分页 + 动态过滤查询角色（keyword 模糊匹配 role_name/role_key，status 精确）。
+/// 分页 + 动态过滤查询角色（keyword 模糊匹配 role_name/role_key，status 精确，
+/// created_by/updated_by/时间范围审计过滤）。
 pub async fn find_page(
     db: &impl ConnectionTrait,
     filter: &RoleFilter,
@@ -60,25 +61,25 @@ pub async fn find_page(
             .add(sys_role::Column::RoleName.like(format!("%{kw}%")))
             .add(sys_role::Column::RoleKey.like(format!("%{kw}%")));
         cond = cond.add(kw_cond);
-        // 审计过滤：人字段精确（种子/系统写入为 0），时间为含边界范围
-        if let Some(v) = filter.created_by {
-            cond = cond.add(sys_role::Column::CreatedBy.eq(v));
-        }
-        if let Some(v) = filter.updated_by {
-            cond = cond.add(sys_role::Column::UpdatedBy.eq(v));
-        }
-        if let Some(v) = filter.created_at_begin {
-            cond = cond.add(sys_role::Column::CreatedAt.gte(v));
-        }
-        if let Some(v) = filter.created_at_end {
-            cond = cond.add(sys_role::Column::CreatedAt.lte(v));
-        }
-        if let Some(v) = filter.updated_at_begin {
-            cond = cond.add(sys_role::Column::UpdatedAt.gte(v));
-        }
-        if let Some(v) = filter.updated_at_end {
-            cond = cond.add(sys_role::Column::UpdatedAt.lte(v));
-        }
+    }
+    // 审计过滤：人字段精确（种子/系统写入为 0），时间为含边界范围
+    if let Some(v) = filter.created_by {
+        cond = cond.add(sys_role::Column::CreatedBy.eq(v));
+    }
+    if let Some(v) = filter.updated_by {
+        cond = cond.add(sys_role::Column::UpdatedBy.eq(v));
+    }
+    if let Some(v) = filter.created_at_begin {
+        cond = cond.add(sys_role::Column::CreatedAt.gte(v));
+    }
+    if let Some(v) = filter.created_at_end {
+        cond = cond.add(sys_role::Column::CreatedAt.lte(v));
+    }
+    if let Some(v) = filter.updated_at_begin {
+        cond = cond.add(sys_role::Column::UpdatedAt.gte(v));
+    }
+    if let Some(v) = filter.updated_at_end {
+        cond = cond.add(sys_role::Column::UpdatedAt.lte(v));
     }
 
     let select = sys_role::Entity::find()
@@ -819,6 +820,42 @@ mod tests {
 
         cleanup(&db, &[created.id], &[], &[]).await;
         delete_actors(&db, &[creator_id, updater_id]).await;
+    }
+
+    /// 审计过滤不依赖 keyword：仅传 created_by（不传 keyword）也应生效。
+    #[tokio::test]
+    async fn find_page_filters_by_audit_columns_without_keyword() {
+        let db = test_txn().await;
+        let a = seed_role(&db, &unique("audit_nokw_a"), 1, None).await;
+        let b = seed_role(&db, &unique("audit_nokw_b"), 1, None).await;
+
+        // update_many 盖不同的审计人：避免为测试改各域 seed 夹具
+        use sea_orm::sea_query::Expr;
+        for (row, by) in [(a.id, 7_i64), (b.id, 8_i64)] {
+            sys_role::Entity::update_many()
+                .filter(sys_role::Column::Id.eq(row))
+                .col_expr(sys_role::Column::CreatedBy, Expr::value(by))
+                .col_expr(sys_role::Column::UpdatedBy, Expr::value(by))
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        let by_creator = find_page(
+            &db,
+            &RoleFilter {
+                created_by: Some(7),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            by_creator.total, 1,
+            "无 keyword 时 created_by=7 也应只命中 a"
+        );
     }
 
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。

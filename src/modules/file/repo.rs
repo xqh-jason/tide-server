@@ -1,11 +1,10 @@
-//! 文件数据访问（`sys_file`）：函数体由用户按计划任务 4 实现；
-//! 下方 `#[cfg(test)]` 集成测试由 AI 编写（TDD 红阶段，实现后应转绿）。
+//! 文件数据访问（`sys_file`）。
 //!
 //! 规格依据：docs/superpowers/specs/2026-09-05-w5-file-upload-design.md §3 / §8.1。
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, DatabaseConnection, QueryOrder};
+use sea_orm::{Condition, QueryOrder};
 
 use crate::entity::{sys_file, sys_file::Model};
 use crate::modules::file::dto::FileFilter;
@@ -31,26 +30,27 @@ pub async fn find_page(
 
     if let Some(keyword) = filter.keyword.as_deref() {
         cond = cond.add(sys_file::Column::Name.like(format!("%{}%", keyword)));
-        // 审计过滤：人字段精确（种子/系统写入为 0），时间为含边界范围
-        if let Some(v) = filter.created_by {
-            cond = cond.add(sys_file::Column::CreatedBy.eq(v));
-        }
-        if let Some(v) = filter.updated_by {
-            cond = cond.add(sys_file::Column::UpdatedBy.eq(v));
-        }
-        if let Some(v) = filter.created_at_begin {
-            cond = cond.add(sys_file::Column::CreatedAt.gte(v));
-        }
-        if let Some(v) = filter.created_at_end {
-            cond = cond.add(sys_file::Column::CreatedAt.lte(v));
-        }
-        if let Some(v) = filter.updated_at_begin {
-            cond = cond.add(sys_file::Column::UpdatedAt.gte(v));
-        }
-        if let Some(v) = filter.updated_at_end {
-            cond = cond.add(sys_file::Column::UpdatedAt.lte(v));
-        }
     }
+    // 审计过滤：人字段精确（种子/系统写入为 0），时间为含边界范围
+    if let Some(v) = filter.created_by {
+        cond = cond.add(sys_file::Column::CreatedBy.eq(v));
+    }
+    if let Some(v) = filter.updated_by {
+        cond = cond.add(sys_file::Column::UpdatedBy.eq(v));
+    }
+    if let Some(v) = filter.created_at_begin {
+        cond = cond.add(sys_file::Column::CreatedAt.gte(v));
+    }
+    if let Some(v) = filter.created_at_end {
+        cond = cond.add(sys_file::Column::CreatedAt.lte(v));
+    }
+    if let Some(v) = filter.updated_at_begin {
+        cond = cond.add(sys_file::Column::UpdatedAt.gte(v));
+    }
+    if let Some(v) = filter.updated_at_end {
+        cond = cond.add(sys_file::Column::UpdatedAt.lte(v));
+    }
+
     let select = sys_file::Entity::find()
         .filter(cond)
         .filter(sys_file::Column::DeletedAt.is_null())
@@ -221,6 +221,54 @@ mod tests {
         assert!(first, "首次软删应返回 true");
         assert!(after.is_none(), "软删后 find_by_id 不可见");
         assert!(!second, "重复软删应返回 false");
+    }
+
+    /// 审计过滤不依赖 keyword：仅传 created_by（不传 keyword）也应生效。
+    #[tokio::test]
+    async fn find_page_filters_by_audit_columns_without_keyword() {
+        let db = test_txn().await;
+        let a = seed(
+            &db,
+            &format!("{}.txt", unique("audit_nokw_a")),
+            chrono::Local::now().naive_local(),
+            None,
+        )
+        .await;
+        let b = seed(
+            &db,
+            &format!("{}.txt", unique("audit_nokw_b")),
+            chrono::Local::now().naive_local(),
+            None,
+        )
+        .await;
+
+        // update_many 盖不同的审计人：避免为测试改各域 seed 夹具
+        use sea_orm::sea_query::Expr;
+        for (row, by) in [(a.id, 7_i64), (b.id, 8_i64)] {
+            sys_file::Entity::update_many()
+                .filter(sys_file::Column::Id.eq(row))
+                .col_expr(sys_file::Column::CreatedBy, Expr::value(by))
+                .col_expr(sys_file::Column::UpdatedBy, Expr::value(by))
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        let by_creator = find_page(
+            &db,
+            &FileFilter {
+                created_by: Some(7),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            by_creator.total, 1,
+            "无 keyword 时 created_by=7 也应只命中 a"
+        );
     }
 
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
