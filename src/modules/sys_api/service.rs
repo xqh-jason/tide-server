@@ -126,6 +126,14 @@ pub async fn delete_api(db: &DatabaseConnection, id: u64) -> Result<(), AppError
     Ok(())
 }
 
+/// 查询 API 关联的角色 ID 列表（排除软删除）。
+pub async fn get_role_ids_by_api_id(
+    db: &impl ConnectionTrait,
+    api_id: u64,
+) -> Result<Vec<u64>, AppError> {
+    Ok(api_repo::find_role_ids_by_api_id(db, api_id).await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

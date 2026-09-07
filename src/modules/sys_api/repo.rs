@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, TransactionTrait};
+use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QuerySelect, TransactionTrait};
 
 use crate::entity::{sys_api, sys_api::Model, sys_role_api};
 use crate::modules::sys_api::dto::ApiFilter;
@@ -155,6 +155,21 @@ pub async fn find_by_path_method_include_deleted(
         .one(db)
         .await?;
     Ok(api)
+}
+
+pub async fn find_role_ids_by_api_id(
+    db: &impl ConnectionTrait,
+    api_id: u64,
+) -> anyhow::Result<Vec<u64>> {
+    let role_ids = sys_role_api::Entity::find()
+        .filter(sys_role_api::Column::ApiId.eq(api_id))
+        .column(sys_role_api::Column::RoleId)
+        .all(db)
+        .await?;
+    Ok(role_ids
+        .into_iter()
+        .map(|role_id| role_id.role_id)
+        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]

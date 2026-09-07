@@ -20,7 +20,13 @@ pub async fn list_roles(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let data = role_service::page_roles(&state.db, &req).await?;
-    let items = fill_user_names(&state.db, data.items, RoleResp::from).await?;
+    let mut items = fill_user_names(&state.db, data.items, RoleResp::from).await?;
+    for item in &mut items {
+        item.menu_ids = role_service::get_role_menu_ids(&state.db, item.id).await?;
+    }
+    for item in &mut items {
+        item.api_ids = role_service::get_role_api_ids(&state.db, item.id).await?;
+    }
     Ok(ApiResponse::ok(PageResult::new(
         data.total,
         data.total_pages,
@@ -36,9 +42,11 @@ pub async fn create_role(depot: &mut Depot, body: JsonBody<CreateRoleReq>) -> Ap
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let role = role_service::create_role(&state.db, auth.user_id, &req).await?;
-    let resp = fill_user_names(&state.db, vec![role], RoleResp::from)
+    let mut resp = fill_user_names(&state.db, vec![role], RoleResp::from)
         .await?
         .remove(0);
+    resp.menu_ids = role_service::get_role_menu_ids(&state.db, resp.id).await?;
+    resp.api_ids = role_service::get_role_api_ids(&state.db, resp.id).await?;
     Ok(ApiResponse::ok(resp))
 }
 
@@ -49,9 +57,11 @@ pub async fn update_role(depot: &mut Depot, body: JsonBody<UpdateRoleReq>) -> Ap
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let role = role_service::update_role(&state.db, auth.user_id, &req).await?;
-    let resp = fill_user_names(&state.db, vec![role], RoleResp::from)
+    let mut resp = fill_user_names(&state.db, vec![role], RoleResp::from)
         .await?
         .remove(0);
+    resp.menu_ids = role_service::get_role_menu_ids(&state.db, resp.id).await?;
+    resp.api_ids = role_service::get_role_api_ids(&state.db, resp.id).await?;
     Ok(ApiResponse::ok(resp))
 }
 
@@ -61,9 +71,11 @@ pub async fn get_role(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<Rol
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let role = role_service::get_role(&state.db, req.id).await?;
-    let resp = fill_user_names(&state.db, vec![role], RoleResp::from)
+    let mut resp = fill_user_names(&state.db, vec![role], RoleResp::from)
         .await?
         .remove(0);
+    resp.menu_ids = role_service::get_role_menu_ids(&state.db, resp.id).await?;
+    resp.api_ids = role_service::get_role_api_ids(&state.db, resp.id).await?;
     Ok(ApiResponse::ok(resp))
 }
 

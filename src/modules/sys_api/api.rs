@@ -22,7 +22,10 @@ pub async fn list_apis(
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     let data = api_service::page_apis(&state.db, &req).await?;
-    let items = fill_user_names(&state.db, data.items, ApiResp::from).await?;
+    let mut items = fill_user_names(&state.db, data.items, ApiResp::from).await?;
+    for item in &mut items {
+        item.role_ids = api_service::get_role_ids_by_api_id(&state.db, item.id).await?;
+    }
     Ok(ApiResponse::ok(PageResult::new(
         data.total,
         data.total_pages,
@@ -37,9 +40,10 @@ pub async fn create_api(depot: &mut Depot, req: JsonBody<CreateApiReq>) -> ApiRe
     let req = req.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let model = api_service::create_api(&state.db, auth.user_id, &req).await?;
-    let resp = fill_user_names(&state.db, vec![model], ApiResp::from)
+    let mut resp = fill_user_names(&state.db, vec![model], ApiResp::from)
         .await?
         .remove(0);
+    resp.role_ids = api_service::get_role_ids_by_api_id(&state.db, resp.id).await?;
     Ok(ApiResponse::ok(resp))
 }
 
@@ -50,9 +54,10 @@ pub async fn update_api(depot: &mut Depot, req: JsonBody<UpdateApiReq>) -> ApiRe
     let req = req.into_inner();
     let auth = AuthUser::from_depot(depot)?;
     let model = api_service::update_api(&state.db, auth.user_id, &req).await?;
-    let resp = fill_user_names(&state.db, vec![model], ApiResp::from)
+    let mut resp = fill_user_names(&state.db, vec![model], ApiResp::from)
         .await?
         .remove(0);
+    resp.role_ids = api_service::get_role_ids_by_api_id(&state.db, resp.id).await?;
     Ok(ApiResponse::ok(resp))
 }
 

@@ -192,6 +192,16 @@ pub async fn update_role_status(
     Ok(true)
 }
 
+/// 查询角色关联的菜单 ID 列表（排除软删除）；不存在返回空列表。
+pub async fn get_role_menu_ids(db: &impl ConnectionTrait, id: u64) -> Result<Vec<u64>, AppError> {
+    Ok(role_repo::find_menu_ids_by_role_id(db, id).await?)
+}
+
+/// 查询角色关联的 API 权限点 ID 列表（排除软删除）；不存在返回空列表。
+pub async fn get_role_api_ids(db: &impl ConnectionTrait, id: u64) -> Result<Vec<u64>, AppError> {
+    Ok(role_repo::find_api_ids_by_role_id(db, id).await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

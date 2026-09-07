@@ -38,6 +38,7 @@ pub struct ApiResp {
     pub created_by_name: String,
     /// 更新人显示名（`sys_user.username`）
     pub updated_by_name: String,
+    pub role_ids: Vec<u64>,
 }
 
 /// `sys_api::Model` → `ApiResp` 字段搬运。
@@ -56,6 +57,7 @@ impl From<sys_api::Model> for ApiResp {
             updated_by: m.updated_by,
             created_by_name: String::new(),
             updated_by_name: String::new(),
+            role_ids: Vec::new(),
         }
     }
 }

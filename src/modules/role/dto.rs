@@ -38,6 +38,8 @@ pub struct RoleResp {
     pub created_by_name: String,
     /// 更新人显示名（`sys_user.username`）
     pub updated_by_name: String,
+    pub menu_ids: Vec<u64>,
+    pub api_ids: Vec<u64>,
 }
 
 /// `sys_role::Model` → `RoleResp` 字段搬运。
@@ -56,6 +58,8 @@ impl From<sys_role::Model> for RoleResp {
             updated_by: m.updated_by,
             created_by_name: String::new(),
             updated_by_name: String::new(),
+            menu_ids: Vec::new(),
+            api_ids: Vec::new(),
         }
     }
 }

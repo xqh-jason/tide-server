@@ -1,6 +1,6 @@
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, TransactionTrait};
+use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QuerySelect, TransactionTrait};
 
 use crate::entity::{sys_role, sys_role_api, sys_role_menu};
 use crate::modules::role::dto::RoleFilter;
@@ -246,6 +246,30 @@ pub async fn update_role(
     role.updated_by = Set(actor_id);
     role.update(db).await?;
     Ok(true)
+}
+
+pub async fn find_menu_ids_by_role_id(
+    db: &impl ConnectionTrait,
+    role_id: u64,
+) -> anyhow::Result<Vec<u64>> {
+    let menu_ids = sys_role_menu::Entity::find()
+        .filter(sys_role_menu::Column::RoleId.eq(role_id))
+        .column(sys_role_menu::Column::MenuId)
+        .all(db)
+        .await?;
+    Ok(menu_ids.into_iter().map(|m| m.menu_id).collect::<Vec<_>>())
+}
+
+pub async fn find_api_ids_by_role_id(
+    db: &impl ConnectionTrait,
+    role_id: u64,
+) -> anyhow::Result<Vec<u64>> {
+    let api_ids = sys_role_api::Entity::find()
+        .filter(sys_role_api::Column::RoleId.eq(role_id))
+        .column(sys_role_api::Column::ApiId)
+        .all(db)
+        .await?;
+    Ok(api_ids.into_iter().map(|a| a.api_id).collect::<Vec<_>>())
 }
 
 #[cfg(test)]
