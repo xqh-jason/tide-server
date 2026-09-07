@@ -330,3 +330,59 @@ static GLOBAL: Jemalloc = Jemalloc;
      handler / 路由（禁删 admin、判存在；接口级权限码由后续 API 授权层
      统一施加，此处不校验）。
 - 验证：主项目 156/156、codegen 16/16、`cargo doc` 0 warning。
+
+---
+
+## 2026-09-05（W5-4～W5-6 三通用模块收尾）
+
+- 目标：文件上传、图形验证码、系统配置三个模块落地并出前端对接说明。
+- 完成：
+  - 文件上传：本地磁盘存储（uuid 命名、白名单校验、软删 + 物理删盘、鉴权下载）（W5-4）；
+  - 图形验证码：`POST /captcha/generate` 公开端点 + 登录强校验（一次性消费、先验码后查库），
+    登录日志对验证码失败单独分级；前端对接说明成文（W5-5）；
+  - 系统配置：键值参数 CRUD + 网站设置单行（公开 get / 鉴权 update）（W5-6）。
+- 卡点：无大卡点；codegen 对 W5 三模块基本零参与（手写四件套为主）。
+- 明日：契约加固（驼峰统一 / 审计过滤）与接口级授权层。
+
+## 2026-09-06（契约加固 + W6 接口级权限授权层）
+
+- 目标：分页契约统一收口，补上"看得到按钮但调接口被拒"的后端双保险。
+- 完成：
+  - 契约加固：DTO 全量驼峰（serde rename_all camelCase）；分页接口审计过滤
+    （createdBy/updatedBy/时间范围）；时间范围纯日期入参按起止边界补全天时刻；
+    全量用户端点（含软删）供审计过滤用户选择器，UserBriefResp 带 deleted 标记；
+  - 集成测试统一事务回滚：业务层签名规范 `&impl ConnectionTrait`，
+    `test_txn()` 自动 ROLLBACK 杜绝孤儿数据，`*_with_links` / `soft_delete_*`
+    / 上游 service 为既定例外（MySQL 真库无 savepoint）；
+  - **接口级授权层（W6）**：计划文档 + 失败测试 8 个（TDD 红灯）→ 用户实现
+    repo/service（AI review 抓出未登记分支语义反写，改回 fail-open）→
+    中间件由用户委托 AI 代写 → 10 域组挂载 `AuthRequired → OperationLog → ApiPermission`
+    （被拒请求仍留操作日志）→ 全量验证通过。
+- 卡点：`sys_api` 空表 + fail-closed 会上线即全站拒绝 → 定为 fail-open
+  （未登记放行，按域逐步登记接管）；中间件技术错误 fail-closed 并记日志，
+  与判定层 fail-open 语义区分。
+- 明日：全库清理 + 注释审查（顺手修配置域缺口）。
+
+## 2026-09-07（全库清理 + 注释审查 + 审计过滤缺陷修复）
+
+- 目标：清掉重构遗留的无用代码，全量审查 modules 注释正确性。
+- 完成：
+  - 清理：19 处 unused import（测试模块经 `use super::*` 借用父级导入的 2 处
+    把 `DatabaseConnection` 挪进各自测试模块）；移除 sys_api 实体过时
+    `#![allow(dead_code)]`；10 处 rustdoc 断链（时间格式方括号 / `<uuid>` 标签 /
+    `#[handler]` 歧义链接）；cargo check 与 cargo doc 双 0 警告；
+  - 注释审查：AI 代理扫 7 域 + 自查 6 域，修复 33 处——错误类（SUPER_ADMIN_ROLE_KEY
+    注释从用户常量复制、file 删盘"待补"早已实现、auth/mod.rs 引用不存在的
+    middleware/permission）、过时类（sys_api"留待后续引入"已落地、TDD 红阶段
+    过程注释、各域分页注释漏审计过滤）、建议类（重复 doc 行、rename 退化描述
+    与分支不符、标点混用）；
+  - **审查挖出真实缺陷**：role/file/sys_api 三域 `find_page` 审计过滤嵌套在
+    keyword 块内，不传 keyword 时整体失效——3 个红灯测试坐实后移出 keyword 块转绿；
+  - config 域补齐审计过滤（有审计列无过滤字段的缺口），service 返回类型
+    `anyhow` → `AppError`（防 parse_datetime 参数错误被吞成 500）；
+  - 签名对齐：`get_by_username` / `page_users` / `ensure_user_active` 改
+    `&impl ConnectionTrait`。
+- 卡点：无；main 代码清理时误删 menu/service 仍需要的 `DatabaseConnection`
+  （`delete_menu` 属事务例外函数），编译期即发现回补。
+- 验证：主项目 204/204、`cargo check` / `cargo doc` 0 警告。
+- 明日：W6 主线三模块（服务器监控 sysinfo 起步）。
