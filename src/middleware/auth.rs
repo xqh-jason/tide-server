@@ -7,7 +7,7 @@
 //! 白名单（login/health）不挂本中间件，由路由组装层控制。
 
 use salvo::prelude::*;
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::{ConnectionTrait, EntityTrait};
 
 use crate::entity::sys_user;
 use crate::infra::state::AppState;
@@ -37,7 +37,7 @@ impl AuthUser {
 /// 认证中间件在 JWT 验证通过后调用，避免 token 仍有效但用户已被
 /// 禁用/删除的请求继续进入业务层（用户有效性统一在认证层过滤）。
 pub(crate) async fn ensure_user_active(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     user_id: u64,
 ) -> anyhow::Result<bool> {
     let Some(user) = sys_user::Entity::find_by_id(user_id).one(db).await? else {
@@ -114,7 +114,7 @@ fn unauthorized(res: &mut Response, ctrl: &mut FlowCtrl) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database};
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database, DatabaseConnection};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

@@ -1,5 +1,4 @@
 use sea_orm::ActiveValue::Set;
-use sea_orm::entity::prelude::*;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::entity::sys_user;
@@ -19,7 +18,7 @@ use crate::utils::error::AppError;
 
 /// 按用户名查询用户（`by-username` 端点用）；不存在时返回 `None`。
 pub async fn get_by_username(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl ConnectionTrait,
     username: &str,
 ) -> Result<Option<sys_user::Model>, AppError> {
     let user = user_repo::find_by_username(db, username).await?;
@@ -29,7 +28,7 @@ pub async fn get_by_username(
 
 /// 分页查询用户。`page_index` 为 0-based（由 handler 层从 PageQuery 转换）。
 pub async fn page_users(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl ConnectionTrait,
     req: &UserListReq,
 ) -> Result<PageData<sys_user::Model>, AppError> {
     let model = user_repo::find_page(
