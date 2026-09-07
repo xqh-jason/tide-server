@@ -287,10 +287,12 @@ mod tests {
     async fn operation_log_middleware_persists_request_and_response() {
         let db = test_db().await;
         let config = crate::infra::config::Config::load().unwrap();
+        let scheduler = Arc::new(tokio_cron_scheduler::JobScheduler::new().await.unwrap());
         let state = AppState::new(
             config,
             db.clone(),
             Arc::new(crate::utils::cache::MemoryCache::new()),
+            scheduler,
         );
 
         let path = format!("/api/v1/test/{}", unique("op"));
@@ -340,10 +342,12 @@ mod tests {
     async fn operation_log_middleware_records_biz_error_message() {
         let db = test_db().await;
         let config = crate::infra::config::Config::load().unwrap();
+        let scheduler = Arc::new(tokio_cron_scheduler::JobScheduler::new().await.unwrap());
         let state = AppState::new(
             config,
             db.clone(),
             Arc::new(crate::utils::cache::MemoryCache::new()),
+            scheduler,
         );
 
         let path = format!("/api/v1/test/{}", unique("fail"));

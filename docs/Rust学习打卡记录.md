@@ -386,3 +386,29 @@ static GLOBAL: Jemalloc = Jemalloc;
   （`delete_menu` 属事务例外函数），编译期即发现回补。
 - 验证：主项目 204/204、`cargo check` / `cargo doc` 0 警告。
 - 明日：W6 主线三模块（服务器监控 sysinfo 起步）。
+
+## 2026-09-07 · W6-2 定时任务调度与执行日志
+- 完成：
+  - 基建：`tokio-cron-scheduler 0.15.1` + `AppState.scheduler`；迁移
+    `sys_job` / `sys_job_log`（duration_ms 用 `.unsigned()` 对齐实体 u32）；
+  - 结构决策：内置 handler 注册表落位 `src/task/`（一个任务一个文件，文件名 =
+    handler_name，新增任务 = 建文件 + 注册一行）；scheduler.rs 收缩为纯基建；
+  - 调度设计 7 决策落 spec：DB 为事实来源（CRUD 在 DB 提交后同步调度器、
+    失败只记日志重启自愈）、uuid 由 job_id 确定性派生、6 段秒级 cron、
+    防重叠 per-job 占坑、timeout 300s、error_msg 截 2KB、run-once 绕过防重叠；
+  - 业务实现（用户 + AI 协作）：repo 四查询、`build_scheduled_job` /
+    `run_scheduled` / `execute_job_run`、service 四组接线、两个清理 handler；
+  - 踩坑三连：①`Job::new_async` 是同步函数（名字里的 async 指任务体）；
+    ②dashmap 6 没有 `try_insert`，防重叠占坑改用 `entry()` 枚举（比
+    contains_key+insert 原子，无并发竞态）；③**new_async 内部硬编码
+    `Uuid::new_v4()`**，确定性 uuid 设计落空——改用 `JobBuilder::with_job_id`
+    （注意其自带 prost Uuid 包装类型要 `.into()`）；
+  - 结构连锁修正：service 签名 `&JobScheduler` → `&AppState`（构造 Job 的闭包
+    必须捕获 `Arc<AppState>`）；`next_tick_for_job` 要 `&mut`，Arc 拿不出，
+    测试探测用 `scheduler.clone()` 共享句柄；
+- 测试经验：`test_txn` 能看见真库已提交数据——断言按 id 归属而非精确条数
+  （真库有种子示例任务，精确计数 2≠1 翻车一次）。
+- 验证：主项目 217/217、migrations/codegen 全绿、`cargo check`（含
+  all-targets）/ `cargo doc` 0 警告；冒烟四连过（7s 落 17 条日志 → 改 cron
+  2s→5s 实时生效 → 停用 12s 无新增 → 删除 11s 无残留、日志 0 错误）。
+- 明日：W6-3 文件断点续传（或 W6-4 授权层登记），监控已决策跳过。

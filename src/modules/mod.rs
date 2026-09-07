@@ -45,6 +45,8 @@ pub mod captcha;
 pub mod config;
 pub mod dictionary;
 pub mod file;
+pub mod job;
+pub mod job_log;
 pub mod login_log;
 pub mod menu;
 pub mod operation_log;

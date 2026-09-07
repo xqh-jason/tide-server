@@ -8,8 +8,8 @@
 //!
 
 use crate::entity::{
-    sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_menu, sys_role,
-    sys_site_config, sys_user,
+    sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job, sys_menu,
+    sys_role, sys_site_config, sys_user,
 };
 use std::collections::HashMap;
 
@@ -125,6 +125,12 @@ impl UserRefIds for sys_config::Model {
 }
 
 impl UserRefIds for sys_site_config::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for sys_job::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         vec![self.created_by, self.updated_by]
     }

@@ -96,6 +96,22 @@ pub fn build(state: AppState) -> Router {
                         .hoop(ApiPermission)
                         .push(crate::modules::config::routes()),
                 )
+                // 定时任务：POST /api/v1/job/{list,create,update,get,delete,update-status,run-once}
+                .push(
+                    Router::with_path("job")
+                        .hoop(AuthRequired)
+                        .hoop(OperationLog)
+                        .hoop(ApiPermission)
+                        .push(crate::modules::job::routes()),
+                )
+                // 执行日志：POST /api/v1/job-log/{list,get,delete,delete-batch}
+                .push(
+                    Router::with_path("job-log")
+                        .hoop(AuthRequired)
+                        .hoop(OperationLog)
+                        .hoop(ApiPermission)
+                        .push(crate::modules::job_log::routes()),
+                )
                 // 网站设置：GET /api/v1/site-config/get（公开）+ POST update（子路由自挂中间件）
                 .push(Router::with_path("site-config").push(crate::modules::config::site_routes())),
         )

@@ -8,7 +8,7 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
-use crate::entity::{sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+use crate::entity::{sys_job, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
 use crate::utils::crypt;
 
 /// admin 初始密码（开发环境约定）。
@@ -357,6 +357,84 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemDictionary"),
         sort: 6,
     },
+    // 定时任务页面 + 按钮权限码
+    MenuSeed {
+        name: "SystemJob",
+        title: "定时任务",
+        path: "/system/job",
+        component: "#/views/system/job/index.vue",
+        icon: "lucide:clock",
+        menu_type: 2,
+        permission: "",
+        parent: Some("System"),
+        sort: 8,
+    },
+    MenuSeed {
+        name: "SystemJobCreate",
+        title: "任务新增",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:job:create",
+        parent: Some("SystemJob"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "SystemJobUpdate",
+        title: "任务编辑",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:job:update",
+        parent: Some("SystemJob"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "SystemJobDelete",
+        title: "任务删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:job:delete",
+        parent: Some("SystemJob"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "SystemJobUpdateStatus",
+        title: "任务启停",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:job:update-status",
+        parent: Some("SystemJob"),
+        sort: 4,
+    },
+    MenuSeed {
+        name: "SystemJobRunOnce",
+        title: "任务立即执行",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:job:run-once",
+        parent: Some("SystemJob"),
+        sort: 5,
+    },
+    MenuSeed {
+        name: "SystemJobLogDelete",
+        title: "执行日志删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:job-log:delete",
+        parent: Some("SystemJob"),
+        sort: 6,
+    },
 ];
 
 /// 启动初始化：确保开发种子数据存在（幂等，可重复调用）。
@@ -466,7 +544,28 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         menu_ids_by_name.insert(seed.name, menu_id);
     }
 
-    // 5. super 角色绑定全部菜单：缺失的关联补上
+    // 5. 示例定时任务：登录日志每日清理（幂等按 job_name；调度器在 init_scheduler 装载）
+    const SEED_JOB_NAME: &str = "登录日志每日清理";
+    let sample_job = sys_job::Entity::find()
+        .filter(sys_job::Column::JobName.eq(SEED_JOB_NAME))
+        .one(db)
+        .await?;
+    if sample_job.is_none() {
+        sys_job::ActiveModel {
+            job_name: Set(SEED_JOB_NAME.to_string()),
+            cron_expr: Set("0 30 3 * * *".to_string()),
+            handler_name: Set("cleanup_login_logs".to_string()),
+            status: Set(1),
+            remark: Set("种子示例：每日 03:30:00 清理 90 天前登录日志".to_string()),
+            created_by: Set(SEED_ACTOR_ID),
+            updated_by: Set(SEED_ACTOR_ID),
+            ..Default::default()
+        }
+        .insert(db)
+        .await?;
+    }
+
+    // 6. super 角色绑定全部菜单：缺失的关联补上
     for menu_id in menu_ids_by_name.values() {
         let bound = sys_role_menu::Entity::find()
             .filter(sys_role_menu::Column::RoleId.eq(super_role_id))

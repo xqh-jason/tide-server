@@ -1,0 +1,180 @@
+//! W6 迁移：sys_job 定时任务定义 + sys_job_log 执行日志。
+
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveIden)]
+enum SysJob {
+    Table,
+    Id,
+    JobName,
+    CronExpr,
+    HandlerName,
+    Status,
+    Remark,
+    CreatedBy,
+    UpdatedBy,
+    CreatedAt,
+    UpdatedAt,
+    DeletedAt,
+}
+
+#[derive(DeriveIden)]
+enum SysJobLog {
+    Table,
+    Id,
+    JobId,
+    JobName,
+    Status,
+    ErrorMsg,
+    DurationMs,
+    CreatedAt,
+    UpdatedAt,
+    DeletedAt,
+}
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(SysJob::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(SysJob::Id)
+                            .big_unsigned()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(SysJob::JobName).string_len(64).not_null())
+                    .col(ColumnDef::new(SysJob::CronExpr).string_len(64).not_null())
+                    .col(
+                        ColumnDef::new(SysJob::HandlerName)
+                            .string_len(64)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(SysJob::Status)
+                            .tiny_integer()
+                            .not_null()
+                            .default(1),
+                    )
+                    .col(
+                        ColumnDef::new(SysJob::Remark)
+                            .string_len(255)
+                            .not_null()
+                            .default(""),
+                    )
+                    .col(
+                        ColumnDef::new(SysJob::CreatedBy)
+                            .big_unsigned()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(SysJob::UpdatedBy)
+                            .big_unsigned()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(SysJob::CreatedAt)
+                            .date_time()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(SysJob::UpdatedAt)
+                            .date_time()
+                            .not_null()
+                            .default(Expr::current_timestamp())
+                            .extra("ON UPDATE CURRENT_TIMESTAMP"),
+                    )
+                    .col(ColumnDef::new(SysJob::DeletedAt).date_time().null())
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("uk_job_name")
+                    .unique()
+                    .table(SysJob::Table)
+                    .col(SysJob::JobName)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(SysJobLog::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(SysJobLog::Id)
+                            .big_unsigned()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(SysJobLog::JobId).big_unsigned().not_null())
+                    .col(
+                        ColumnDef::new(SysJobLog::JobName)
+                            .string_len(64)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(SysJobLog::Status)
+                            .tiny_integer()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(ColumnDef::new(SysJobLog::ErrorMsg).text().null())
+                    .col(
+                        ColumnDef::new(SysJobLog::DurationMs)
+                            .unsigned()
+                            .not_null()
+                            .default(0),
+                    )
+                    .col(
+                        ColumnDef::new(SysJobLog::CreatedAt)
+                            .date_time()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(SysJobLog::UpdatedAt)
+                            .date_time()
+                            .not_null()
+                            .default(Expr::current_timestamp())
+                            .extra("ON UPDATE CURRENT_TIMESTAMP"),
+                    )
+                    .col(ColumnDef::new(SysJobLog::DeletedAt).date_time().null())
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_sys_job_log_job_id_created_at")
+                    .table(SysJobLog::Table)
+                    .col(SysJobLog::JobId)
+                    .col(SysJobLog::CreatedAt)
+                    .to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(SysJobLog::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(SysJob::Table).to_owned())
+            .await
+    }
+}

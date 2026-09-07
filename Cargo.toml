@@ -42,6 +42,7 @@ argon2 = "0.5"
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 # 内存缓存实现（W2 token 黑名单；对照 GVA_CACHE 抽象理念）
 dashmap = "6"
+tokio-cron-scheduler = "0.15.1"
 
 # W2/W3 再加：
 # reqwest = { version = "0.12", features = ["json"] }       # W7+ AI 延伸

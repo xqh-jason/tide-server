@@ -14,8 +14,16 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let db = sea_orm::Database::connect(opt).await?;
     // 开发种子数据（幂等）：admin / super / 默认菜单与 RBAC 关联
     crate::infra::seed::ensure_seed(&db).await?;
-    let state =
-        crate::infra::state::AppState::new(config, db, std::sync::Arc::new(MemoryCache::new()));
+    // 定时任务调度器（W6-2）：先建调度器与 AppState，再装载启用任务并 start。
+    // 顺序固定「先 add 后 start」——未 start 即 drop 会刷错误日志。
+    let scheduler = std::sync::Arc::new(tokio_cron_scheduler::JobScheduler::new().await?);
+    let state = crate::infra::state::AppState::new(
+        config,
+        db,
+        std::sync::Arc::new(MemoryCache::new()),
+        scheduler,
+    );
+    crate::modules::job::scheduler::init_scheduler(&state).await?;
 
     let router = crate::infra::router::build(state);
 

@@ -12,6 +12,7 @@ mod m20260903_000009_create_sys_dictionary;
 mod m20260904_000010_add_audit_columns;
 mod m20260905_000011_create_sys_file;
 mod m20260905_000012_create_sys_config_and_sys_site_config;
+mod m20260907_000013_create_sys_job_and_sys_job_log;
 
 pub struct Migrator;
 
@@ -31,6 +32,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260904_000010_add_audit_columns::Migration),
             Box::new(m20260905_000011_create_sys_file::Migration),
             Box::new(m20260905_000012_create_sys_config_and_sys_site_config::Migration),
+            Box::new(m20260907_000013_create_sys_job_and_sys_job_log::Migration),
         ]
     }
 }

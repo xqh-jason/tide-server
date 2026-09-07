@@ -61,6 +61,18 @@ pub async fn soft_delete_login_log(db: &impl ConnectionTrait, id: u64) -> anyhow
     Ok(true)
 }
 
+/// 物理删除 created_at 早于 cutoff 的记录（定时清理任务用），返回受影响行数。
+pub async fn delete_created_before(
+    db: &impl ConnectionTrait,
+    cutoff: chrono::NaiveDateTime,
+) -> anyhow::Result<u64> {
+    let result = sys_login_log::Entity::delete_many()
+        .filter(sys_login_log::Column::CreatedAt.lt(cutoff))
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected)
+}
+
 /// 批量软删：只处理存在且未删除的行，返回受影响行数。
 pub async fn soft_delete_batch(db: &impl ConnectionTrait, ids: &[u64]) -> anyhow::Result<u64> {
     let now = chrono::Local::now().naive_local();
