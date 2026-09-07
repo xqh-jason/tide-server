@@ -5,7 +5,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QueryOrder};
+use sea_orm::{Condition, ConnectionTrait, QueryOrder};
 
 use crate::entity::{sys_config, sys_site_config};
 use crate::modules::config::dto::ConfigFilter;
@@ -25,7 +25,8 @@ pub async fn find_config_by_id(
     Ok(model)
 }
 
-/// 参数：分页 + 动态过滤（keyword 对 name / key 模糊），排除软删，created_at 倒序。
+/// 参数：分页 + 动态过滤（keyword 对 name / key 模糊，
+/// created_by/updated_by/时间范围审计过滤），排除软删，created_at 倒序。
 pub async fn find_config_page(
     db: &impl ConnectionTrait,
     filter: &ConfigFilter,
@@ -40,6 +41,25 @@ pub async fn find_config_page(
                 .add(sys_config::Column::ConfigName.like(format!("%{}%", keyword)))
                 .add(sys_config::Column::ConfigKey.like(format!("%{}%", keyword))),
         );
+    }
+    // 审计过滤：人字段精确（种子/系统写入为 0），时间为含边界范围
+    if let Some(v) = filter.created_by {
+        cond = cond.add(sys_config::Column::CreatedBy.eq(v));
+    }
+    if let Some(v) = filter.updated_by {
+        cond = cond.add(sys_config::Column::UpdatedBy.eq(v));
+    }
+    if let Some(v) = filter.created_at_begin {
+        cond = cond.add(sys_config::Column::CreatedAt.gte(v));
+    }
+    if let Some(v) = filter.created_at_end {
+        cond = cond.add(sys_config::Column::CreatedAt.lte(v));
+    }
+    if let Some(v) = filter.updated_at_begin {
+        cond = cond.add(sys_config::Column::UpdatedAt.gte(v));
+    }
+    if let Some(v) = filter.updated_at_end {
+        cond = cond.add(sys_config::Column::UpdatedAt.lte(v));
     }
     let select = sys_config::Entity::find()
         .filter(cond)
@@ -216,9 +236,17 @@ mod tests {
         )
         .await;
 
-        let page = find_config_page(&db, &ConfigFilter { keyword: Some(kw) }, 0, 10)
-            .await
-            .unwrap();
+        let page = find_config_page(
+            &db,
+            &ConfigFilter {
+                keyword: Some(kw),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(page.total, 3, "keyword 应命中 3 条活记录，软删不进分页");
         let ids: Vec<u64> = page.items.iter().map(|m| m.id).collect();
@@ -226,6 +254,112 @@ mod tests {
             ids,
             vec![a.id, b.id, c.id],
             "应按 created_at 倒序（a 最新 id 最小）"
+        );
+    }
+
+    /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
+    #[tokio::test]
+    async fn find_config_page_filters_by_audit_columns_and_time_range() {
+        let db = test_txn().await;
+        let kw = unique("cfg_audit");
+        let base = chrono::Local::now().naive_local();
+        let a = seed_config(&db, &format!("{kw}a"), base, None).await;
+        let b = seed_config(&db, &format!("{kw}b"), base, None).await;
+
+        // update_many 盖不同的审计人与时间：避免为测试改各域 seed 夹具
+        use sea_orm::sea_query::Expr;
+        for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
+            sys_config::Entity::update_many()
+                .filter(sys_config::Column::Id.eq(row))
+                .col_expr(sys_config::Column::CreatedBy, Expr::value(by))
+                .col_expr(sys_config::Column::UpdatedBy, Expr::value(by))
+                .col_expr(
+                    sys_config::Column::CreatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .col_expr(
+                    sys_config::Column::UpdatedAt,
+                    Expr::value(base + chrono::Duration::seconds(offset)),
+                )
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        let by_creator = find_config_page(
+            &db,
+            &ConfigFilter {
+                keyword: Some(kw.clone()),
+                created_by: Some(7),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_creator.total, 1, "created_by=7 应只命中 a");
+
+        let by_time = find_config_page(
+            &db,
+            &ConfigFilter {
+                keyword: Some(kw.clone()),
+                updated_at_begin: Some(base - chrono::Duration::seconds(7)),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_time.total, 1, "updated_at begin=base-7s 应只剩 b");
+    }
+
+    /// 审计过滤不依赖 keyword：仅传 created_by（不传 keyword）也应生效。
+    #[tokio::test]
+    async fn find_config_page_filters_by_audit_columns_without_keyword() {
+        let db = test_txn().await;
+        let a = seed_config(
+            &db,
+            &unique("cfg_nokw_a"),
+            chrono::Local::now().naive_local(),
+            None,
+        )
+        .await;
+        let b = seed_config(
+            &db,
+            &unique("cfg_nokw_b"),
+            chrono::Local::now().naive_local(),
+            None,
+        )
+        .await;
+
+        // update_many 盖不同的审计人：避免为测试改各域 seed 夹具
+        use sea_orm::sea_query::Expr;
+        for (row, by) in [(a.id, 7_i64), (b.id, 8_i64)] {
+            sys_config::Entity::update_many()
+                .filter(sys_config::Column::Id.eq(row))
+                .col_expr(sys_config::Column::CreatedBy, Expr::value(by))
+                .col_expr(sys_config::Column::UpdatedBy, Expr::value(by))
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        let by_creator = find_config_page(
+            &db,
+            &ConfigFilter {
+                created_by: Some(7),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            by_creator.total, 1,
+            "无 keyword 时 created_by=7 也应只命中 a"
         );
     }
 

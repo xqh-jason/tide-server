@@ -4,8 +4,7 @@
 //! 规格依据：docs/superpowers/specs/2026-09-05-w5-config-design.md §4 / §6。
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::ConnectionTrait;
 
 use crate::entity::{sys_config, sys_site_config};
 use crate::modules::config::dto::{
@@ -21,16 +20,36 @@ use crate::utils::error::AppError;
 pub async fn page_configs(
     db: &impl ConnectionTrait,
     req: &ConfigListReq,
-) -> anyhow::Result<PageData<sys_config::Model>> {
-    config_repo::find_config_page(
-        db,
-        &ConfigFilter {
-            keyword: req.keyword.clone(),
-        },
-        req.page.page_index(),
-        req.page.page_size(),
+) -> Result<PageData<sys_config::Model>, AppError> {
+    let filter = ConfigFilter {
+        keyword: req.keyword.clone(),
+        created_by: req.created_by,
+        updated_by: req.updated_by,
+        created_at_begin: crate::utils::datetime::parse_datetime(
+            "createdAtBegin",
+            &req.created_at_begin,
+            false,
+        )?,
+        created_at_end: crate::utils::datetime::parse_datetime(
+            "createdAtEnd",
+            &req.created_at_end,
+            true,
+        )?,
+        updated_at_begin: crate::utils::datetime::parse_datetime(
+            "updatedAtBegin",
+            &req.updated_at_begin,
+            false,
+        )?,
+        updated_at_end: crate::utils::datetime::parse_datetime(
+            "updatedAtEnd",
+            &req.updated_at_end,
+            true,
+        )?,
+    };
+    Ok(
+        config_repo::find_config_page(db, &filter, req.page.page_index(), req.page.page_size())
+            .await?,
     )
-    .await
 }
 
 /// 创建参数：config_key 全局唯一（含软删占位查重）。
