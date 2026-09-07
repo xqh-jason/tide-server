@@ -16,7 +16,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     crate::infra::seed::ensure_seed(&db).await?;
     // 定时任务调度器（W6-2）：先建调度器与 AppState，再装载启用任务并 start。
     // 顺序固定「先 add 后 start」——未 start 即 drop 会刷错误日志。
-    let scheduler = std::sync::Arc::new(tokio_cron_scheduler::JobScheduler::new().await?);
+    // 包 Arc 前显式 init：add/start 内部虽有惰性 init（幂等），但首次 add 会打印
+    // 噪音日志 "Uninited"，且 init 失败应尽早 fail-fast 于装载任务之前。
+    let mut scheduler = tokio_cron_scheduler::JobScheduler::new().await?;
+    scheduler.init().await?;
+    let scheduler = std::sync::Arc::new(scheduler);
     let state = crate::infra::state::AppState::new(
         config,
         db,
