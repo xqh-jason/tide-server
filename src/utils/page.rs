@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct PageQuery {
     /// 页码，从 1 开始；缺省 1
     pub page: Option<u64>,
-    /// 每页条数，1..=100；缺省 10
+    /// 每页条数，1..=1000；缺省 10
     pub page_size: Option<u64>,
 }
 
@@ -22,9 +22,9 @@ impl PageQuery {
     pub fn page(&self) -> u64 {
         self.page.unwrap_or(1)
     }
-    /// 页大小，缺省 10；下限 1、上限 100，防止除零与超大分页
+    /// 页大小，缺省 10；下限 1、上限 1000，防止除零与超大分页
     pub fn page_size(&self) -> u64 {
-        self.page_size.unwrap_or(10).clamp(1, 100)
+        self.page_size.unwrap_or(10).clamp(1, 1000)
     }
     /// 转 SeaORM Paginator 用的 0-based 页号
     pub fn page_index(&self) -> u64 {

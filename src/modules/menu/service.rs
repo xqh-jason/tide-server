@@ -421,7 +421,7 @@ mod tests {
         let db = test_txn().await;
         let deleted_name = unique("dup_deleted");
         let live_name = unique("dup_live");
-        let deleted = seed_menu(
+        let _deleted = seed_menu(
             &db,
             &deleted_name,
             0,
@@ -429,7 +429,7 @@ mod tests {
             Some(chrono::Local::now().naive_local()),
         )
         .await;
-        let live = seed_menu(&db, &live_name, 0, 1, None).await;
+        let _live = seed_menu(&db, &live_name, 0, 1, None).await;
 
         let result_deleted = create_menu(
             &db,
@@ -488,7 +488,7 @@ mod tests {
         let db = test_txn().await;
         let name_a = unique("menu_a");
         let name_b = unique("menu_b");
-        let menu_a = seed_menu(&db, &name_a, 0, 1, None).await;
+        let _menu_a = seed_menu(&db, &name_a, 0, 1, None).await;
         let menu_b = seed_menu(&db, &name_b, 0, 1, None).await;
 
         let update_req = |name: String| UpdateMenuReq {
@@ -638,7 +638,7 @@ mod tests {
 
         let tree = get_menus(&db, user.id).await.unwrap();
 
-        let role_ids: &[u64] = if owned_by_test { &[super_role.id] } else { &[] };
+        let _role_ids: &[u64] = if owned_by_test { &[super_role.id] } else { &[] };
 
         assert!(
             contains_name(&tree, &page.name),

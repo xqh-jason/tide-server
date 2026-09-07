@@ -3,16 +3,16 @@
   "table": "sys_config",
   "comment": "键值参数配置",
   "fields": [
-    { "name": "id", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "primary": true, "auto_increment": true },
-    { "name": "config_name", "rust_type": "String", "sql_type": "VARCHAR(64)", "optional": true, "default": "", "comment": "参数名称" },
-    { "name": "config_key", "rust_type": "String", "sql_type": "VARCHAR(64)", "optional": false, "comment": "参数键（业务内唯一，含软删占位）" },
-    { "name": "config_value", "rust_type": "String", "sql_type": "VARCHAR(255)", "optional": true, "default": "", "comment": "参数值" },
-    { "name": "remark", "rust_type": "String", "sql_type": "VARCHAR(255)", "optional": true, "default": "", "comment": "备注" },
-    { "name": "created_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
-    { "name": "updated_at", "rust_type": "DateTime", "sql_type": "DATETIME", "readonly": true },
-    { "name": "created_by", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "创建人 ID" },
-    { "name": "updated_by", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "readonly": true, "audit": true, "comment": "更新人 ID" },
-    { "name": "deleted_at", "rust_type": "Option<DateTime>", "sql_type": "DATETIME", "readonly": true, "soft_delete": true }
+    { "name": "id", "rust_type": "u64", "primary": true, "auto_increment": true },
+    { "name": "config_name", "rust_type": "String", "optional": true, "default": "", "comment": "参数名称" },
+    { "name": "config_key", "rust_type": "String", "optional": false, "comment": "参数键（业务内唯一，含软删占位）" },
+    { "name": "config_value", "rust_type": "String", "optional": true, "default": "", "comment": "参数值" },
+    { "name": "remark", "rust_type": "String", "optional": true, "default": "", "comment": "备注" },
+    { "name": "created_at", "rust_type": "DateTime", "readonly": true },
+    { "name": "updated_at", "rust_type": "DateTime", "readonly": true },
+    { "name": "created_by", "rust_type": "u64", "readonly": true, "audit": true, "comment": "创建人 ID" },
+    { "name": "updated_by", "rust_type": "u64", "readonly": true, "audit": true, "comment": "更新人 ID" },
+    { "name": "deleted_at", "rust_type": "Option<DateTime>", "readonly": true }
   ],
   "unique_fields": ["config_key"],
   "filters": [

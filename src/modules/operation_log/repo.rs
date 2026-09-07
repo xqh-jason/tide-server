@@ -79,7 +79,7 @@ pub async fn soft_delete_batch(db: &impl ConnectionTrait, ids: &[u64]) -> anyhow
 mod tests {
     use super::*;
     use crate::entity::sys_operation_log;
-    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use sea_orm::{ActiveModelTrait, Database, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -132,14 +132,6 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
-        sys_operation_log::Entity::delete_many()
-            .filter(sys_operation_log::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-    }
-
     #[tokio::test]
     async fn find_page_filters_by_keyword_user_and_status_and_sorts_desc_excludes_deleted() {
         let db = test_txn().await;
@@ -152,7 +144,7 @@ mod tests {
         let middle = seed(&db, &kw, 2, 200, base - chrono::Duration::seconds(2), None).await;
         let newer = seed(&db, &kw, 1, 500, base - chrono::Duration::seconds(1), None).await;
         // 命中 keyword 但已软删：任何过滤都不应出现
-        let deleted = seed(&db, &kw, 1, 200, base, deleted_at).await;
+        let _deleted = seed(&db, &kw, 1, 200, base, deleted_at).await;
 
         let by_keyword = find_page(
             &db,

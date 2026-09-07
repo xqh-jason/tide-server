@@ -137,14 +137,6 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
-        sys_file::Entity::delete_many()
-            .filter(sys_file::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-    }
-
     #[tokio::test]
     async fn find_page_filters_by_keyword_sorts_desc_excludes_deleted() {
         let db = test_txn().await;
@@ -169,14 +161,14 @@ mod tests {
             None,
         )
         .await;
-        let deleted = seed(
+        let _deleted = seed(
             &db,
             &format!("报告{kw}delta.txt"),
             base,
             Some(chrono::Local::now().naive_local()),
         )
         .await;
-        let other = seed(&db, "其他文件.txt", base, None).await;
+        let _other = seed(&db, "其他文件.txt", base, None).await;
 
         let page = find_page(
             &db,

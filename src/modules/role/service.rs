@@ -219,12 +219,6 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
-    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
-    async fn test_txn() -> sea_orm::DatabaseTransaction {
-        use sea_orm::TransactionTrait;
-        test_db().await.begin().await.unwrap()
-    }
-
     /// 构造创建角色请求：默认启用、无菜单/API 关联。
     fn create_req(role_name: String, role_key: String) -> CreateRoleReq {
         CreateRoleReq {

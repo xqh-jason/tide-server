@@ -197,14 +197,6 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
-        sys_config::Entity::delete_many()
-            .filter(sys_config::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-    }
-
     #[tokio::test]
     async fn find_config_page_filters_by_keyword_sorts_desc_excludes_deleted() {
         let db = test_txn().await;
@@ -228,7 +220,7 @@ mod tests {
             None,
         )
         .await;
-        let deleted = seed_config(
+        let _deleted = seed_config(
             &db,
             &format!("{kw}d"),
             base,
@@ -367,7 +359,7 @@ mod tests {
     async fn find_config_by_key_includes_soft_deleted_placeholder() {
         let db = test_txn().await;
         let key = unique("cfg_key");
-        let deleted = seed_config(
+        let _deleted = seed_config(
             &db,
             &key,
             chrono::Local::now().naive_local(),

@@ -134,9 +134,7 @@ impl UserRefIds for sys_site_config::Model {
 mod tests {
     use std::collections::HashMap;
 
-    use sea_orm::{
-        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
-    };
+    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;

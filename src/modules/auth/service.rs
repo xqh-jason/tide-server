@@ -180,35 +180,11 @@ mod tests {
         (user.id, role.id, username, role_key)
     }
 
-    async fn cleanup(db: &impl ConnectionTrait, user_id: u64, role_id: u64) {
-        sys_user_role::Entity::delete_many()
-            .filter(sys_user_role::Column::UserId.eq(user_id))
-            .exec(db)
-            .await
-            .unwrap();
-        sys_role::Entity::delete_by_id(role_id)
-            .exec(db)
-            .await
-            .unwrap();
-        sys_user::Entity::delete_by_id(user_id)
-            .exec(db)
-            .await
-            .unwrap();
-    }
-
     fn test_meta() -> LoginMeta {
         LoginMeta {
             ip: "127.0.0.1".into(),
             agent: "test-agent".into(),
         }
-    }
-
-    async fn cleanup_login_logs(db: &impl ConnectionTrait, username: &str) {
-        sys_login_log::Entity::delete_many()
-            .filter(sys_login_log::Column::Username.eq(username))
-            .exec(db)
-            .await
-            .unwrap();
     }
 
     /// 造一个带有效验证码的登录请求：generate 后从 cache 直读答案（生成接口不回传答案）。
@@ -243,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn login_success_returns_token_with_roles() {
         let db = test_txn().await;
-        let (uid, rid, username, role_key) = seed_user(&db).await;
+        let (uid, _rid, username, role_key) = seed_user(&db).await;
         let cache = MemoryCache::new();
 
         let resp = login(
@@ -269,7 +245,7 @@ mod tests {
     #[tokio::test]
     async fn login_wrong_password_returns_biz_error() {
         let db = test_txn().await;
-        let (uid, rid, username, _) = seed_user(&db).await;
+        let (uid, _rid, username, _) = seed_user(&db).await;
         let cache = MemoryCache::new();
 
         let err = login(

@@ -356,9 +356,7 @@ mod tests {
     use crate::modules::dictionary::dto::{
         CreateDictionaryDetailReq, CreateDictionaryReq, UpdateDictionaryReq,
     };
-    use sea_orm::{
-        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
-    };
+    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     // 模块内自增序号。注意：repo.rs 测试也有同名同起点的独立 SEQ，
@@ -465,22 +463,6 @@ mod tests {
             sort: 0,
             status: 1,
         }
-    }
-
-    /// 测后清理：先物理删字典项，再删字典类型。
-    async fn cleanup(db: &impl ConnectionTrait, dictionary_ids: &[u64]) {
-        sys_dictionary_detail::Entity::delete_many()
-            .filter(
-                sys_dictionary_detail::Column::DictionaryId.is_in(dictionary_ids.iter().copied()),
-            )
-            .exec(db)
-            .await
-            .unwrap();
-        sys_dictionary::Entity::delete_many()
-            .filter(sys_dictionary::Column::Id.is_in(dictionary_ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
     }
 
     #[tokio::test]

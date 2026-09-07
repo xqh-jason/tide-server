@@ -209,10 +209,7 @@ pub async fn download_path(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_file;
-    use sea_orm::{
-        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
-    };
+    use sea_orm::{Database, DatabaseConnection};
     use std::fs;
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -273,16 +270,6 @@ mod tests {
             size,
             temp_path,
         }
-    }
-
-    /// 清理：删记录（含软删）+ 删临时目录。
-    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64], dir: &Path) {
-        sys_file::Entity::delete_many()
-            .filter(sys_file::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

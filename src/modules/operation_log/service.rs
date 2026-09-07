@@ -63,9 +63,7 @@ mod tests {
     use crate::entity::sys_operation_log;
     use crate::utils::PageQuery;
     use crate::utils::error::AppError;
-    use sea_orm::{
-        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
-    };
+    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -134,14 +132,6 @@ mod tests {
         }
     }
 
-    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
-        sys_operation_log::Entity::delete_many()
-            .filter(sys_operation_log::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-    }
-
     #[tokio::test]
     async fn page_operation_logs_filters_by_keyword_user_and_status() {
         let db = test_txn().await;
@@ -149,10 +139,10 @@ mod tests {
         let base = chrono::Local::now().naive_local();
         let deleted_at = Some(chrono::Local::now().naive_local());
 
-        let hit = seed(&db, &kw, 1, 200, base, None).await;
+        let _hit = seed(&db, &kw, 1, 200, base, None).await;
         let other_user = seed(&db, &kw, 2, 200, base - chrono::Duration::seconds(1), None).await;
         let other_status = seed(&db, &kw, 1, 500, base - chrono::Duration::seconds(2), None).await;
-        let deleted = seed(
+        let _deleted = seed(
             &db,
             &kw,
             1,

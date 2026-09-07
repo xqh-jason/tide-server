@@ -555,8 +555,8 @@ mod tests {
         let db = test_txn().await;
         let keyword = unique("page_keyword");
         let live = seed_role(&db, &format!("{keyword}_live"), 1, None).await;
-        let disabled = seed_role(&db, &format!("{keyword}_disabled"), 0, None).await;
-        let deleted = seed_role(
+        let _disabled = seed_role(&db, &format!("{keyword}_disabled"), 0, None).await;
+        let _deleted = seed_role(
             &db,
             &format!("{keyword}_deleted"),
             1,

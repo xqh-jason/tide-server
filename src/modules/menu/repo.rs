@@ -323,9 +323,9 @@ mod tests {
     async fn find_page_filters_by_keyword_status_and_menu_type_excludes_deleted() {
         let db = test_txn().await;
         let keyword = unique("page_keyword");
-        let live = seed_menu(&db, &format!("{keyword}_live"), 1, None).await;
-        let disabled = seed_menu(&db, &format!("{keyword}_disabled"), 0, None).await;
-        let deleted = seed_menu(
+        let _live = seed_menu(&db, &format!("{keyword}_live"), 1, None).await;
+        let _disabled = seed_menu(&db, &format!("{keyword}_disabled"), 0, None).await;
+        let _deleted = seed_menu(
             &db,
             &format!("{keyword}_deleted"),
             1,

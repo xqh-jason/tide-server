@@ -20,7 +20,6 @@ pub struct DomainDef {
 pub struct FieldDef {
     pub name: String,
     pub rust_type: String,
-    pub sql_type: String,
     #[serde(default)]
     pub primary: bool,
     #[serde(default)]
@@ -32,8 +31,6 @@ pub struct FieldDef {
     /// 审计字段：由系统（repo 层）写入，不进创建/更新请求体，但要进响应体。
     #[serde(default)]
     pub audit: bool,
-    #[serde(default)]
-    pub soft_delete: bool,
     #[serde(default)]
     pub unique: bool,
     #[serde(default)]
@@ -131,8 +128,8 @@ mod tests {
             "table": "sys_dict",
             "comment": "数据字典",
             "fields": [
-                { "name": "id", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "primary": true, "auto_increment": true },
-                { "name": "type_code", "rust_type": "String", "sql_type": "VARCHAR(64)", "unique": true }
+                { "name": "id", "rust_type": "u64", "primary": true, "auto_increment": true },
+                { "name": "type_code", "rust_type": "String", "unique": true }
             ],
             "unique_fields": ["type_code"],
             "filters": [ { "field": "type_code", "kind": "exact" } ]

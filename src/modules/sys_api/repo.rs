@@ -335,10 +335,10 @@ mod tests {
     async fn find_page_filters_by_keyword_status_method_excludes_deleted() {
         let db = test_txn().await;
         let keyword = unique("page_keyword");
-        let live = seed_api(&db, &format!("/{keyword}_live"), "POST", 1, None).await;
-        let get_api = seed_api(&db, &format!("/{keyword}_get"), "GET", 1, None).await;
-        let disabled = seed_api(&db, &format!("/{keyword}_disabled"), "POST", 0, None).await;
-        let deleted = seed_api(
+        let _live = seed_api(&db, &format!("/{keyword}_live"), "POST", 1, None).await;
+        let _get_api = seed_api(&db, &format!("/{keyword}_get"), "GET", 1, None).await;
+        let _disabled = seed_api(&db, &format!("/{keyword}_disabled"), "POST", 0, None).await;
+        let _deleted = seed_api(
             &db,
             &format!("/{keyword}_deleted"),
             "POST",

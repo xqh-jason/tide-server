@@ -186,8 +186,7 @@ pub async fn update_site_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_config;
-    use sea_orm::{ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter};
+    use sea_orm::{Database, DatabaseConnection};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -218,15 +217,6 @@ mod tests {
             config_value: "v".into(),
             remark: None,
         }
-    }
-
-    /// 清理：连软删行一并硬删，避免唯一键残留影响其他测试。
-    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
-        sys_config::Entity::delete_many()
-            .filter(sys_config::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
     }
 
     #[tokio::test]

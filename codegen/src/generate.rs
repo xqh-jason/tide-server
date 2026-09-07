@@ -44,8 +44,8 @@ mod tests {
             r#"{
                 "domain": "dict", "table": "sys_dict", "comment": "数据字典",
                 "fields": [
-                    { "name": "id", "rust_type": "u64", "sql_type": "BIGINT UNSIGNED", "primary": true, "auto_increment": true },
-                    { "name": "type_code", "rust_type": "String", "sql_type": "VARCHAR(64)", "unique": true }
+                    { "name": "id", "rust_type": "u64", "primary": true, "auto_increment": true },
+                    { "name": "type_code", "rust_type": "String", "unique": true }
                 ]
             }"#,
         )

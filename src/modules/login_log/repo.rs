@@ -77,7 +77,7 @@ pub async fn soft_delete_batch(db: &impl ConnectionTrait, ids: &[u64]) -> anyhow
 mod tests {
     use super::*;
     use crate::entity::sys_login_log;
-    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use sea_orm::{ActiveModelTrait, Database, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -126,14 +126,6 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
-        sys_login_log::Entity::delete_many()
-            .filter(sys_login_log::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-    }
-
     #[tokio::test]
     async fn find_page_filters_by_username_ip_status_sorts_desc_excludes_deleted() {
         let db = test_txn().await;
@@ -168,7 +160,7 @@ mod tests {
             None,
         )
         .await;
-        let deleted = seed(
+        let _deleted = seed(
             &db,
             &format!("repo{kw}delta"),
             "10.0.0.1",

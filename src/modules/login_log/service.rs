@@ -63,9 +63,7 @@ mod tests {
     use crate::entity::sys_login_log;
     use crate::utils::PageQuery;
     use crate::utils::error::AppError;
-    use sea_orm::{
-        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
-    };
+    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -130,14 +128,6 @@ mod tests {
         }
     }
 
-    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
-        sys_login_log::Entity::delete_many()
-            .filter(sys_login_log::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-    }
-
     #[tokio::test]
     async fn page_login_logs_filters_by_username_ip_status() {
         let db = test_txn().await;
@@ -146,7 +136,7 @@ mod tests {
         let deleted_at = Some(chrono::Local::now().naive_local());
 
         let hit = seed(&db, &format!("svc{kw}a"), "10.0.0.1", 1, base, None).await;
-        let other_status = seed(
+        let _other_status = seed(
             &db,
             &format!("svc{kw}b"),
             "10.0.0.1",
@@ -155,7 +145,7 @@ mod tests {
             None,
         )
         .await;
-        let other_ip = seed(
+        let _other_ip = seed(
             &db,
             &format!("svc{kw}c"),
             "10.0.0.2",
@@ -164,7 +154,7 @@ mod tests {
             None,
         )
         .await;
-        let deleted = seed(
+        let _deleted = seed(
             &db,
             &format!("svc{kw}d"),
             "10.0.0.1",

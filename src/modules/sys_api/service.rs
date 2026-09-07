@@ -155,12 +155,6 @@ mod tests {
         Database::connect(&config.database.url).await.unwrap()
     }
 
-    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
-    async fn test_txn() -> sea_orm::DatabaseTransaction {
-        use sea_orm::TransactionTrait;
-        test_db().await.begin().await.unwrap()
-    }
-
     fn create_req(path: String, method: String, role_ids: Vec<u64>) -> CreateApiReq {
         CreateApiReq {
             path,
