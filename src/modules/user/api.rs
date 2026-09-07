@@ -21,6 +21,7 @@ pub async fn list_users(
 ) -> ApiResult<PageResult<UserResp>> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
+
     let data = user_service::page_users(&state.db, &req).await?;
     let items = fill_user_names(&state.db, data.items, UserResp::from).await?;
     Ok(ApiResponse::ok(PageResult::new(
