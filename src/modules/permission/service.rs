@@ -15,16 +15,14 @@ pub async fn has_permission(
     permission_code: &str,
 ) -> Result<bool, AppError> {
     let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
-    let role_keys = roles
-        .into_iter()
-        .map(|role| role.role_key)
-        .collect::<Vec<_>>();
-    if role_keys.contains(&SUPER_ROLE_KEY.to_string()) {
+    if roles.iter().any(|role| role.role_key == SUPER_ROLE_KEY) {
         return Ok(true);
     }
 
-    let permission_codes = permission_repo::find_permission_codes_by_user_id(db, user_id).await?;
-    Ok(permission_codes.contains(&permission_code.to_string()))
+    let role_ids: Vec<u64> = roles.iter().map(|role| role.id).collect();
+    let permission_codes =
+        permission_repo::find_permission_codes_by_role_ids(db, &role_ids).await?;
+    Ok(permission_codes.iter().any(|code| code == permission_code))
 }
 
 /// 接口级授权判定：请求 `path + method` 已登记 `sys_api` 时校验角色授权，否则放行。

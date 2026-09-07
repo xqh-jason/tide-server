@@ -35,6 +35,29 @@
 - 同一域内 `api.rs` 函数顺序 = `mod.rs` 路由挂载顺序 = `list → create → update → get → delete`，
   特殊契约端点（`info`、`access-codes`、`menus` 等）排在 CRUD 之后
 
+## 分层依赖约定（跨层 / 跨域访问规则）
+
+repo / service / task / middleware 的依赖方向与跨域访问规则：
+
+- **repo 是数据访问原语层**：把 SQL 查询/变更原子化（过滤 / 排序 / 分页 / 审计盖章），
+  不带业务判断。repo **不得调用其他域 repo 或 service 的函数**——用户角色解析等
+  「跨实体查询」需要复用他域语义时，由 service 层组合后把已解析的入参传给 repo
+  （如 `find_menus_by_role_ids(db, &role_ids)`，而非 repo 内部去查他域取角色）。
+  Entity 全局共享，跨表查询允许在 repo 里直接用相关 Entity。
+- **service 是业务编排层**：跨实体 / 跨域查询的组合发生在 service 层（先解析 A 域角色，
+  再查 B 域数据）。
+- **跨域复用带业务规则的操作**（唯一性校验、状态机、审计盖章、权限、软删策略）必须走
+  该域 service；repo 层不重复实现他域规则。
+- **例外——系统动作的日志/审计写入与过期数据清理**：这些是「接收已组装记录落库 / 按
+  cutoff 物理删除」的无规则原语，中间件（`op_log` 写 `sys_operation_log`）、调度执行体
+  （`scheduler` 写 `sys_job_log`）、认证（`auth` 写 `sys_login_log`）、定时清理任务
+  （`task/*` 清过期日志）可直接调目标域 repo，不必为纯透传包 service。若该类写入未来
+  新增业务规则（如审计要求），再改经 service。
+- **判断口诀**：新增跨域数据需求时先问「调用目标携带目标域业务规则吗？」—— 是：走
+  service；否（纯原语 / 只读组合）：service 层解析入参后调 repo。
+- task 是新任务的注册边界：任务跨域只调用各域 repo 原语或 service（视上一条规则），
+  不直接操作其他域 Entity 的业务逻辑。
+
 ## 人字段命名与名称拼装约定
 
 凡指向 `sys_user` 的引用字段（创建人、更新人、审批人、申请人等）统一遵循：

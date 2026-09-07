@@ -338,6 +338,75 @@ mod tests {
             .unwrap();
     }
 
+    /// find_roles_by_user_id 只返回启用且未删的角色：停用/软删角色不贡献
+    /// （此语义被 permission/menu 域的角色解析依赖，过滤必须发生在 user repo）。
+    #[tokio::test]
+    async fn find_roles_by_user_id_filters_disabled_and_deleted_roles() {
+        let db = test_txn().await;
+        let user = sys_user::ActiveModel {
+            username: Set(unique_name("roles_user")),
+            password: Set("x".to_string()),
+            nickname: Set("角色过滤测试".to_string()),
+            status: Set(1),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let active = sys_role::ActiveModel {
+            role_name: Set(unique_name("roles_active")),
+            role_key: Set(unique_name("roles_active_key")),
+            sort: Set(0),
+            status: Set(1),
+            remark: Set(String::new()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let disabled = sys_role::ActiveModel {
+            role_name: Set(unique_name("roles_disabled")),
+            role_key: Set(unique_name("roles_disabled_key")),
+            sort: Set(0),
+            status: Set(0),
+            remark: Set(String::new()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let deleted = sys_role::ActiveModel {
+            role_name: Set(unique_name("roles_deleted")),
+            role_key: Set(unique_name("roles_deleted_key")),
+            sort: Set(0),
+            status: Set(1),
+            remark: Set(String::new()),
+            deleted_at: Set(Some(chrono::Local::now().naive_local())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        for role_id in [active.id, disabled.id, deleted.id] {
+            sys_user_role::ActiveModel {
+                user_id: Set(user.id),
+                role_id: Set(role_id),
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+
+        let roles = find_roles_by_user_id(&db, user.id).await.unwrap();
+
+        let ids: Vec<u64> = roles.into_iter().map(|r| r.id).collect();
+        assert!(ids.contains(&active.id), "启用未删角色应返回");
+        assert!(!ids.contains(&disabled.id), "停用角色应被过滤");
+        assert!(!ids.contains(&deleted.id), "软删角色应被过滤");
+    }
+
     #[tokio::test]
     // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
     // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。

@@ -88,7 +88,6 @@ pub async fn update_job_status(
 pub async fn run_job_once(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<()> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    job_service::get_job(&state.db, req.id).await?;
-    crate::modules::job::scheduler::spawn_job_once(std::sync::Arc::new(state.clone()), req.id);
+    job_service::run_job_once(&state.db, &state, req.id).await?;
     Ok(ApiResponse::ok(()))
 }

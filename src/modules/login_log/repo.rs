@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, QueryOrder};
+use sea_orm::{Condition, ConnectionTrait, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_login_log, sys_login_log::Model};
 use crate::modules::login_log::dto::LoginLogFilter;
@@ -66,11 +66,27 @@ pub async fn delete_created_before(
     db: &impl ConnectionTrait,
     cutoff: chrono::NaiveDateTime,
 ) -> anyhow::Result<u64> {
-    let result = sys_login_log::Entity::delete_many()
-        .filter(sys_login_log::Column::CreatedAt.lt(cutoff))
-        .exec(db)
-        .await?;
-    Ok(result.rows_affected)
+    const BATCH_SIZE: u64 = 1000;
+    let mut total: u64 = 0;
+    loop {
+        let ids: Vec<u64> = sys_login_log::Entity::find()
+            .filter(sys_login_log::Column::CreatedAt.lt(cutoff))
+            .order_by_asc(sys_login_log::Column::Id)
+            .limit(BATCH_SIZE)
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        if ids.is_empty() {
+            return Ok(total);
+        }
+        let result = sys_login_log::Entity::delete_many()
+            .filter(sys_login_log::Column::Id.is_in(ids))
+            .exec(db)
+            .await?;
+        total += result.rows_affected;
+    }
 }
 
 /// 批量软删：只处理存在且未删除的行，返回受影响行数。

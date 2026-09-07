@@ -3,7 +3,6 @@
 use crate::entity::sys_role_menu;
 use crate::entity::{sys_menu, sys_menu::Model};
 use crate::modules::menu::dto::MenuFilter;
-use crate::modules::user::repo as user_repo;
 use crate::utils::PageData;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
@@ -167,19 +166,20 @@ pub async fn find_by_name_include_deleted(
     Ok(menu)
 }
 
-/// 普通用户可见菜单：有效角色 → sys_role_menu → 启用且未软删的菜单。
-pub async fn find_menus_by_user_id(
+/// 按角色集合查可见菜单：sys_role_menu → 启用且未软删的菜单。
+///
+/// 角色解析（有效角色 = 启用且未删）由 service 层负责，repo 不跨域查用户域；
+/// `role_ids` 为空直接返回空，避免生成空 IN 的无效 SQL。
+pub async fn find_menus_by_role_ids(
     db: &impl ConnectionTrait,
-    user_id: u64,
+    role_ids: &[u64],
 ) -> anyhow::Result<Vec<Model>> {
-    let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
-    let role_ids = roles.into_iter().map(|r| r.id).collect::<Vec<_>>();
     if role_ids.is_empty() {
         return Ok(vec![]);
     }
 
     let menu_ids = sys_role_menu::Entity::find()
-        .filter(sys_role_menu::Column::RoleId.is_in(role_ids))
+        .filter(sys_role_menu::Column::RoleId.is_in(role_ids.iter().copied()))
         .column(sys_role_menu::Column::MenuId)
         .all(db)
         .await?;

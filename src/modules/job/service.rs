@@ -1,5 +1,7 @@
 //! 定时任务业务：CRUD 与调度器实时同步（DB 为事实来源，调度器操作失败不回滚只记日志）。
 
+use std::sync::Arc;
+
 use sea_orm::ActiveValue::Set;
 use sea_orm::ConnectionTrait;
 
@@ -116,7 +118,7 @@ pub async fn update_job(
         remark: Set(req.remark.clone().unwrap_or_default()),
         ..Default::default()
     };
-    job_repo::update_job(db, model, actor_id).await?;
+    let job_model = job_repo::update_job(db, model, actor_id).await?;
 
     // 先移除旧调度再按需重注册：uuid 由 job_id 派生不随字段变化，cron/handler
     // 改了也必须先 remove 才能让新配置生效；停用则只移除。
@@ -131,8 +133,7 @@ pub async fn update_job(
         )
         .await;
     }
-    // 返回类型本就是 Result<_, AppError>，直接透传查询结果（? 反而会拆包）
-    get_job(db, req.id).await
+    Ok(job_model)
 }
 
 /// 删除：判存在 → 软删 → 调度器移除。
@@ -164,10 +165,11 @@ pub async fn update_job_status(
     job_repo::update_job_status(db, id, status, actor_id).await?;
 
     // 停用移除调度；启用从 DB 取最新详情重注册（DB 是事实来源）
+    let model = get_job(db, id).await?;
+
     if status == 0 {
         scheduler::unregister_job(&state.scheduler, id).await;
     } else {
-        let model = get_job(db, id).await?;
         scheduler::register_job(
             state,
             id,
@@ -177,8 +179,19 @@ pub async fn update_job_status(
         )
         .await;
     }
-    // 返回类型本就是 Result<_, AppError>，直接透传查询结果（? 反而会拆包）
-    get_job(db, id).await
+    Ok(model)
+}
+
+/// 立即执行一次：校验任务存在后 spawn 后台执行（绕过 cron 与防重叠标志），
+/// 不阻塞请求；执行结果照常写 `sys_job_log`。
+pub async fn run_job_once(
+    db: &impl ConnectionTrait,
+    state: &AppState,
+    id: u64,
+) -> Result<(), AppError> {
+    get_job(db, id).await?;
+    scheduler::spawn_job_once(Arc::new(state.clone()), id);
+    Ok(())
 }
 
 #[cfg(test)]

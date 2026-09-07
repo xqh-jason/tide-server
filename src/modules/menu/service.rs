@@ -29,7 +29,9 @@ pub async fn get_menus(
     let menus = if is_super {
         menu_repo::find_all_menus(db).await?
     } else {
-        menu_repo::find_menus_by_user_id(db, user_id).await?
+        // 角色解析（有效角色 = 启用且未删）在 service 组合，repo 只按 role_ids 查询
+        let role_ids: Vec<u64> = roles.iter().map(|r| r.id).collect();
+        menu_repo::find_menus_by_role_ids(db, &role_ids).await?
     };
     Ok(build_menu_tree(menus))
 }

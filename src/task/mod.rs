@@ -33,8 +33,7 @@ pub fn handlers() -> &'static HashMap<&'static str, JobHandler> {
     static REG: OnceLock<HashMap<&'static str, JobHandler>> = OnceLock::new();
     REG.get_or_init(|| {
         HashMap::from([
-            // 登录日志清理任务
-            // 登录日志清理任务：物理删除 90 天前的 `sys_login_log`（handler_name = `cleanup_login_logs`）。
+            // 登录日志清理任务（见 login_log_cleanup.rs）
             (
                 login_log_cleanup::HANDLER_NAME,
                 (|state: &AppState| {
@@ -42,8 +41,7 @@ pub fn handlers() -> &'static HashMap<&'static str, JobHandler> {
                         as Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>
                 }) as JobHandler,
             ),
-            // 调度日志清理任务
-            // 调度日志清理任务：物理删除 180 天前的 `sys_job_log`（handler_name = `cleanup_job_logs`，
+            // 调度日志清理任务（见 job_log_cleanup.rs）
             (
                 job_log_cleanup::HANDLER_NAME,
                 (|state: &AppState| {

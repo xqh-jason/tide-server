@@ -4,24 +4,21 @@ use sea_orm::entity::prelude::*;
 use sea_orm::{ConnectionTrait, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_api, sys_menu, sys_role_api, sys_role_menu};
-use crate::modules::user::repo as user_repo;
 
-/// 查询用户当前真实有效的按钮权限码。
+/// 按角色集合查按钮权限码：sys_role_menu → 菜单（启用未删 + 按钮类型 + permission 非空）→ 去重排序。
 ///
-/// 返回结果应去重；调用方如需稳定展示，可再做排序。
-pub async fn find_permission_codes_by_user_id(
+/// 角色解析（有效角色 = 启用且未删）由 service 层负责，repo 不跨域查用户域；
+/// `role_ids` 为空直接返回空，避免生成空 IN 的无效 SQL。
+pub async fn find_permission_codes_by_role_ids(
     db: &impl ConnectionTrait,
-    user_id: u64,
+    role_ids: &[u64],
 ) -> anyhow::Result<Vec<String>> {
-    let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
-
-    let role_ids = roles.into_iter().map(|role| role.id).collect::<Vec<_>>();
     if role_ids.is_empty() {
         return Ok(Vec::new());
     }
 
     let role_menu_ids = sys_role_menu::Entity::find()
-        .filter(sys_role_menu::Column::RoleId.is_in(role_ids))
+        .filter(sys_role_menu::Column::RoleId.is_in(role_ids.iter().copied()))
         .column(sys_role_menu::Column::MenuId)
         .all(db)
         .await?;
@@ -344,18 +341,15 @@ mod tests {
     #[tokio::test]
     async fn find_permission_codes_returns_bound_active_button() {
         let db = test_txn().await;
-        let user = seed_user(&db, 1, None).await;
         let role = seed_role(&db, 1, None).await;
         let menu = seed_button(&db, "system:user:create", 1, None).await;
-        bind_user_role(&db, user.id, role.id).await;
         bind_role_menu(&db, role.id, menu.id).await;
 
-        let result = find_permission_codes_by_user_id(&db, user.id).await;
+        let result = find_permission_codes_by_role_ids(&db, &[role.id]).await;
 
         cleanup(
             &db,
             Fixture {
-                user: Some(user),
                 roles: vec![role],
                 menus: vec![menu],
                 ..Default::default()
@@ -367,49 +361,45 @@ mod tests {
         assert!(codes.contains(&"system:user:create".to_string()));
     }
 
+    /// role_ids 并集：多个角色各自绑定的按钮都计入；空 role_ids 短路为空。
+    /// 「禁用/删除角色排除」是角色解析语义，由 user repo 负责（见
+    /// user/repo.rs 的 find_roles_by_user_id 测试），repo 层只按传入 role_ids 查询。
     #[tokio::test]
-    async fn find_permission_codes_excludes_disabled_and_deleted_roles() {
+    async fn find_permission_codes_unions_all_roles_in_role_ids() {
         let db = test_txn().await;
-        let user = seed_user(&db, 1, None).await;
-        let active_role = seed_role(&db, 1, None).await;
-        let disabled_role = seed_role(&db, 0, None).await;
-        let deleted_role = seed_role(&db, 1, Some(chrono::Local::now().naive_local())).await;
-        let menu = seed_button(&db, "system:user:create", 1, None).await;
+        let role_a = seed_role(&db, 1, None).await;
+        let role_b = seed_role(&db, 1, None).await;
+        let menu_a = seed_button(&db, "system:user:create", 1, None).await;
+        let menu_b = seed_button(&db, "system:role:update", 1, None).await;
+        bind_role_menu(&db, role_a.id, menu_a.id).await;
+        bind_role_menu(&db, role_b.id, menu_b.id).await;
 
-        for role in [&active_role, &disabled_role, &deleted_role] {
-            bind_user_role(&db, user.id, role.id).await;
-            bind_role_menu(&db, role.id, menu.id).await;
-        }
-
-        let result = find_permission_codes_by_user_id(&db, user.id).await;
+        let union = find_permission_codes_by_role_ids(&db, &[role_a.id, role_b.id])
+            .await
+            .unwrap();
+        let empty = find_permission_codes_by_role_ids(&db, &[]).await.unwrap();
 
         cleanup(
             &db,
             Fixture {
-                user: Some(user),
-                roles: vec![active_role, disabled_role, deleted_role],
-                menus: vec![menu],
+                roles: vec![role_a, role_b],
+                menus: vec![menu_a, menu_b],
                 ..Default::default()
             },
         )
         .await;
 
-        let codes = result.unwrap();
-        assert!(codes.contains(&"system:user:create".to_string()));
-        // 只有一个有效来源；如果出现两个，说明禁用/删除角色未被过滤。
-        assert_eq!(
-            codes
-                .iter()
-                .filter(|code| **code == "system:user:create")
-                .count(),
-            1
+        assert!(
+            union.contains(&"system:user:create".to_string())
+                && union.contains(&"system:role:update".to_string()),
+            "并集应包含两个角色各自的按钮权限码，实际：{union:?}"
         );
+        assert!(empty.is_empty(), "空 role_ids 应短路为空");
     }
 
     #[tokio::test]
     async fn find_permission_codes_excludes_invalid_buttons() {
         let db = test_txn().await;
-        let user = seed_user(&db, 1, None).await;
         let role = seed_role(&db, 1, None).await;
         let active_menu = seed_button(&db, "system:user:update", 1, None).await;
         let disabled_menu = seed_button(&db, "system:user:create", 0, None).await;
@@ -422,7 +412,6 @@ mod tests {
         .await;
         let empty_permission_menu = seed_button(&db, "", 1, None).await;
 
-        bind_user_role(&db, user.id, role.id).await;
         for menu in [
             &active_menu,
             &disabled_menu,
@@ -432,12 +421,11 @@ mod tests {
             bind_role_menu(&db, role.id, menu.id).await;
         }
 
-        let result = find_permission_codes_by_user_id(&db, user.id).await;
+        let result = find_permission_codes_by_role_ids(&db, &[role.id]).await;
 
         cleanup(
             &db,
             Fixture {
-                user: Some(user),
                 roles: vec![role],
                 menus: vec![
                     active_menu,
@@ -457,21 +445,18 @@ mod tests {
     #[tokio::test]
     async fn find_permission_codes_only_accepts_button_type() {
         let db = test_txn().await;
-        let user = seed_user(&db, 1, None).await;
         let role = seed_role(&db, 1, None).await;
         let button = seed_menu(&db, "system:user:create", 1, None, 3).await;
         let directory = seed_menu(&db, "system:user:create", 1, None, 1).await;
 
-        bind_user_role(&db, user.id, role.id).await;
         bind_role_menu(&db, role.id, button.id).await;
         bind_role_menu(&db, role.id, directory.id).await;
 
-        let result = find_permission_codes_by_user_id(&db, user.id).await;
+        let result = find_permission_codes_by_role_ids(&db, &[role.id]).await;
 
         cleanup(
             &db,
             Fixture {
-                user: Some(user),
                 roles: vec![role],
                 menus: vec![button, directory],
                 ..Default::default()

@@ -88,7 +88,8 @@ pub async fn get_access_codes(
         return Ok(vec![SUPER_ROLE_KEY.to_string()]);
     }
 
-    let permissions = permission_repo::find_permission_codes_by_user_id(db, user_id).await?;
+    let role_ids: Vec<u64> = roles.iter().map(|role| role.id).collect();
+    let permissions = permission_repo::find_permission_codes_by_role_ids(db, &role_ids).await?;
     Ok(permissions)
 }
 

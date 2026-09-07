@@ -39,10 +39,16 @@ captcha = "1"
 argon2 = "0.5"
 # JWT（W2 认证：签发/校验）。10.x 必须显式指定一个加密提供者：
 # rust_crypto（纯 Rust）用于 HS256 足够，无需系统依赖。
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "10", default-features = false, features = [
+    "rust_crypto",
+] }
 # 内存缓存实现（W2 token 黑名单；对照 GVA_CACHE 抽象理念）
 dashmap = "6"
 tokio-cron-scheduler = "0.15.1"
+# Future 扩展：调度执行体对 handler 做 poll 级 panic 捕获（W6-2，已是传递依赖零新增下载）
+futures-util = "0.3"
+validator = { version = "0.20", features = ["derive"] }
+
 
 # W2/W3 再加：
 # reqwest = { version = "0.12", features = ["json"] }       # W7+ AI 延伸

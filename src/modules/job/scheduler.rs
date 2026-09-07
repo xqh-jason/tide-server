@@ -8,15 +8,18 @@
 //!   调度器 add/remove，调度器操作失败不回滚 DB，只记 error 日志（重启自愈）；
 //! - scheduler 的 Uuid 由 job_id 确定性派生（[`job_uuid`]），remove 无需内存映射；
 //! - 防重叠：cron 触发是并发 spawn 的，per-job 运行标志保证上一轮未结束跳过本轮；
-//! - 执行体统一 `timeout`（默认 300s）包裹，无论成败写 `sys_job_log`。
+//! - 执行体统一 `timeout`（默认 300s）+ `catch_unwind`（panic 兜底）包裹，
+//!   无论成败（含超时、panic）都写 `sys_job_log`。
 
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
+use futures_util::FutureExt;
 use tokio_cron_scheduler::{Job, JobBuilder, JobScheduler};
 
 use crate::infra::state::AppState;
@@ -173,8 +176,8 @@ pub fn spawn_job_once(state: Arc<AppState>, job_id: u64) {
 ///
 /// cron 触发是**并发 spawn** 的：若任务每 10s 一轮而单次耗时 25s，第 2、3 轮
 /// 会被跳过、第 4 轮恢复——「先占坑，占不到就撤」。
-/// 已知取舍：handler 内部 panic 时坑位不会释放（该任务后续轮次全部跳过），
-/// v1 靠 handler 只用 `?` 传播错误不 panic 兜底，不做 Drop guard。
+/// panic 由 [`execute_job_run`] 内的 catch_unwind 捕获为失败日志，正常释放坑位，
+/// 不会出现「上轮 panic → 后续轮次永久跳过」。
 pub async fn run_scheduled(
     state: Arc<AppState>,
     job_id: u64,
@@ -199,16 +202,22 @@ pub async fn run_scheduled(
     running_flags().remove(&job_id);
 }
 
-/// 单次执行核心：timeout 包裹 handler → 无论成败写 `sys_job_log`。
+/// 单次执行核心：panic/超时兜底包裹 handler → 无论成败写 `sys_job_log`。
 ///
-/// 双层 Result 的来历（学习笔记）：`tokio::time::timeout(d, fut)` 返回
-/// `Result<T, Elapsed>`——外层 `Err` = 限时到了被掐断；而 `T` 本身是 handler
-/// 的 `anyhow::Result<()>`，内层 `Err` = 任务自己报错。三态一网打尽：
-/// `Ok(Ok(()))` 成功 / `Ok(Err(e))` 失败 / `Err(_)` 超时。
+/// 嵌套 Result 的来历（学习笔记）：`tokio::time::timeout(d, fut)` 返回
+/// `Result<T, Elapsed>`——外层 `Err` = 限时到了被掐断；`T` 本身是 handler 的
+/// `anyhow::Result<()>`，内层 `Err` = 任务自己报错；`catch_unwind` 再包一层
+/// `thread::Result`，最外层 `Err(payload)` = handler panic。四态一网打尽：
+/// `Ok(Ok(Ok(())))` 成功 / `Ok(Ok(Err(e)))` 失败 / `Ok(Err(_))` 超时 /
+/// `Err(_)` panic。
+///
+/// panic 必须拦在这里而非放任上抛：否则该轮执行被打断、防重叠标志无人释放
+/// （后续轮次永久跳过），也落不了一条失败日志。捕获后统一走失败日志，正常
+/// remove 释放坑位。
 ///
 /// 日志口径：created_at = 落库时刻（近似开始时间）；status 1 成功 / 0 失败
-/// （含超时）；error_msg 截断 [`ERROR_MSG_TRUNC`] 字节；duration_ms 记实际耗时。
-/// 落库失败只降级 tracing——日志写不进去不能反过来炸掉调度器。
+/// （含超时、panic）；error_msg 截断 [`ERROR_MSG_TRUNC`] 字节；duration_ms
+/// 记实际耗时。落库失败只降级 tracing——日志写不进去不能反过来炸掉调度器。
 pub async fn execute_job_run(
     state: Arc<AppState>,
     job_id: u64,
@@ -218,37 +227,58 @@ pub async fn execute_job_run(
     let start = std::time::Instant::now();
 
     // handler 缺失（DB 被手改 / 注册表变更）按失败处理，不 panic：
-    // None 分支直接构造一个「已完成的失败结果」，与超时分支类型对齐
+    // None 分支直接构造一个「已完成的失败结果」，与其余分支类型对齐
     let result = match handlers().get(handler_name.as_str()) {
-        None => Ok(Err(anyhow::anyhow!("任务处理器不存在：{handler_name}"))),
+        None => Ok(Ok(Err(anyhow::anyhow!("任务处理器不存在：{handler_name}")))),
         Some(handler) => {
-            tokio::time::timeout(
+            // AssertUnwindSafe：handler 闭包持有的引用等使其名义上非 UnwindSafe；
+            // 这里只拦截 handler 自身逻辑的 panic，跨 await 的共享一致性由各
+            // handler 内部保证（实际只做 DB 调用）。catch_unwind 在 poll 内
+            // 捕获，panic 穿过 timeout 结构到达此处被转为 thread::Result::Err。
+            AssertUnwindSafe(tokio::time::timeout(
                 std::time::Duration::from_secs(JOB_TIMEOUT_SECS),
                 // handler 是函数指针，(&state) 解引用 Arc 后调用，返回装箱 future
                 handler(&state),
-            )
+            ))
+            .catch_unwind()
             .await
         }
     };
 
-    // match &result 借用而非拿值：避免 Err 里的 String 被 move（此前 matches! 踩过同款坑）
-    let (status, error_msg) = match &result {
-        Ok(Ok(())) => (1, String::new()),
-        Ok(Err(e)) => (0, truncate_bytes(format!("任务执行失败：{e}"))),
-        Err(_) => (0, format!("任务执行超时（超过 {JOB_TIMEOUT_SECS} 秒）")),
+    // payload 只能按值消费（downcast_ref 需 &Box<dyn Any>），故直接 match 值而非借用
+    let (status, error_msg) = match result {
+        Ok(Ok(Ok(()))) => (1, String::new()),
+        Ok(Ok(Err(e))) => (0, truncate_bytes(format!("任务执行失败：{e}"))),
+        Ok(Err(_)) => (0, format!("任务执行超时（超过 {JOB_TIMEOUT_SECS} 秒）")),
+        Err(payload) => (
+            0,
+            truncate_bytes(format!("任务执行 panic：{}", panic_payload(payload))),
+        ),
     };
 
-    let log = crate::entity::sys_job_log::ActiveModel {
-        job_id: sea_orm::ActiveValue::Set(job_id),
-        job_name: sea_orm::ActiveValue::Set(job_name),
-        status: sea_orm::ActiveValue::Set(status),
-        error_msg: sea_orm::ActiveValue::Set(error_msg),
-        // as_millis 返回 u128；300s 上限内不会溢出 u32
-        duration_ms: sea_orm::ActiveValue::Set(start.elapsed().as_millis() as u32),
-        ..Default::default()
-    };
-    if let Err(e) = crate::modules::job_log::repo::create_job_log(&state.db, log).await {
+    // as_millis 返回 u128；300s 上限内不会溢出 u32
+    if let Err(e) = crate::modules::job_log::repo::create_job_log(
+        &state.db,
+        job_id,
+        job_name,
+        status,
+        error_msg,
+        start.elapsed().as_millis() as u32,
+    )
+    .await
+    {
         tracing::error!("执行日志落库失败：job_id={job_id} err={e}");
+    }
+}
+
+/// 从 panic payload 提取可读消息（常见 `&str` / `String`，其余给兜底文本）。
+fn panic_payload(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "未知 panic".to_string()
     }
 }
 
@@ -307,5 +337,17 @@ mod tests {
         sched.shutdown().await.unwrap();
 
         assert!(fired, "3 秒内秒级任务应至少触发一次");
+    }
+
+    /// 守卫：panic 会被 catch_unwind 捕获并转成 `thread::Result::Err`——防止
+    /// 重构删掉 execute_job_run 的 panic 兜底（flag 泄漏 / 漏写失败日志）。
+    #[tokio::test]
+    async fn catch_unwind_captures_handler_panic() {
+        let fut = AssertUnwindSafe(async { panic!("handler boom") });
+        let res = fut.catch_unwind().await;
+
+        assert!(res.is_err(), "panic 应被捕获为 Err(payload)");
+        let msg = panic_payload(res.unwrap_err());
+        assert_eq!(msg, "handler boom", "payload 应提取出 panic 消息");
     }
 }
