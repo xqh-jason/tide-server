@@ -4,6 +4,7 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 
+pub mod api_permission;
 pub mod auth;
 pub mod op_log;
 

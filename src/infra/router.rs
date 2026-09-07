@@ -1,7 +1,9 @@
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
-use crate::middleware::{InjectState, auth::AuthRequired, op_log::OperationLog};
+use crate::middleware::{
+    InjectState, api_permission::ApiPermission, auth::AuthRequired, op_log::OperationLog,
+};
 
 /// 组装全局路由。系统域在 modules/system，业务域在 modules/*。
 pub fn build(state: AppState) -> Router {
@@ -19,6 +21,7 @@ pub fn build(state: AppState) -> Router {
                     Router::with_path("user")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::user::routes())
                         // 菜单契约端点：POST /api/v1/user/menus（业务在 menu 域）
                         .push(crate::modules::menu::user_routes()),
@@ -28,6 +31,7 @@ pub fn build(state: AppState) -> Router {
                     Router::with_path("menu")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::menu::routes()),
                 )
                 // 数据字典类型：POST /api/v1/dictionary/{list,create,update,get,delete,get-by-type}
@@ -35,6 +39,7 @@ pub fn build(state: AppState) -> Router {
                     Router::with_path("dictionary")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::dictionary::routes()),
                 )
                 // 数据字典项：POST /api/v1/dictionary-detail/{list,create,update,get,delete}
@@ -42,18 +47,21 @@ pub fn build(state: AppState) -> Router {
                     Router::with_path("dictionary-detail")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::dictionary::detail_routes()),
                 )
                 .push(
                     Router::with_path("role")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::role::routes()),
                 )
                 .push(
                     Router::with_path("sys-api")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::sys_api::routes()),
                 )
                 // 操作日志：POST /api/v1/operation-log/{list,get,delete,delete-batch}
@@ -61,6 +69,7 @@ pub fn build(state: AppState) -> Router {
                     Router::with_path("operation-log")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::operation_log::routes()),
                 )
                 // 登录日志：POST /api/v1/login-log/{list,get,delete,delete-batch}
@@ -68,6 +77,7 @@ pub fn build(state: AppState) -> Router {
                     Router::with_path("login-log")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::login_log::routes()),
                 )
                 // 文件上传：POST /api/v1/file/{list,upload,get,delete} + GET /api/v1/file/download
@@ -75,6 +85,7 @@ pub fn build(state: AppState) -> Router {
                     Router::with_path("file")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::file::routes()),
                 )
                 // 参数配置：POST /api/v1/config/{list,create,update,get,delete}
@@ -82,6 +93,7 @@ pub fn build(state: AppState) -> Router {
                     Router::with_path("config")
                         .hoop(AuthRequired)
                         .hoop(OperationLog)
+                        .hoop(ApiPermission)
                         .push(crate::modules::config::routes()),
                 )
                 // 网站设置：GET /api/v1/site-config/get（公开）+ POST update（子路由自挂中间件）

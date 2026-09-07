@@ -1,10 +1,9 @@
 //! 权限数据访问层。
 
-use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect};
+use sea_orm::{ConnectionTrait, QueryOrder, QuerySelect};
 
-use crate::entity::{sys_menu, sys_role_menu};
+use crate::entity::{sys_api, sys_menu, sys_role_api, sys_role_menu};
 use crate::modules::user::repo as user_repo;
 
 /// 查询用户当前真实有效的按钮权限码。
@@ -57,10 +56,57 @@ pub async fn find_permission_codes_by_user_id(
     Ok(permission_codes)
 }
 
+/// 接口级授权（一）：按请求路径与方法查生效 API（未软删且启用）。
+///
+/// 未登记的 `path + method` 返回 `None`，由 service 层按 fail-open 放行；
+/// 软删除与停用记录不参与拦截（等同未登记）。
+/// `uk_api_path_method` 唯一索引保证命中至多一行，无需 LIMIT/排序；
+/// method 为请求原值精确匹配（本项目除 `file/download` / `site-config/get` 外
+/// 全部为 POST，两条 GET 均为公开/自挂路由，不经过授权中间件）。
+pub async fn find_active_api_by_path_method(
+    db: &impl ConnectionTrait,
+    path: &str,
+    method: &str,
+) -> anyhow::Result<Option<sys_api::Model>> {
+    let model = sys_api::Entity::find()
+        .filter(sys_api::Column::Path.eq(path))
+        .filter(sys_api::Column::Method.eq(method))
+        .filter(sys_api::Column::DeletedAt.is_null())
+        .filter(sys_api::Column::Status.eq(1))
+        .one(db)
+        .await?;
+
+    Ok(model)
+}
+
+/// 接口级授权（二）：判定角色集合与某 API 的 `sys_role_api` 授权交集是否非空。
+///
+/// `sys_role_api` 是硬删除关系表（无 `deleted_at` 列），存在关联行即有效授权；
+/// `role_ids` 为空时直接返回 false，避免生成空 IN 的无效 SQL。
+pub async fn exists_role_api(
+    db: &impl ConnectionTrait,
+    api_id: u64,
+    role_ids: &[u64],
+) -> anyhow::Result<bool> {
+    if role_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let exists = sys_role_api::Entity::find()
+        .filter(sys_role_api::Column::ApiId.eq(api_id))
+        .filter(sys_role_api::Column::RoleId.is_in(role_ids.iter().copied()))
+        .exists(db)
+        .await?;
+
+    Ok(exists)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+    use crate::entity::{
+        sys_api, sys_menu, sys_role, sys_role_api, sys_role_menu, sys_user, sys_user_role,
+    };
     use crate::modules::permission::SUPER_ROLE_KEY;
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -214,6 +260,36 @@ mod tests {
         sys_role_menu::ActiveModel {
             role_id: Set(role_id),
             menu_id: Set(menu_id),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn seed_api(
+        db: &impl ConnectionTrait,
+        status: i8,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_api::Model {
+        sys_api::ActiveModel {
+            // uk_api_path_method 物理唯一（含软删行占位），每行用不同 path
+            path: Set(format!("/api/v1/{}/delete", unique("perm_api"))),
+            method: Set("POST".to_string()),
+            description: Set("接口授权测试".to_string()),
+            api_group: Set("perm_test".to_string()),
+            status: Set(status),
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn bind_role_api(db: &impl ConnectionTrait, role_id: u64, api_id: u64) {
+        sys_role_api::ActiveModel {
+            role_id: Set(role_id),
+            api_id: Set(api_id),
         }
         .insert(db)
         .await
@@ -437,5 +513,53 @@ mod tests {
         .await;
 
         assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn find_active_api_by_path_method_returns_none_for_unregistered_path() {
+        let db = test_txn().await;
+
+        let result =
+            find_active_api_by_path_method(&db, "/api/v1/not-registered/delete", "POST").await;
+
+        assert!(result.unwrap().is_none(), "未登记的接口应返回 None");
+    }
+
+    #[tokio::test]
+    async fn find_active_api_by_path_method_excludes_deleted_and_disabled() {
+        let db = test_txn().await;
+        let active = seed_api(&db, 1, None).await;
+        let disabled = seed_api(&db, 0, None).await;
+        let deleted = seed_api(&db, 1, Some(chrono::Local::now().naive_local())).await;
+
+        let hit = find_active_api_by_path_method(&db, &active.path, &active.method).await;
+        let disabled_hit =
+            find_active_api_by_path_method(&db, &disabled.path, &disabled.method).await;
+        let deleted_hit = find_active_api_by_path_method(&db, &deleted.path, &deleted.method).await;
+        let method_mismatch = find_active_api_by_path_method(&db, &active.path, "GET").await;
+
+        assert_eq!(hit.unwrap().unwrap().id, active.id, "生效 API 应被命中");
+        assert!(disabled_hit.unwrap().is_none(), "停用 API 不应参与拦截");
+        assert!(deleted_hit.unwrap().is_none(), "软删 API 不应参与拦截");
+        assert!(method_mismatch.unwrap().is_none(), "method 不匹配不应命中");
+    }
+
+    #[tokio::test]
+    async fn exists_role_api_matches_intersection_only() {
+        let db = test_txn().await;
+        let api = seed_api(&db, 1, None).await;
+        let granted = seed_role(&db, 1, None).await;
+        let ungranted = seed_role(&db, 1, None).await;
+        bind_role_api(&db, granted.id, api.id).await;
+
+        let hit = exists_role_api(&db, api.id, &[granted.id]).await;
+        let miss = exists_role_api(&db, api.id, &[ungranted.id]).await;
+        let mixed = exists_role_api(&db, api.id, &[ungranted.id, granted.id]).await;
+        let empty = exists_role_api(&db, api.id, &[]).await;
+
+        assert!(hit.unwrap(), "已授权角色应命中");
+        assert!(!miss.unwrap(), "未授权角色不应命中");
+        assert!(mixed.unwrap(), "交集中任一命中即通过");
+        assert!(!empty.unwrap(), "空角色集合应短路返回 false");
     }
 }

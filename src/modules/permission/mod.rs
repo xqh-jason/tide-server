@@ -1,4 +1,11 @@
-//! 权限域：把数据库中的有效按钮权限码转换成接口鉴权依据。
+//! 权限域：后端授权判定的唯一入口（判定面），本身不拥有数据表。
+//!
+//! 两条授权通道回答同一个问题「这个用户能不能做这件事」：
+//! - 按钮权限码：`sys_menu.permission`（menu_type=3）→ `has_permission`；
+//! - 接口资源授权：`sys_api` × `sys_role_api` → `has_api_permission`（W6 授权层）。
+//!
+//! `sys_api` 域负责接口资源的登记管理（管理面 CRUD），本域只消费这些数据做判定；
+//! 中间件与各 service 的鉴权调用统一收敛到本域的判定函数与常量。
 
 pub mod repo;
 pub mod service;
@@ -17,5 +24,5 @@ pub const SUPER_ROLE_KEY: &str = "super";
 /// 内置超管用户名（`seed` 启动时创建并固定重置密码，不允许被编辑）。
 pub const ADMIN_USERNAME: &str = "admin";
 
-/// 内置超管角色键（`seed` 启动时创建并固定重置密码，不允许被编辑）。
+/// 超管角色键保留字（与 `SUPER_ROLE_KEY` 同值）：禁止普通角色创建/改名占用该键。
 pub const SUPER_ADMIN_ROLE_KEY: &str = "super";
