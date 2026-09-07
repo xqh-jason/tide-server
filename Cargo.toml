@@ -47,7 +47,6 @@ dashmap = "6"
 tokio-cron-scheduler = "0.15.1"
 # Future 扩展：调度执行体对 handler 做 poll 级 panic 捕获（W6-2，已是传递依赖零新增下载）
 futures-util = "0.3"
-validator = { version = "0.20", features = ["derive"] }
 
 
 # W2/W3 再加：

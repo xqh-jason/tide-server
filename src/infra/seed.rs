@@ -8,7 +8,7 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
-use crate::entity::{sys_job, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+use crate::entity::{sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
 use crate::utils::crypt;
 
 /// admin 初始密码（开发环境约定）。
@@ -542,6 +542,56 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             .id
         };
         menu_ids_by_name.insert(seed.name, menu_id);
+    }
+
+    // 4.1 数据字典：通用启用状态（type=status）。用户/角色等 status 字段校验的取值
+    //     来源（校验侧见 modules::dictionary::service::enabled_int_values）。
+    const SEED_DICT_TYPE_STATUS: &str = "status";
+    let status_dict = sys_dictionary::Entity::find()
+        .filter(sys_dictionary::Column::Type.eq(SEED_DICT_TYPE_STATUS))
+        .one(db)
+        .await?;
+    let status_dict_id = if let Some(d) = status_dict {
+        d.id
+    } else {
+        sys_dictionary::ActiveModel {
+            name: Set("启用状态".to_string()),
+            r#type: Set(SEED_DICT_TYPE_STATUS.to_string()),
+            status: Set(1),
+            remark: Set(
+                "通用启用/禁用状态（1 启用、0 禁用），作为各表 status 字段校验的数据字典"
+                    .to_string(),
+            ),
+            created_by: Set(SEED_ACTOR_ID),
+            updated_by: Set(SEED_ACTOR_ID),
+            ..Default::default()
+        }
+        .insert(db)
+        .await?
+        .id
+    };
+    let status_items: &[(&str, &str, i32)] = &[("启用", "1", 1), ("禁用", "0", 2)];
+    for (label, value, sort) in status_items {
+        let existing = sys_dictionary_detail::Entity::find()
+            .filter(sys_dictionary_detail::Column::DictionaryId.eq(status_dict_id))
+            .filter(sys_dictionary_detail::Column::Value.eq(*value))
+            .one(db)
+            .await?;
+        if existing.is_none() {
+            sys_dictionary_detail::ActiveModel {
+                dictionary_id: Set(status_dict_id),
+                label: Set(String::from(*label)),
+                value: Set(String::from(*value)),
+                extend: Set(String::new()),
+                sort: Set(*sort),
+                status: Set(1),
+                created_by: Set(SEED_ACTOR_ID),
+                updated_by: Set(SEED_ACTOR_ID),
+                ..Default::default()
+            }
+            .insert(db)
+            .await?;
+        }
     }
 
     // 5. 示例定时任务：登录日志每日清理（幂等按 job_name；调度器在 init_scheduler 装载）

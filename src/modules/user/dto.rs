@@ -1,4 +1,7 @@
 //! 用户 DTO（传输对象）：entity（Model）不直接暴露给接口，经 From 转换脱敏。
+//!
+//! 校验约定：请求体的值域校验**不写在 DTO 文件里**，见同模块 `validate.rs` 中
+//! 手写的 `impl Validate`（规则与错误文案按字段分组，字段在此保持纯声明）。
 
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
@@ -133,6 +136,7 @@ pub struct UserFilter {
 }
 
 /// 按用户名查询请求（JSON body 源）：`{ "username": "..." }`。
+/// 该接口用于「用户名是否可用」检查，查询目标可能是任意输入，故只做必填不做格式限制。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UsernameReq {
@@ -162,6 +166,8 @@ impl UserInfoResp {
 }
 
 /// 创建用户请求：`{ username, password, nickname?, phone?, email?, status?, role_ids?: [] }`
+///
+/// 值域校验见同模块 `validate.rs` 中 `impl Validate for CreateUserReq`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateUserReq {
@@ -173,17 +179,25 @@ pub struct CreateUserReq {
     pub emp_no: String,
     /// 用户昵称（显示名）
     pub nickname: String,
-    /// 手机号，可空
-    pub phone: Option<String>,
-    /// 邮箱，可空
-    pub email: Option<String>,
+    /// 手机号，空串表示未设置
+    #[serde(default)]
+    pub phone: String,
+    /// 邮箱，空串表示未设置
+    #[serde(default)]
+    pub email: String,
     /// 状态：`1` 启用（默认）、`0` 禁用
-    pub status: Option<i8>,
+    #[serde(default = "default_user_status")]
+    pub status: i8,
     /// 角色 ID 列表，允许空（不绑角色）
     pub role_ids: Vec<u64>,
 }
 
-/// 更新用户请求。
+/// `status` 缺省时默认启用（`1`）。
+fn default_user_status() -> i8 {
+    1
+}
+
+/// 更新用户请求。值域校验见同模块 `validate.rs` 中 `impl Validate for UpdateUserReq`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateUserReq {
@@ -191,15 +205,17 @@ pub struct UpdateUserReq {
     pub id: u64,
     /// 用户名（全局唯一，排除自身查重；不能与内置 admin 相同）
     pub username: String,
-    /// 密码；传空串表示不更新密码（沿用原密文）
+    /// 密码；传空串表示不更新密码（沿用原密文），非空则须 6-32 个字符
     pub password: String,
-    /// 工号；员工编号
+    /// 工号；员工编号，必须是 6 位数字
     pub emp_no: String,
     /// 用户昵称（显示名）
     pub nickname: String,
-    /// 手机号
+    /// 手机号，空串表示未设置
+    #[serde(default)]
     pub phone: String,
-    /// 邮箱
+    /// 邮箱，空串表示未设置
+    #[serde(default)]
     pub email: String,
     /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
@@ -209,6 +225,8 @@ pub struct UpdateUserReq {
 
 /// 更新用户状态
 /// `{ id, status }`
+///
+/// 值域校验见同模块 `validate.rs` 中 `impl Validate for UpdateUserStatusReq`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateUserStatusReq {

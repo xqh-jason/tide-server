@@ -160,9 +160,9 @@ pub async fn create_user(
             password: Set(crypt::hash_password(&req.password)?),
             emp_no: Set(req.emp_no),
             nickname: Set(req.nickname),
-            phone: Set(req.phone.unwrap_or_default()),
-            email: Set(req.email.unwrap_or_default()),
-            status: Set(req.status.unwrap_or(1)),
+            phone: Set(req.phone),
+            email: Set(req.email),
+            status: Set(req.status),
             ..Default::default()
         },
         req.role_ids,
@@ -364,9 +364,9 @@ mod tests {
             password: "pass123".to_string(),
             emp_no: "T1001".to_string(),
             nickname: "创建用户测试".to_string(),
-            phone: Some("13800138000".to_string()),
-            email: Some("created@example.com".to_string()),
-            status: Some(1),
+            phone: "13800138000".to_string(),
+            email: "created@example.com".to_string(),
+            status: 1,
             role_ids,
         }
     }

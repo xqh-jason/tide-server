@@ -6,6 +6,10 @@
 //! （如「字段 age 类型错误」「缺少必填字段 username」），再以 `StatusError` 交给
 //! 全局 catcher，保持 HTTP 200 + `code: 0` 契约体不变。
 //!
+//! 缺字段文案增强：`FIELD_LABELS` 字段标签词典把「缺少必填字段 username」升级为
+//! 「请输入用户名」。词典按 JSON key（`serde(rename_all)` 之后的外部名）维护，新增
+//! 字段需要自定义缺失提示时在这里加一行。
+//!
 //! 限制：`#[serde(flatten)]`（如分页 `PageQuery`）会丢失字段路径，该类错误只能给出
 //! 「请求体不符合接口要求」这类通用提示，无法定位到具体字段。
 //!
@@ -37,6 +41,37 @@ use serde::Deserialize;
 use serde_path_to_error as path_to_error;
 
 const ERROR_PREFIX: &str = "请求参数格式错误：";
+
+/// 缺字段提示的字段中文标签词典。key 是 JSON 里的外部字段名
+/// （经 `#[serde(rename_all)]` 后，如 `empNo`/`captchaId`），value 是展示给用户的名称。
+/// 命中后缺失提示为「请输入{label}」；未收录的字段退回「缺少必填字段 {field}」。
+/// 需要为某字段定制缺失提示时，在这里集中加一行。
+const FIELD_LABELS: &[(&str, &str)] = &[
+    ("username", "用户名"),
+    ("password", "密码"),
+    ("nickname", "昵称"),
+    ("empNo", "工号"),
+    ("phone", "手机号"),
+    ("email", "邮箱"),
+    ("status", "状态"),
+    ("roleIds", "角色"),
+    ("captchaId", "验证码"),
+    ("captchaValue", "验证码答案"),
+    ("id", "记录 ID"),
+    ("roleName", "角色名称"),
+    ("roleKey", "角色键"),
+    ("name", "名称"),
+    ("keyword", "关键字"),
+    ("remark", "备注"),
+];
+
+/// 查字段标签；未收录返回 None。
+fn field_label(field: &str) -> Option<&'static str> {
+    FIELD_LABELS
+        .iter()
+        .find(|(key, _)| *key == field)
+        .map(|(_, label)| *label)
+}
 
 #[derive(Debug, Clone)]
 pub struct CapturedBody(pub String);
@@ -230,10 +265,14 @@ fn normalize_path(path: &str) -> &str {
 /// - `unknown variant \`a\`, expected one of \`x\`, \`y\`` → 枚举值不合法
 fn describe_data_error(path: &str, reason: &str) -> String {
     if let Some(field) = backticked_after(reason, "missing field ") {
-        return if path.is_empty() {
-            format!("{ERROR_PREFIX}缺少必填字段 {field}")
-        } else {
-            format!("{ERROR_PREFIX}字段 {path} 中缺少必填字段 {field}")
+        // 字段标签词典：命中时给「请输入用户名」这类友好提示，否则退回通用文案。
+        return match (path.is_empty(), field_label(field)) {
+            (true, Some(label)) => format!("{ERROR_PREFIX}请输入{label}"),
+            (false, Some(label)) => {
+                format!("{ERROR_PREFIX}字段 {path} 中缺少必填字段 {label}")
+            }
+            (true, None) => format!("{ERROR_PREFIX}缺少必填字段 {field}"),
+            (false, None) => format!("{ERROR_PREFIX}字段 {path} 中缺少必填字段 {field}"),
         };
     }
     if let Some(field) = backticked_after(reason, "duplicate field ") {
@@ -420,8 +459,8 @@ mod tests {
         r#"{"id":1,"username":"a","age":1,"roles":["x"],"nested":{"code":1}}"#
     }
 
-    async fn post(body: &str, content_type: &str) -> (StatusCode, String) {
-        let mut res = TestClient::post("http://test/api/v1/user/update")
+    async fn post(path: &str, body: &str, content_type: &str) -> (StatusCode, String) {
+        let mut res = TestClient::post(format!("http://test{path}"))
             .body(body.to_string())
             .add_header("content-type", content_type, true)
             .send(&service())
@@ -431,8 +470,8 @@ mod tests {
         (status, text)
     }
 
-    async fn error_message(body: &str) -> String {
-        let (status, text) = post(body, "application/json").await;
+    async fn error_message(path: &str, body: &str) -> String {
+        let (status, text) = post(path, body, "application/json").await;
         let parsed: Value = serde_json::from_str(&text).expect("响应体应为合法 JSON");
         assert_eq!(status, StatusCode::OK, "框架级错误应统一为 HTTP 200");
         assert_eq!(parsed["code"], 0, "错误应带 code=0");
@@ -444,7 +483,7 @@ mod tests {
 
     #[tokio::test]
     async fn valid_body_reaches_handler() {
-        let (status, text) = post(valid_body(), "application/json").await;
+        let (status, text) = post("/api/v1/user/update", valid_body(), "application/json").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(text, "ok");
     }
@@ -452,14 +491,14 @@ mod tests {
     #[tokio::test]
     async fn missing_field_reports_field_name() {
         let body = r#"{"id":1,"age":1,"roles":[],"nested":{"code":1}}"#;
-        let message = error_message(body).await;
-        assert_eq!(message, "请求参数格式错误：缺少必填字段 username");
+        let message = error_message("/api/v1/user/update", body).await;
+        assert_eq!(message, "请求参数格式错误：请输入用户名");
     }
 
     #[tokio::test]
     async fn wrong_type_reports_field_and_kinds() {
         let body = r#"{"id":1,"username":"a","age":"x","roles":[],"nested":{"code":1}}"#;
-        let message = error_message(body).await;
+        let message = error_message("/api/v1/user/update", body).await;
         assert_eq!(
             message,
             "请求参数格式错误：字段 age 类型错误，应为 0 到 255 之间的整数，实际为字符串"
@@ -469,7 +508,7 @@ mod tests {
     #[tokio::test]
     async fn nested_type_error_reports_nested_path() {
         let body = r#"{"id":1,"username":"a","age":1,"roles":[],"nested":{"code":"x"}}"#;
-        let message = error_message(body).await;
+        let message = error_message("/api/v1/user/update", body).await;
         assert_eq!(
             message,
             "请求参数格式错误：字段 nested.code 类型错误，应为整数，实际为字符串"
@@ -479,7 +518,7 @@ mod tests {
     #[tokio::test]
     async fn vec_element_type_error_reports_index() {
         let body = r#"{"id":1,"username":"a","age":1,"roles":[1],"nested":{"code":1}}"#;
-        let message = error_message(body).await;
+        let message = error_message("/api/v1/user/update", body).await;
         assert_eq!(
             message,
             "请求参数格式错误：字段 roles[0] 类型错误，应为字符串，实际为整数"
@@ -489,7 +528,7 @@ mod tests {
     #[tokio::test]
     async fn out_of_range_value_reports_rule() {
         let body = r#"{"id":1,"username":"a","age":300,"roles":[],"nested":{"code":1}}"#;
-        let message = error_message(body).await;
+        let message = error_message("/api/v1/user/update", body).await;
         assert_eq!(
             message,
             "请求参数格式错误：字段 age 取值不合法，应为 0 到 255 之间的整数"
@@ -498,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_json_reports_syntax_error() {
-        let message = error_message(r#"{"id":1,"username":"a""#).await;
+        let message = error_message("/api/v1/user/update", r#"{"id":1,"username":"a""#).await;
         assert!(
             message.contains("JSON 语法错误"),
             "语法错误应提示 JSON 语法错误，实际为：{message}"
@@ -507,19 +546,19 @@ mod tests {
 
     #[tokio::test]
     async fn root_not_object_reports_object_expected() {
-        let message = error_message(r#""hello""#).await;
+        let message = error_message("/api/v1/user/update", r#""hello""#).await;
         assert_eq!(message, "请求参数格式错误：请求体应为 JSON 对象");
     }
 
     #[tokio::test]
     async fn empty_body_reports_empty() {
-        let message = error_message("").await;
+        let message = error_message("/api/v1/user/update", "").await;
         assert_eq!(message, "请求参数格式错误：请求体不能为空");
     }
 
     #[tokio::test]
     async fn non_json_content_type_reports_content_type() {
-        let (status, text) = post("{}", "text/plain").await;
+        let (status, text) = post("/api/v1/user/update", "{}", "text/plain").await;
         let parsed: Value = serde_json::from_str(&text).expect("响应体应为合法 JSON");
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["code"], 0);

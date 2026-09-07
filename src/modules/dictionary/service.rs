@@ -192,6 +192,22 @@ pub async fn get_dictionary_by_type(
     Ok((model, details))
 }
 
+/// 取某字典类型启用项的**整数值**列表，供服务端字段值校验使用
+/// （如 `type="status"` 返回 `[0, 1]`，对应 seed 中「禁用/启用」）。
+///
+/// 复用 `get_dictionary_by_type`：类型缺失/停用会报错；字典项 value 需能解析为 `i8`。
+pub async fn enabled_int_values(db: &impl ConnectionTrait, r#type: &str) -> Result<Vec<i8>, AppError> {
+    let (_, details) = get_dictionary_by_type(db, r#type).await?;
+    details
+        .iter()
+        .map(|d| {
+            d.value.parse::<i8>().map_err(|_| {
+                AppError::Biz(format!("字典 {} 的项值不是合法整数：{}", r#type, d.value))
+            })
+        })
+        .collect()
+}
+
 // —— 字典项 ——
 
 /// 字典项分页查询：请求参数（dictionary_id / keyword / status / 审计过滤）透传 repo。

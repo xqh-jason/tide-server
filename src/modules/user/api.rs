@@ -3,8 +3,11 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
+use crate::modules::dictionary::service as dict_service;
 use crate::modules::user::dto::*;
 use crate::modules::user::service as user_service;
+use crate::modules::user::validate as user_validate;
+use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
 use crate::utils::user_ref::{UserRefNames, fill_user_names, find_user_name_map_by_ids};
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
@@ -64,12 +67,16 @@ pub async fn access_codes(depot: &mut Depot) -> ApiResult<Vec<String>> {
     Ok(ApiResponse::ok(codes))
 }
 
-/// 创建用户（POST + JSON body）。
+/// 创建用户（POST + JSON body）。值域校验在拿到 `req` 后显式调用
+/// `validate_create_user`（见同模块 validate.rs）。
 #[endpoint]
 pub async fn create_user(depot: &mut Depot, body: JsonBody<CreateUserReq>) -> ApiResult<UserResp> {
     let state = AppState::from_depot(depot)?;
-    let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+    let req = body.into_inner();
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    user_validate::validate_create_user(&req, &status_allowed).map_err(AppError::Biz)?;
 
     let resp = user_service::create_user(&state.db, auth.user_id, req).await?;
     let resp = fill_user_names(&state.db, vec![resp], UserResp::from)
@@ -96,6 +103,8 @@ pub async fn get_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<Use
 pub async fn update_user(depot: &mut Depot, body: JsonBody<UpdateUserReq>) -> ApiResult<UserResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    user_validate::validate_update_user(&req, &status_allowed).map_err(AppError::Biz)?;
     let auth = AuthUser::from_depot(depot)?;
     let resp = user_service::update_user_with_links(&state.db, auth.user_id, req).await?;
     let resp = fill_user_names(&state.db, vec![resp], UserResp::from)
@@ -113,6 +122,8 @@ pub async fn update_user_status(
 ) -> ApiResult<bool> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    user_validate::validate_update_user_status(&req, &status_allowed).map_err(AppError::Biz)?;
     let auth = AuthUser::from_depot(depot)?;
     let resp =
         user_service::update_user_status(&state.db, auth.user_id, req.id, req.status).await?;
