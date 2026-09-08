@@ -1,6 +1,8 @@
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QuerySelect, TransactionTrait};
+use sea_orm::{
+    Condition, ConnectionTrait, DatabaseTransaction, QuerySelect,
+};
 
 use crate::entity::{sys_role, sys_role_api, sys_role_menu};
 use crate::modules::role::dto::RoleFilter;
@@ -88,20 +90,19 @@ pub async fn find_page(
     crate::utils::paginate(select, db, page_index, page_size).await
 }
 
-/// 事务写入角色并维护菜单/API 关联（关系表硬删除，只插不判软删）。
-pub async fn create_role_with_links(
-    db: &DatabaseConnection,
+/// 事务内实现：插入角色 + 菜单/API 关联（不 begin/commit，边界由调用方负责）。
+pub(crate) async fn create_role_in_tx(
+    txn: &DatabaseTransaction,
     role: sys_role::ActiveModel,
     menu_ids: Vec<u64>,
     api_ids: Vec<u64>,
     actor_id: u64,
 ) -> anyhow::Result<sys_role::Model> {
-    let txn = db.begin().await?;
     // 审计字段由 repo 统一盖章：create 时创建人与更新人同源
     let mut role = role;
     role.created_by = Set(actor_id);
     role.updated_by = Set(actor_id);
-    let role = role.insert(&txn).await?;
+    let role = role.insert(txn).await?;
     // 插入菜单关联
     if !menu_ids.is_empty() {
         let role_menu_ids = menu_ids
@@ -112,7 +113,7 @@ pub async fn create_role_with_links(
             })
             .collect::<Vec<_>>();
         sys_role_menu::Entity::insert_many(role_menu_ids)
-            .exec(&txn)
+            .exec(txn)
             .await?;
     }
     // 插入 API关联
@@ -125,41 +126,38 @@ pub async fn create_role_with_links(
             })
             .collect::<Vec<_>>();
         sys_role_api::Entity::insert_many(role_api_ids)
-            .exec(&txn)
+            .exec(txn)
             .await?;
     }
 
-    txn.commit().await?;
     Ok(role)
 }
 
-/// 事务更新角色并重建菜单/API 关联（先删旧关联，再插新关联）。
-pub async fn update_role_with_links(
-    db: &DatabaseConnection,
+/// 事务内实现：更新角色 + 重建菜单/API 关联（不 begin/commit，边界由调用方负责）。
+pub(crate) async fn update_role_in_tx(
+    txn: &DatabaseTransaction,
     role: sys_role::ActiveModel,
     menu_ids: Vec<u64>,
     api_ids: Vec<u64>,
     actor_id: u64,
 ) -> anyhow::Result<sys_role::Model> {
-    let txn = db.begin().await?;
-
     // 审计字段由 repo 统一盖章：只刷新更新人，created_by 保持 NotSet 不被覆盖
     let mut role = role;
     role.updated_by = Set(actor_id);
 
     // 更新角色
-    let role = role.update(&txn).await?;
+    let role = role.update(txn).await?;
 
     // 删除旧菜单关联
     sys_role_menu::Entity::delete_many()
         .filter(sys_role_menu::Column::RoleId.eq(role.id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
 
     // 删除旧 API关联
     sys_role_api::Entity::delete_many()
         .filter(sys_role_api::Column::RoleId.eq(role.id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
 
     // 写入菜单关联
@@ -173,7 +171,7 @@ pub async fn update_role_with_links(
             .collect::<Vec<_>>();
 
         sys_role_menu::Entity::insert_many(role_menu_ids)
-            .exec(&txn)
+            .exec(txn)
             .await?;
     }
 
@@ -187,39 +185,35 @@ pub async fn update_role_with_links(
             })
             .collect::<Vec<_>>();
         sys_role_api::Entity::insert_many(role_api_ids)
-            .exec(&txn)
+            .exec(txn)
             .await?;
     }
-    txn.commit().await?;
     Ok(role)
 }
 
-/// 软删除角色：同一事务内物理清空关联（sys_role_menu / sys_role_api），
-/// 再把 `sys_role.deleted_at` 置为当前时间。
-pub async fn soft_delete_role(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
-    let txn = db.begin().await?;
+/// 事务内实现：清空菜单/API 关联 + 软删主表（不 begin/commit，边界由调用方负责）。
+pub(crate) async fn soft_delete_role_in_tx(txn: &DatabaseTransaction, id: u64) -> anyhow::Result<bool> {
     // 删除旧菜单关联
     sys_role_menu::Entity::delete_many()
         .filter(sys_role_menu::Column::RoleId.eq(id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
     // 删除旧 API关联
     sys_role_api::Entity::delete_many()
         .filter(sys_role_api::Column::RoleId.eq(id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
-    // 更新角色
+    // 更新角色（原实现对 txn 连接查询，此处统一在事务内完成）
     let role = sys_role::Entity::find()
         .filter(sys_role::Column::Id.eq(id))
-        .one(db)
+        .one(txn)
         .await?;
     if let Some(role) = role {
         let mut role: sys_role::ActiveModel = role.into();
         role.deleted_at = Set(Some(chrono::Local::now().naive_local()));
-        role.update(&txn).await?;
+        role.update(txn).await?;
     }
 
-    txn.commit().await?;
     Ok(true)
 }
 
@@ -352,52 +346,16 @@ mod tests {
         .unwrap()
     }
 
-    /// 清理顺序：先删关联，再删角色主表，最后删菜单/API（关系表硬删除）。
-    async fn cleanup(
-        db: &impl ConnectionTrait,
-        role_ids: &[u64],
-        menu_ids: &[u64],
-        api_ids: &[u64],
-    ) {
-        for role_id in role_ids {
-            sys_role_menu::Entity::delete_many()
-                .filter(sys_role_menu::Column::RoleId.eq(*role_id))
-                .exec(db)
-                .await
-                .unwrap();
-            sys_role_api::Entity::delete_many()
-                .filter(sys_role_api::Column::RoleId.eq(*role_id))
-                .exec(db)
-                .await
-                .unwrap();
-            sys_role::Entity::delete_by_id(*role_id)
-                .exec(db)
-                .await
-                .unwrap();
-        }
-        for menu_id in menu_ids {
-            sys_menu::Entity::delete_by_id(*menu_id)
-                .exec(db)
-                .await
-                .unwrap();
-        }
-        for api_id in api_ids {
-            sys_api::Entity::delete_by_id(*api_id)
-                .exec(db)
-                .await
-                .unwrap();
-        }
-    }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn create_role_with_links_inserts_role_and_links() {
-        let db = test_db().await;
-        let menu_a = seed_menu(&db).await;
-        let menu_b = seed_menu(&db).await;
-        let api_a = seed_api(&db).await;
-        let api_b = seed_api(&db).await;
+        let txn = test_txn().await;
+        let menu_a = seed_menu(&txn).await;
+        let menu_b = seed_menu(&txn).await;
+        let api_a = seed_api(&txn).await;
+        let api_b = seed_api(&txn).await;
         let role_name = unique("create_link_role");
         let role = sys_role::ActiveModel {
             role_name: Set(role_name.clone()),
@@ -408,8 +366,7 @@ mod tests {
             ..Default::default()
         };
 
-        let created = create_role_with_links(
-            &db,
+        let created = create_role_in_tx(&txn,
             role,
             vec![menu_a.id, menu_b.id],
             vec![api_a.id, api_b.id],
@@ -420,22 +377,14 @@ mod tests {
 
         let menu_links = sys_role_menu::Entity::find()
             .filter(sys_role_menu::Column::RoleId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
         let api_links = sys_role_api::Entity::find()
             .filter(sys_role_api::Column::RoleId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
-
-        cleanup(
-            &db,
-            &[created.id],
-            &[menu_a.id, menu_b.id],
-            &[api_a.id, api_b.id],
-        )
-        .await;
 
         assert_eq!(created.role_name, role_name);
         assert_eq!(menu_links.len(), 2);
@@ -443,10 +392,10 @@ mod tests {
     }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn create_role_with_links_supports_empty_link_lists() {
-        let db = test_db().await;
+        let txn = test_txn().await;
         let role_name = unique("create_empty_role");
         let role = sys_role::ActiveModel {
             role_name: Set(role_name.clone()),
@@ -457,22 +406,20 @@ mod tests {
             ..Default::default()
         };
 
-        let created = create_role_with_links(&db, role, vec![], vec![], ACTOR_ID)
+        let created = create_role_in_tx(&txn, role, vec![], vec![], ACTOR_ID)
             .await
             .unwrap();
 
         let menu_links = sys_role_menu::Entity::find()
             .filter(sys_role_menu::Column::RoleId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
         let api_links = sys_role_api::Entity::find()
             .filter(sys_role_api::Column::RoleId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
-
-        cleanup(&db, &[created.id], &[], &[]).await;
 
         assert_eq!(created.role_name, role_name);
         assert!(menu_links.is_empty(), "空菜单列表不应创建关联");
@@ -480,17 +427,16 @@ mod tests {
     }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn update_role_with_links_rebuilds_links_in_transaction() {
-        let db = test_db().await;
-        let old_menu = seed_menu(&db).await;
-        let new_menu = seed_menu(&db).await;
-        let old_api = seed_api(&db).await;
-        let new_api = seed_api(&db).await;
+        let txn = test_txn().await;
+        let old_menu = seed_menu(&txn).await;
+        let new_menu = seed_menu(&txn).await;
+        let old_api = seed_api(&txn).await;
+        let new_api = seed_api(&txn).await;
         let role_name = unique("update_link_role");
-        let created = create_role_with_links(
-            &db,
+        let created = create_role_in_tx(&txn,
             sys_role::ActiveModel {
                 role_name: Set(role_name.clone()),
                 role_key: Set(unique("update_link_key")),
@@ -507,8 +453,7 @@ mod tests {
         .unwrap();
 
         // 更新：改名 + 全量替换关联（旧菜单/旧 API 清掉，换成新菜单/新 API）。
-        let updated = update_role_with_links(
-            &db,
+        let updated = update_role_in_tx(&txn,
             sys_role::ActiveModel {
                 id: Set(created.id),
                 role_name: Set(format!("{role_name}_v2")),
@@ -524,22 +469,14 @@ mod tests {
 
         let menu_links = sys_role_menu::Entity::find()
             .filter(sys_role_menu::Column::RoleId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
         let api_links = sys_role_api::Entity::find()
             .filter(sys_role_api::Column::RoleId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
-
-        cleanup(
-            &db,
-            &[created.id],
-            &[old_menu.id, new_menu.id],
-            &[old_api.id, new_api.id],
-        )
-        .await;
 
         assert_eq!(updated.role_name, format!("{role_name}_v2"));
         assert_eq!(menu_links.len(), 1);
@@ -620,15 +557,14 @@ mod tests {
     }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn soft_delete_role_removes_links_and_excludes_role() {
-        let db = test_db().await;
-        let menu = seed_menu(&db).await;
-        let api = seed_api(&db).await;
+        let txn = test_txn().await;
+        let menu = seed_menu(&txn).await;
+        let api = seed_api(&txn).await;
         let role_name = unique("soft_delete_role");
-        let created = create_role_with_links(
-            &db,
+        let created = create_role_in_tx(&txn,
             sys_role::ActiveModel {
                 role_name: Set(role_name.clone()),
                 role_key: Set(unique("soft_delete_key")),
@@ -644,21 +580,19 @@ mod tests {
         .await
         .unwrap();
 
-        let deleted = soft_delete_role(&db, created.id).await.unwrap();
+        let deleted = soft_delete_role_in_tx(&txn, created.id).await.unwrap();
 
         let menu_links = sys_role_menu::Entity::find()
             .filter(sys_role_menu::Column::RoleId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
         let api_links = sys_role_api::Entity::find()
             .filter(sys_role_api::Column::RoleId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
-        let by_id = find_by_id(&db, created.id).await.unwrap();
-
-        cleanup(&db, &[created.id], &[menu.id], &[api.id]).await;
+        let by_id = find_by_id(&txn, created.id).await.unwrap();
 
         assert!(deleted);
         assert!(menu_links.is_empty(), "软删角色应物理清空菜单关联");
@@ -700,15 +634,6 @@ mod tests {
 
         let found = find_by_ids(&db, vec![live_role.id, deleted_role.id]).await;
 
-        sys_role::Entity::delete_by_id(live_role.id)
-            .exec(&db)
-            .await
-            .unwrap();
-        sys_role::Entity::delete_by_id(deleted_role.id)
-            .exec(&db)
-            .await
-            .unwrap();
-
         let found = found.unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, live_role.id);
@@ -728,24 +653,14 @@ mod tests {
         .id
     }
 
-    async fn delete_actors(db: &impl ConnectionTrait, ids: &[u64]) {
-        for id in ids {
-            crate::entity::sys_user::Entity::delete_by_id(*id)
-                .exec(db)
-                .await
-                .unwrap();
-        }
-    }
-
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn create_role_with_links_stamps_actor_as_creator_and_updater() {
-        let db = test_db().await;
-        let actor_id = seed_actor(&db).await;
+        let txn = test_txn().await;
+        let actor_id = seed_actor(&txn).await;
 
-        let created = create_role_with_links(
-            &db,
+        let created = create_role_in_tx(&txn,
             sys_role::ActiveModel {
                 role_name: Set(unique("audit_role")),
                 role_key: Set(unique("audit_role_key")),
@@ -762,20 +677,17 @@ mod tests {
         assert_eq!(created.created_by, actor_id);
         assert_eq!(created.updated_by, actor_id);
 
-        cleanup(&db, &[created.id], &[], &[]).await;
-        delete_actors(&db, &[actor_id]).await;
     }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn update_role_with_links_refreshes_updated_by_and_keeps_created_by() {
-        let db = test_db().await;
-        let creator_id = seed_actor(&db).await;
-        let updater_id = seed_actor(&db).await;
+        let txn = test_txn().await;
+        let creator_id = seed_actor(&txn).await;
+        let updater_id = seed_actor(&txn).await;
 
-        let created = create_role_with_links(
-            &db,
+        let created = create_role_in_tx(&txn,
             sys_role::ActiveModel {
                 role_name: Set(unique("audit_role")),
                 role_key: Set(unique("audit_role_key")),
@@ -789,8 +701,7 @@ mod tests {
         .await
         .unwrap();
 
-        let updated = update_role_with_links(
-            &db,
+        let updated = update_role_in_tx(&txn,
             sys_role::ActiveModel {
                 id: Set(created.id),
                 role_name: Set(unique("audit_role_renamed")),
@@ -806,20 +717,17 @@ mod tests {
         assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
         assert_eq!(updated.updated_by, updater_id);
 
-        cleanup(&db, &[created.id], &[], &[]).await;
-        delete_actors(&db, &[creator_id, updater_id]).await;
     }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn update_role_refreshes_updated_by_for_status_change() {
-        let db = test_db().await;
-        let creator_id = seed_actor(&db).await;
-        let updater_id = seed_actor(&db).await;
+        let txn = test_txn().await;
+        let creator_id = seed_actor(&txn).await;
+        let updater_id = seed_actor(&txn).await;
 
-        let created = create_role_with_links(
-            &db,
+        let created = create_role_in_tx(&txn,
             sys_role::ActiveModel {
                 role_name: Set(unique("audit_role")),
                 role_key: Set(unique("audit_role_key")),
@@ -836,14 +744,12 @@ mod tests {
         // 状态更新走通用 update_role（ActiveModel 由 Model 转换，字段全量 Set）
         let mut model: sys_role::ActiveModel = created.clone().into();
         model.status = Set(0);
-        assert!(update_role(&db, model, updater_id).await.unwrap());
+        assert!(update_role(&txn, model, updater_id).await.unwrap());
 
-        let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();
+        let reloaded = find_by_id(&txn, created.id).await.unwrap().unwrap();
         assert_eq!(reloaded.created_by, creator_id);
         assert_eq!(reloaded.updated_by, updater_id);
 
-        cleanup(&db, &[created.id], &[], &[]).await;
-        delete_actors(&db, &[creator_id, updater_id]).await;
     }
 
     /// 审计过滤不依赖 keyword：仅传 created_by（不传 keyword）也应生效。
@@ -1018,10 +924,5 @@ mod tests {
         .unwrap();
         assert_eq!(updated_before.total, 1);
 
-        sys_role::Entity::delete_many()
-            .filter(sys_role::Column::Id.is_in([a.id, b.id]))
-            .exec(&db)
-            .await
-            .unwrap();
     }
 }
