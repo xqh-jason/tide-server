@@ -2,6 +2,7 @@
 
 use salvo::prelude::*;
 
+use crate::middleware::api_permission::ApiPermission;
 use crate::middleware::auth::AuthRequired;
 use crate::middleware::op_log::OperationLog;
 
@@ -24,7 +25,8 @@ pub fn routes() -> Router {
 }
 
 /// 网站设置端点：`GET /api/v1/site-config/get`（公开，登录页展示用）+
-/// `POST /api/v1/site-config/update`（更新，子路由自挂中间件，router.rs 不再整体挂）。
+/// `POST /api/v1/site-config/update`（更新，子路由自挂中间件，router.rs 不再整体挂；
+/// update 已随 sys_api 种子登记，须挂 ApiPermission 才能生效接口级授权）。
 pub fn site_routes() -> Router {
     Router::new()
         .oapi_tags(["网站设置"])
@@ -33,6 +35,7 @@ pub fn site_routes() -> Router {
             Router::with_path("update")
                 .hoop(AuthRequired)
                 .hoop(OperationLog)
+                .hoop(ApiPermission)
                 .post(api::update_site_config),
         )
 }

@@ -13,6 +13,6 @@ pub const HANDLER_NAME: &str = "cleanup_login_logs";
 pub async fn run(state: &AppState) -> anyhow::Result<()> {
     let cutoff = chrono::Local::now().naive_local() - chrono::Duration::days(90);
     let deleted = crate::modules::login_log::repo::delete_created_before(&state.db, cutoff).await?;
-    info!("删除 {} 条过期登录日志", deleted);
+    info!("登录日志清理任务：删除 {} 条过期登录日志", deleted);
     Ok(())
 }

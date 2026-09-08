@@ -112,6 +112,9 @@ pub fn build_scheduled_job(
         // tokio-cron-scheduler 自带 prost 生成的 Uuid 包装类型，需 .into() 转换
         .with_job_id(job_uuid(job_id).into())
         .with_cron_job_type()
+        // cron 按服务器本地时区解析：builder 默认 UTC（time_offset_seconds=0），
+        // 不设时区则 `0 30 3 * * *` 会在北京时间 11:30 触发而非 03:30
+        .with_timezone(chrono::Local)
         .with_schedule(cron_expr)?
         .with_run_async(Box::new(move |_uuid, _lock| {
             // 每轮触发执行一次：克隆本轮所需状态（job_id 是 u64/Copy，直接复制）

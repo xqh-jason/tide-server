@@ -8,7 +8,7 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
-use crate::entity::{sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+use crate::entity::{sys_api, sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
 use crate::utils::crypt;
 
 /// admin 初始密码（开发环境约定）。
@@ -434,6 +434,116 @@ const MENU_SEEDS: &[MenuSeed] = &[
     },
 ];
 
+/// API 种子定义：`path` 必须带 `/api/v1` 前缀（与 ApiPermission 中间件
+/// `req.uri().path()` 全路径精确匹配的口径一致），`method` 用大写。
+struct ApiSeed {
+    path: &'static str,
+    method: &'static str,
+    description: &'static str,
+    api_group: &'static str,
+}
+
+const fn api(
+    path: &'static str,
+    method: &'static str,
+    description: &'static str,
+    api_group: &'static str,
+) -> ApiSeed {
+    ApiSeed {
+        path,
+        method,
+        description,
+        api_group,
+    }
+}
+
+/// 全部管理端点登记（68 条）。刻意排除：
+/// - 公开接口：/health、/captcha/generate、/auth/{login,logout}、GET /site-config/get；
+/// - 登录后每个用户必调的契约端点：POST /user/{info,access-codes,menus}
+///   （登记即 fail-closed，会把所有非超管用户挡在登录态之外）。
+const API_SEEDS: &[ApiSeed] = &[
+    // 用户管理（POST /api/v1/user/*，排除 info / access-codes 契约端点）
+    api("/api/v1/user/list", "POST", "用户列表查询", "用户管理"),
+    api("/api/v1/user/by-username", "POST", "按用户名查询用户", "用户管理"),
+    api("/api/v1/user/create", "POST", "用户新增", "用户管理"),
+    api("/api/v1/user/update", "POST", "用户修改", "用户管理"),
+    api("/api/v1/user/get", "POST", "用户详情", "用户管理"),
+    api("/api/v1/user/update-status", "POST", "用户启停", "用户管理"),
+    api("/api/v1/user/delete", "POST", "用户删除", "用户管理"),
+    api("/api/v1/user/list-all", "POST", "全量用户列表", "用户管理"),
+    api("/api/v1/user/list-all-includes-soft-deleted", "POST", "全量用户列表（含软删，审计筛选）", "用户管理"),
+    // 角色管理
+    api("/api/v1/role/list", "POST", "角色列表查询", "角色管理"),
+    api("/api/v1/role/create", "POST", "角色新增", "角色管理"),
+    api("/api/v1/role/update", "POST", "角色修改", "角色管理"),
+    api("/api/v1/role/get", "POST", "角色详情", "角色管理"),
+    api("/api/v1/role/delete", "POST", "角色删除", "角色管理"),
+    api("/api/v1/role/update-status", "POST", "角色启停", "角色管理"),
+    api("/api/v1/role/list-all", "POST", "全量角色列表", "角色管理"),
+    api("/api/v1/role/list-all-enabled", "POST", "启用角色列表", "角色管理"),
+    // 菜单管理
+    api("/api/v1/menu/list", "POST", "菜单列表查询", "菜单管理"),
+    api("/api/v1/menu/create", "POST", "菜单新增", "菜单管理"),
+    api("/api/v1/menu/update", "POST", "菜单修改", "菜单管理"),
+    api("/api/v1/menu/get", "POST", "菜单详情", "菜单管理"),
+    api("/api/v1/menu/delete", "POST", "菜单删除", "菜单管理"),
+    // 数据字典（类型 + 字典项）
+    api("/api/v1/dictionary/list", "POST", "字典类型列表查询", "数据字典"),
+    api("/api/v1/dictionary/create", "POST", "字典类型新增", "数据字典"),
+    api("/api/v1/dictionary/update", "POST", "字典类型修改", "数据字典"),
+    api("/api/v1/dictionary/get", "POST", "字典类型详情", "数据字典"),
+    api("/api/v1/dictionary/delete", "POST", "字典类型删除", "数据字典"),
+    api("/api/v1/dictionary/get-by-type", "POST", "按类型查询字典项（通用）", "数据字典"),
+    api("/api/v1/dictionary-detail/list", "POST", "字典项列表查询", "数据字典"),
+    api("/api/v1/dictionary-detail/create", "POST", "字典项新增", "数据字典"),
+    api("/api/v1/dictionary-detail/update", "POST", "字典项修改", "数据字典"),
+    api("/api/v1/dictionary-detail/get", "POST", "字典项详情", "数据字典"),
+    api("/api/v1/dictionary-detail/delete", "POST", "字典项删除", "数据字典"),
+    // 接口管理
+    api("/api/v1/sys-api/list", "POST", "API 列表查询", "接口管理"),
+    api("/api/v1/sys-api/create", "POST", "API 新增", "接口管理"),
+    api("/api/v1/sys-api/update", "POST", "API 修改", "接口管理"),
+    api("/api/v1/sys-api/get", "POST", "API 详情", "接口管理"),
+    api("/api/v1/sys-api/delete", "POST", "API 删除", "接口管理"),
+    // 操作日志
+    api("/api/v1/operation-log/list", "POST", "操作日志列表查询", "操作日志"),
+    api("/api/v1/operation-log/get", "POST", "操作日志详情", "操作日志"),
+    api("/api/v1/operation-log/delete", "POST", "操作日志删除", "操作日志"),
+    api("/api/v1/operation-log/delete-batch", "POST", "操作日志批量删除", "操作日志"),
+    // 登录日志
+    api("/api/v1/login-log/list", "POST", "登录日志列表查询", "登录日志"),
+    api("/api/v1/login-log/get", "POST", "登录日志详情", "登录日志"),
+    api("/api/v1/login-log/delete", "POST", "登录日志删除", "登录日志"),
+    api("/api/v1/login-log/delete-batch", "POST", "登录日志批量删除", "登录日志"),
+    // 文件管理（download 为 GET）
+    api("/api/v1/file/list", "POST", "文件列表查询", "文件管理"),
+    api("/api/v1/file/upload", "POST", "文件上传", "文件管理"),
+    api("/api/v1/file/get", "POST", "文件详情", "文件管理"),
+    api("/api/v1/file/download", "GET", "文件下载", "文件管理"),
+    api("/api/v1/file/delete", "POST", "文件删除", "文件管理"),
+    // 参数配置
+    api("/api/v1/config/list", "POST", "参数列表查询", "参数配置"),
+    api("/api/v1/config/create", "POST", "参数新增", "参数配置"),
+    api("/api/v1/config/update", "POST", "参数修改", "参数配置"),
+    api("/api/v1/config/get", "POST", "参数详情", "参数配置"),
+    api("/api/v1/config/delete", "POST", "参数删除", "参数配置"),
+    // 网站设置（GET get 为公开接口，不登记）
+    api("/api/v1/site-config/update", "POST", "网站设置更新", "网站设置"),
+    // 定时任务
+    api("/api/v1/job/list", "POST", "任务列表查询", "定时任务"),
+    api("/api/v1/job/create", "POST", "任务新增", "定时任务"),
+    api("/api/v1/job/update", "POST", "任务修改", "定时任务"),
+    api("/api/v1/job/get", "POST", "任务详情", "定时任务"),
+    api("/api/v1/job/delete", "POST", "任务删除", "定时任务"),
+    api("/api/v1/job/update-status", "POST", "任务启停", "定时任务"),
+    api("/api/v1/job/run-once", "POST", "任务立即执行", "定时任务"),
+    // 任务日志
+    api("/api/v1/job-log/list", "POST", "执行日志列表查询", "任务日志"),
+    api("/api/v1/job-log/get", "POST", "执行日志详情", "任务日志"),
+    api("/api/v1/job-log/delete", "POST", "执行日志删除", "任务日志"),
+    api("/api/v1/job-log/delete-batch", "POST", "执行日志批量删除", "任务日志"),
+];
+
 /// 启动初始化：确保开发种子数据存在（幂等，可重复调用）。
 pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     let lock = SEED_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
@@ -630,6 +740,39 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             }
             .insert(db)
             .await?;
+        }
+    }
+
+    // 7. API 权限点种子：按 path + method 查重（含软删行，唯一索引物理占位）。
+    //    只补缺、不覆盖是刻意设计：管理员后续修改的 description / api_group /
+    //    status（停用即放行）不会被启动重置；命中软删行仅告警跳过（不复活），
+    //    既尊重删除意图，也避开 uk_api_path_method 唯一索引冲突。
+    for seed in API_SEEDS {
+        let existing = sys_api::Entity::find()
+            .filter(sys_api::Column::Path.eq(seed.path))
+            .filter(sys_api::Column::Method.eq(seed.method))
+            .one(db)
+            .await?;
+        match existing {
+            Some(api) if api.deleted_at.is_some() => {
+                tracing::warn!("API 种子跳过软删占位行：{} {}", seed.method, seed.path);
+            }
+            Some(_) => {}
+            None => {
+                sys_api::ActiveModel {
+                    path: Set(seed.path.to_string()),
+                    method: Set(seed.method.to_string()),
+                    description: Set(seed.description.to_string()),
+                    api_group: Set(seed.api_group.to_string()),
+                    status: Set(1),
+                    // 种子数据的操作人统一记为 admin 自己
+                    created_by: Set(admin_id),
+                    updated_by: Set(admin_id),
+                    ..Default::default()
+                }
+                .insert(db)
+                .await?;
+            }
         }
     }
 
@@ -856,5 +999,89 @@ mod tests {
                 "{permission} 应挂在数据字典菜单下"
             );
         }
+    }
+
+    /// API 种子：全部管理端点应随 ensure_seed 落库（含可能被管理员软删的
+    /// 占位行——库中曾有同 path+method 软删行时种子按设计跳过，不复活）。
+    #[tokio::test]
+    async fn ensure_seed_creates_all_api_seeds() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        // 不过滤 deleted_at：每条种子在库中应有且仅有一行（唯一索引保证）
+        let count = sys_api::Entity::find()
+            .filter(sys_api::Column::Path.is_in(API_SEEDS.iter().map(|s| s.path.to_string())))
+            .count(&db)
+            .await
+            .unwrap();
+        assert_eq!(count as usize, API_SEEDS.len(), "全部 API 种子应存在");
+
+        // 契约端点不应被登记（登记即 fail-closed 会拒绝非超管用户）
+        for contract_path in ["/api/v1/user/info", "/api/v1/user/access-codes", "/api/v1/user/menus"] {
+            let leaked = sys_api::Entity::find()
+                .filter(sys_api::Column::Path.eq(contract_path))
+                .count(&db)
+                .await
+                .unwrap();
+            assert_eq!(leaked, 0, "{contract_path} 不应登记");
+        }
+    }
+
+    /// API 种子幂等：连续执行两次，条数不变（不重复插入、不覆盖）。
+    #[tokio::test]
+    async fn ensure_seed_api_is_idempotent() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let count_before = sys_api::Entity::find()
+            .filter(sys_api::Column::Path.is_in(API_SEEDS.iter().map(|s| s.path.to_string())))
+            .count(&db)
+            .await
+            .unwrap();
+
+        ensure_seed(&db).await.unwrap();
+
+        let count_after = sys_api::Entity::find()
+            .filter(sys_api::Column::Path.is_in(API_SEEDS.iter().map(|s| s.path.to_string())))
+            .count(&db)
+            .await
+            .unwrap();
+        assert_eq!(count_before, count_after, "重复播种不应产生重复 API 记录");
+    }
+
+    /// API 种子遇软删占位行：跳过不复活、不撞唯一索引、不插入新行。
+    #[tokio::test]
+    async fn ensure_seed_api_skips_soft_deleted_row() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        // 软删一条种子记录（path+method 物理占位）
+        let target = sys_api::Entity::find()
+            .filter(sys_api::Column::Path.eq("/api/v1/role/list"))
+            .filter(sys_api::Column::Method.eq("POST"))
+            .filter(sys_api::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("种子行应存在");
+        let mut soft_deleted: sys_api::ActiveModel = target.into();
+        soft_deleted.deleted_at = Set(Some(chrono::Utc::now().naive_utc()));
+        soft_deleted.update(&db).await.unwrap();
+
+        ensure_seed(&db).await.unwrap();
+
+        let still_deleted = sys_api::Entity::find()
+            .filter(sys_api::Column::Path.eq("/api/v1/role/list"))
+            .filter(sys_api::Column::Method.eq("POST"))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(still_deleted.len(), 1, "不应插入新行（唯一索引占位）");
+        assert!(still_deleted[0].deleted_at.is_some(), "软删行不应被复活");
+
+        // 还原为启用行，避免污染其他测试 / 本地库
+        let mut restored: sys_api::ActiveModel = still_deleted[0].clone().into();
+        restored.deleted_at = Set(None);
+        restored.update(&db).await.unwrap();
     }
 }

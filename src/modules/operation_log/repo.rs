@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, QueryOrder};
+use sea_orm::{Condition, ConnectionTrait, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_operation_log, sys_operation_log::Model};
 use crate::modules::operation_log::dto::OperationLogFilter;
@@ -73,6 +73,37 @@ pub async fn soft_delete_batch(db: &impl ConnectionTrait, ids: &[u64]) -> anyhow
         .await?;
 
     Ok(result.rows_affected)
+}
+
+/// 物理删除 created_at 早于 cutoff 的记录（定时清理任务用），返回受影响行数。
+pub async fn delete_created_before(
+    db: &impl ConnectionTrait,
+    cutoff: chrono::NaiveDateTime,
+) -> anyhow::Result<u64> {
+    const BATCH_SIZE: u64 = 1000;
+    let mut total: u64 = 0;
+
+    loop {
+        let ids = sys_operation_log::Entity::find()
+            .filter(sys_operation_log::Column::CreatedAt.lt(cutoff))
+            .order_by_asc(sys_operation_log::Column::Id)
+            .limit(BATCH_SIZE)
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|m| m.id)
+            .collect::<Vec<_>>();
+
+        if ids.is_empty() {
+            return Ok(total);
+        }
+
+        let result = sys_operation_log::Entity::delete_many()
+            .filter(sys_operation_log::Column::Id.is_in(ids))
+            .exec(db)
+            .await?;
+        total += result.rows_affected;
+    }
 }
 
 #[cfg(test)]

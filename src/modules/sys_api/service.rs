@@ -1,6 +1,8 @@
 //! API 权限点业务规则。
 
-use sea_orm::{ActiveValue::Set, ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
+use sea_orm::{
+    ActiveValue::Set, ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait,
+};
 
 use crate::modules::sys_api::dto::{ApiFilter, ApiListReq, UpdateApiReq};
 use crate::modules::sys_api::repo as api_repo;
@@ -117,9 +119,10 @@ pub(crate) async fn update_api_in_tx(
         return Err(AppError::Biz(format!("API 不存在：{}", req.id)));
     };
     // path + method 查重（含软删），排除自身
-    let dup = api_repo::find_by_path_method_include_deleted(txn, req.path.as_str(), req.method.as_str())
-        .await?
-        .is_some_and(|existing| existing.id != req.id);
+    let dup =
+        api_repo::find_by_path_method_include_deleted(txn, req.path.as_str(), req.method.as_str())
+            .await?
+            .is_some_and(|existing| existing.id != req.id);
     if dup {
         return Err(AppError::Biz("API 路径与方法已存在".to_string()));
     }
@@ -163,14 +166,6 @@ pub(crate) async fn delete_api_in_tx(txn: &DatabaseTransaction, id: u64) -> Resu
     };
     api_repo::soft_delete_api_in_tx(txn, id).await?;
     Ok(())
-}
-
-/// 查询 API 关联的角色 ID 列表（排除软删除）。
-pub async fn get_role_ids_by_api_id(
-    db: &impl ConnectionTrait,
-    api_id: u64,
-) -> Result<Vec<u64>, AppError> {
-    Ok(api_repo::find_role_ids_by_api_id(db, api_id).await?)
 }
 
 #[cfg(test)]
@@ -247,8 +242,6 @@ mod tests {
         .unwrap()
     }
 
-
-
     /// 创建时 path + method 重复（含软删占位）应被业务层拒绝。
     #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
@@ -263,12 +256,14 @@ mod tests {
         deleted_model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         deleted_model.update(&txn).await.unwrap();
 
-        let result_live = create_api_in_tx(&txn,
+        let result_live = create_api_in_tx(
+            &txn,
             ACTOR_ID,
             &create_req(path_live.clone(), "POST".to_string(), vec![]),
         )
         .await;
-        let result_deleted = create_api_in_tx(&txn,
+        let result_deleted = create_api_in_tx(
+            &txn,
             ACTOR_ID,
             &create_req(path_deleted.clone(), "POST".to_string(), vec![]),
         )
@@ -295,7 +290,8 @@ mod tests {
         let _api_a = seed_api(&txn, &path_a, "POST").await;
         let api_b = seed_api(&txn, &path_b, "POST").await;
 
-        let dup = update_api_in_tx(&txn,
+        let dup = update_api_in_tx(
+            &txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: api_b.id,
@@ -308,7 +304,8 @@ mod tests {
             },
         )
         .await;
-        let keep_self = update_api_in_tx(&txn,
+        let keep_self = update_api_in_tx(
+            &txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: api_b.id,
@@ -337,7 +334,8 @@ mod tests {
     async fn update_api_returns_biz_error_when_api_missing() {
         let txn = test_txn().await;
 
-        let missing = update_api_in_tx(&txn,
+        let missing = update_api_in_tx(
+            &txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: 9_999_999_999,
@@ -361,7 +359,8 @@ mod tests {
         deleted_model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
         deleted_model.update(&txn).await.unwrap();
 
-        let update_deleted = update_api_in_tx(&txn,
+        let update_deleted = update_api_in_tx(
+            &txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: deleted.id,
@@ -390,13 +389,15 @@ mod tests {
         let role_new = seed_role(&txn).await;
         let path = format!("/api/v1/{}/links", unique("update"));
 
-        let created = create_api_in_tx(&txn,
+        let created = create_api_in_tx(
+            &txn,
             ACTOR_ID,
             &create_req(path.clone(), "POST".to_string(), vec![role_old.id]),
         )
         .await
         .expect("创建带授权 API 应成功");
-        let updated = update_api_in_tx(&txn,
+        let updated = update_api_in_tx(
+            &txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: created.id,

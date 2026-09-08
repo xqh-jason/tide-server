@@ -23,6 +23,7 @@ use crate::infra::state::AppState;
 
 pub mod job_log_cleanup;
 pub mod login_log_cleanup;
+pub mod operation_log_cleanup;
 
 /// 内置任务处理器签名：async fn(&AppState) -> anyhow::Result<()> 装箱为 BoxFuture。
 pub type JobHandler =
@@ -46,6 +47,14 @@ pub fn handlers() -> &'static HashMap<&'static str, JobHandler> {
                 job_log_cleanup::HANDLER_NAME,
                 (|state: &AppState| {
                     Box::pin(job_log_cleanup::run(state))
+                        as Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>
+                }) as JobHandler,
+            ),
+            // 操作日志清理任务（见 operation_log_cleanup.rs）
+            (
+                operation_log_cleanup::HANDLER_NAME,
+                (|state: &AppState| {
+                    Box::pin(operation_log_cleanup::run(state))
                         as Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>
                 }) as JobHandler,
             ),

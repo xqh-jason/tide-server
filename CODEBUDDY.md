@@ -39,3 +39,7 @@ Skills 位于 `.codebuddy/skills/` 目录，每个 skill 有独立的 `SKILL.md`
 
 当任务匹配某个 skill 时，读取对应的 `.codebuddy/skills/<skill-name>/SKILL.md` 并严格遵循其流程。
 <!-- superpowers-zh:end -->
+
+# 项目结构补充
+
+- 前端仓库位于同级目录 `../salvo-vben-web`（vben monorepo，`apps/web-ele` + Element Plus）。涉及前端页面、API 封装、菜单配置的任务到该仓库查找与修改。

@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QuerySelect};
+use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction};
 
 use crate::entity::{sys_api, sys_api::Model, sys_role_api};
 use crate::modules::sys_api::dto::ApiFilter;
@@ -123,7 +123,10 @@ pub(crate) async fn update_api_in_tx(
 }
 
 /// 事务内实现：清空角色授权关联 + 软删主表（不 begin/commit，边界由调用方负责）。
-pub(crate) async fn soft_delete_api_in_tx(txn: &DatabaseTransaction, id: u64) -> anyhow::Result<bool> {
+pub(crate) async fn soft_delete_api_in_tx(
+    txn: &DatabaseTransaction,
+    id: u64,
+) -> anyhow::Result<bool> {
     let Some(api) = find_by_id(txn, id).await? else {
         return Ok(false);
     };
@@ -149,21 +152,6 @@ pub async fn find_by_path_method_include_deleted(
         .one(db)
         .await?;
     Ok(api)
-}
-
-pub async fn find_role_ids_by_api_id(
-    db: &impl ConnectionTrait,
-    api_id: u64,
-) -> anyhow::Result<Vec<u64>> {
-    let role_ids = sys_role_api::Entity::find()
-        .filter(sys_role_api::Column::ApiId.eq(api_id))
-        .column(sys_role_api::Column::RoleId)
-        .all(db)
-        .await?;
-    Ok(role_ids
-        .into_iter()
-        .map(|role_id| role_id.role_id)
-        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]
@@ -231,8 +219,6 @@ mod tests {
         .await
         .unwrap()
     }
-
-
 
     /// 创建 API：事务写入主表 + 角色授权关联。
     #[tokio::test]
@@ -476,8 +462,6 @@ mod tests {
         .id
     }
 
-
-
     #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
@@ -503,7 +487,6 @@ mod tests {
 
         assert_eq!(created.created_by, actor_id);
         assert_eq!(created.updated_by, actor_id);
-
     }
 
     #[tokio::test]
@@ -545,7 +528,6 @@ mod tests {
 
         assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
         assert_eq!(updated.updated_by, updater_id);
-
     }
 
     /// 审计过滤不依赖 keyword：仅传 created_by（不传 keyword）也应生效。
