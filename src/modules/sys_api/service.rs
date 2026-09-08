@@ -1,6 +1,6 @@
 //! API 权限点业务规则。
 
-use sea_orm::{ActiveValue::Set, ConnectionTrait, DatabaseConnection};
+use sea_orm::{ActiveValue::Set, ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 
 use crate::modules::sys_api::dto::{ApiFilter, ApiListReq, UpdateApiReq};
 use crate::modules::sys_api::repo as api_repo;
@@ -48,15 +48,30 @@ pub async fn page_apis(
     Ok(model)
 }
 
-/// 创建 API：path + method 查重（含软删占位）→ 写入主表并维护角色授权关联（审计字段由 repo 盖章）。
+/// 对外入口：开事务后委托 `create_api_in_tx`，成功后提交。
 pub async fn create_api(
     db: &DatabaseConnection,
     actor_id: u64,
     req: &CreateApiReq,
 ) -> Result<sys_api::Model, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = create_api_in_tx(&txn, actor_id, req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内完整业务（path+method 查重 + 写入），不管理事务边界。
+/// 供对外入口与测试外层事务调用。
+pub(crate) async fn create_api_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    req: &CreateApiReq,
+) -> Result<sys_api::Model, AppError> {
     // path + method 查重（含软删占位）
     if let Some(existing) =
-        api_repo::find_by_path_method_include_deleted(db, &req.path, &req.method).await?
+        api_repo::find_by_path_method_include_deleted(txn, &req.path, &req.method).await?
     {
         return Err(AppError::Biz(format!(
             "API 路径与方法已存在：{} {}",
@@ -72,28 +87,41 @@ pub async fn create_api(
         status: Set(req.status.unwrap_or(1)),
         ..Default::default()
     };
-    let model = api_repo::create_api_with_links(db, model, req.role_ids.clone(), actor_id).await?;
+    let model = api_repo::create_api_in_tx(txn, model, req.role_ids.clone(), actor_id).await?;
     Ok(model)
 }
 
-/// 更新 API：判存在 → path + method 查重排除自身 → 全量覆盖并重建角色授权（审计字段由 repo 盖章）。
+/// 对外入口：开事务后委托 `update_api_in_tx`，成功后提交。
 pub async fn update_api(
     db: &DatabaseConnection,
     actor_id: u64,
     req: &UpdateApiReq,
 ) -> Result<sys_api::Model, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = update_api_in_tx(&txn, actor_id, req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内完整业务（存在性 + path/method 查重排除自身 + 写入），不管理事务边界。
+/// 供对外入口与测试外层事务调用。
+pub(crate) async fn update_api_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    req: &UpdateApiReq,
+) -> Result<sys_api::Model, AppError> {
     // 检查 API 是否存在
-    let Some(_) = api_repo::find_by_id(db, req.id).await? else {
+    let Some(_) = api_repo::find_by_id(txn, req.id).await? else {
         return Err(AppError::Biz(format!("API 不存在：{}", req.id)));
     };
     // path + method 查重（含软删），排除自身
-    if let Some(existing) =
-        api_repo::find_by_path_method_include_deleted(db, req.path.as_str(), req.method.as_str())
-            .await?
-    {
-        if existing.id != req.id {
-            return Err(AppError::Biz("API 路径与方法已存在".to_string()));
-        }
+    let dup = api_repo::find_by_path_method_include_deleted(txn, req.path.as_str(), req.method.as_str())
+        .await?
+        .is_some_and(|existing| existing.id != req.id);
+    if dup {
+        return Err(AppError::Biz("API 路径与方法已存在".to_string()));
     }
 
     let model = sys_api::ActiveModel {
@@ -105,7 +133,7 @@ pub async fn update_api(
         status: Set(req.status),
         ..Default::default()
     };
-    let model = api_repo::update_api_with_links(db, model, req.role_ids.clone(), actor_id).await?;
+    let model = api_repo::update_api_in_tx(txn, model, req.role_ids.clone(), actor_id).await?;
     Ok(model)
 }
 
@@ -117,12 +145,23 @@ pub async fn get_api(db: &impl ConnectionTrait, id: u64) -> Result<sys_api::Mode
     Ok(model)
 }
 
-/// 删除 API：判存在后级联清空角色授权关联并软删主表。
+/// 对外入口：开事务后委托 `delete_api_in_tx`，成功后提交。
 pub async fn delete_api(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
-    let Some(_) = api_repo::find_by_id(db, id).await? else {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = delete_api_in_tx(&txn, id).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内完整业务（存在性 + 软删），不管理事务边界。
+/// 供对外入口与测试外层事务调用。
+pub(crate) async fn delete_api_in_tx(txn: &DatabaseTransaction, id: u64) -> Result<(), AppError> {
+    let Some(_) = api_repo::find_by_id(txn, id).await? else {
         return Err(AppError::Biz(format!("API 不存在：{id}")));
     };
-    api_repo::soft_delete_api(db, id).await?;
+    api_repo::soft_delete_api_in_tx(txn, id).await?;
     Ok(())
 }
 
@@ -161,6 +200,12 @@ mod tests {
     async fn test_db() -> DatabaseConnection {
         let config = crate::infra::config::Config::load().unwrap();
         Database::connect(&config.database.url).await.unwrap()
+    }
+
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
     }
 
     fn create_req(path: String, method: String, role_ids: Vec<u64>) -> CreateApiReq {
@@ -202,55 +247,32 @@ mod tests {
         .unwrap()
     }
 
-    /// 清理顺序：先删关联表，再删主表。
-    async fn cleanup(db: &impl ConnectionTrait, api_ids: &[u64], role_ids: &[u64]) {
-        for api_id in api_ids {
-            sys_role_api::Entity::delete_many()
-                .filter(sys_role_api::Column::ApiId.eq(*api_id))
-                .exec(db)
-                .await
-                .unwrap();
-        }
-        sys_api::Entity::delete_many()
-            .filter(sys_api::Column::Id.is_in(api_ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-        sys_role::Entity::delete_many()
-            .filter(sys_role::Column::Id.is_in(role_ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-    }
+
 
     /// 创建时 path + method 重复（含软删占位）应被业务层拒绝。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn create_api_rejects_duplicate_path_method_including_soft_deleted() {
-        let db = test_db().await;
+        let txn = test_txn().await;
         let path_live = format!("/api/v1/{}/dup_live", unique("create"));
         let path_deleted = format!("/api/v1/{}/dup_deleted", unique("create"));
-        let live = seed_api(&db, &path_live, "POST").await;
-        let deleted = seed_api(&db, &path_deleted, "POST").await;
+        let _live = seed_api(&txn, &path_live, "POST").await;
+        let deleted = seed_api(&txn, &path_deleted, "POST").await;
         let mut deleted_model: sys_api::ActiveModel = deleted.clone().into();
         deleted_model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
-        deleted_model.update(&db).await.unwrap();
+        deleted_model.update(&txn).await.unwrap();
 
-        let result_live = create_api(
-            &db,
+        let result_live = create_api_in_tx(&txn,
             ACTOR_ID,
             &create_req(path_live.clone(), "POST".to_string(), vec![]),
         )
         .await;
-        let result_deleted = create_api(
-            &db,
+        let result_deleted = create_api_in_tx(&txn,
             ACTOR_ID,
             &create_req(path_deleted.clone(), "POST".to_string(), vec![]),
         )
         .await;
-
-        cleanup(&db, &[live.id, deleted.id], &[]).await;
 
         assert!(
             matches!(result_live, Err(AppError::Biz(_))),
@@ -264,17 +286,16 @@ mod tests {
 
     /// 更新时 path + method 与他人重复应被拒绝，但保留自身组合不算重复。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn update_api_rejects_duplicate_path_method_excluding_self() {
-        let db = test_db().await;
+        let txn = test_txn().await;
         let path_a = format!("/api/v1/{}/a", unique("update"));
         let path_b = format!("/api/v1/{}/b", unique("update"));
-        let api_a = seed_api(&db, &path_a, "POST").await;
-        let api_b = seed_api(&db, &path_b, "POST").await;
+        let _api_a = seed_api(&txn, &path_a, "POST").await;
+        let api_b = seed_api(&txn, &path_b, "POST").await;
 
-        let dup = update_api(
-            &db,
+        let dup = update_api_in_tx(&txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: api_b.id,
@@ -287,8 +308,7 @@ mod tests {
             },
         )
         .await;
-        let keep_self = update_api(
-            &db,
+        let keep_self = update_api_in_tx(&txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: api_b.id,
@@ -302,8 +322,6 @@ mod tests {
         )
         .await;
 
-        cleanup(&db, &[api_a.id, api_b.id], &[]).await;
-
         assert!(
             matches!(dup, Err(AppError::Biz(_))),
             "占用他人 path+method 应返回 Biz 业务错误，实际：{dup:?}"
@@ -314,13 +332,12 @@ mod tests {
 
     /// 更新不存在的 API（或已软删 API）应返回业务错误。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn update_api_returns_biz_error_when_api_missing() {
-        let db = test_db().await;
+        let txn = test_txn().await;
 
-        let missing = update_api(
-            &db,
+        let missing = update_api_in_tx(&txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: 9_999_999_999,
@@ -339,13 +356,12 @@ mod tests {
         );
 
         let path = format!("/api/v1/{}/deleted", unique("update"));
-        let deleted = seed_api(&db, &path, "POST").await;
+        let deleted = seed_api(&txn, &path, "POST").await;
         let mut deleted_model: sys_api::ActiveModel = deleted.clone().into();
         deleted_model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
-        deleted_model.update(&db).await.unwrap();
+        deleted_model.update(&txn).await.unwrap();
 
-        let update_deleted = update_api(
-            &db,
+        let update_deleted = update_api_in_tx(&txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: deleted.id,
@@ -358,7 +374,6 @@ mod tests {
             },
         )
         .await;
-        cleanup(&db, &[deleted.id], &[]).await;
         assert!(
             matches!(update_deleted, Err(AppError::Biz(_))),
             "更新已软删 API 应返回 Biz 业务错误，实际：{update_deleted:?}"
@@ -367,23 +382,21 @@ mod tests {
 
     /// 更新时 role_ids 全量替换授权关联（空数组即清空）。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn update_api_full_replaces_role_links() {
-        let db = test_db().await;
-        let role_old = seed_role(&db).await;
-        let role_new = seed_role(&db).await;
+        let txn = test_txn().await;
+        let role_old = seed_role(&txn).await;
+        let role_new = seed_role(&txn).await;
         let path = format!("/api/v1/{}/links", unique("update"));
 
-        let created = create_api(
-            &db,
+        let created = create_api_in_tx(&txn,
             ACTOR_ID,
             &create_req(path.clone(), "POST".to_string(), vec![role_old.id]),
         )
         .await
         .expect("创建带授权 API 应成功");
-        let updated = update_api(
-            &db,
+        let updated = update_api_in_tx(&txn,
             ACTOR_ID,
             &UpdateApiReq {
                 id: created.id,
@@ -400,11 +413,9 @@ mod tests {
 
         let links = sys_role_api::Entity::find()
             .filter(sys_role_api::Column::ApiId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
-        cleanup(&db, &[created.id], &[role_old.id, role_new.id]).await;
-
         assert_eq!(updated.description, "替换授权");
         assert_eq!(links.len(), 1, "旧授权应被清空，只剩新授权");
         assert_eq!(links[0].role_id, role_new.id);

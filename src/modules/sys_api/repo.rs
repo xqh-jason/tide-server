@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QuerySelect, TransactionTrait};
+use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QuerySelect};
 
 use crate::entity::{sys_api, sys_api::Model, sys_role_api};
 use crate::modules::sys_api::dto::ApiFilter;
@@ -65,19 +65,18 @@ pub async fn find_page(
     crate::utils::paginate(select, db, page_index, page_size).await
 }
 
-/// 事务写入 API 并维护角色授权关联（关系表硬删除，只插不判软删）。
-pub async fn create_api_with_links(
-    db: &DatabaseConnection,
+/// 事务内实现：插入 API + 角色授权关联（不 begin/commit，边界由调用方负责）。
+pub(crate) async fn create_api_in_tx(
+    txn: &DatabaseTransaction,
     api: sys_api::ActiveModel,
     role_ids: Vec<u64>,
     actor_id: u64,
 ) -> anyhow::Result<Model> {
-    let txn = db.begin().await?;
     // 审计字段由 repo 统一盖章：create 时创建人与更新人同源
     let mut api = api;
     api.created_by = Set(actor_id);
     api.updated_by = Set(actor_id);
-    let api = api.insert(&txn).await?;
+    let api = api.insert(txn).await?;
     if !role_ids.is_empty() {
         let role_api_ids = role_ids
             .into_iter()
@@ -87,28 +86,26 @@ pub async fn create_api_with_links(
             })
             .collect::<Vec<_>>();
         sys_role_api::Entity::insert_many(role_api_ids)
-            .exec(&txn)
+            .exec(txn)
             .await?;
     }
-    txn.commit().await?;
     Ok(api)
 }
 
-/// 事务更新 API 并重建角色授权关联（先删旧关联，再插新关联）。
-pub async fn update_api_with_links(
-    db: &DatabaseConnection,
+/// 事务内实现：更新 API + 重建角色授权关联（不 begin/commit，边界由调用方负责）。
+pub(crate) async fn update_api_in_tx(
+    txn: &DatabaseTransaction,
     api: sys_api::ActiveModel,
     role_ids: Vec<u64>,
     actor_id: u64,
 ) -> anyhow::Result<Model> {
-    let txn = db.begin().await?;
     // 审计字段由 repo 统一盖章：只刷新更新人，created_by 保持 NotSet 不被覆盖
     let mut api = api;
     api.updated_by = Set(actor_id);
-    let api = api.update(&txn).await?;
+    let api = api.update(txn).await?;
     sys_role_api::Entity::delete_many()
         .filter(sys_role_api::Column::ApiId.eq(api.id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
     if !role_ids.is_empty() {
         let role_api_ids = role_ids
@@ -119,27 +116,24 @@ pub async fn update_api_with_links(
             })
             .collect::<Vec<_>>();
         sys_role_api::Entity::insert_many(role_api_ids)
-            .exec(&txn)
+            .exec(txn)
             .await?;
     }
-    txn.commit().await?;
     Ok(api)
 }
 
-/// 软删除 API：同一事务内物理清空 `sys_role_api` 关联，再软删主表。
-pub async fn soft_delete_api(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
-    let Some(api) = find_by_id(db, id).await? else {
+/// 事务内实现：清空角色授权关联 + 软删主表（不 begin/commit，边界由调用方负责）。
+pub(crate) async fn soft_delete_api_in_tx(txn: &DatabaseTransaction, id: u64) -> anyhow::Result<bool> {
+    let Some(api) = find_by_id(txn, id).await? else {
         return Ok(false);
     };
-    let txn = db.begin().await?;
     sys_role_api::Entity::delete_many()
         .filter(sys_role_api::Column::ApiId.eq(id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
     let mut api: sys_api::ActiveModel = api.into();
     api.deleted_at = Set(Some(chrono::Local::now().naive_local()));
-    api.update(&txn).await?;
-    txn.commit().await?;
+    api.update(txn).await?;
     Ok(true)
 }
 
@@ -238,39 +232,20 @@ mod tests {
         .unwrap()
     }
 
-    /// 清理顺序：先删关联表，再删主表。
-    async fn cleanup(db: &impl ConnectionTrait, api_ids: &[u64], role_ids: &[u64]) {
-        for api_id in api_ids {
-            sys_role_api::Entity::delete_many()
-                .filter(sys_role_api::Column::ApiId.eq(*api_id))
-                .exec(db)
-                .await
-                .unwrap();
-        }
-        sys_api::Entity::delete_many()
-            .filter(sys_api::Column::Id.is_in(api_ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-        sys_role::Entity::delete_many()
-            .filter(sys_role::Column::Id.is_in(role_ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-    }
+
 
     /// 创建 API：事务写入主表 + 角色授权关联。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn create_api_with_links_persists_api_and_links() {
-        let db = test_db().await;
-        let role_a = seed_role(&db).await;
-        let role_b = seed_role(&db).await;
+        let txn = test_txn().await;
+        let role_a = seed_role(&txn).await;
+        let role_b = seed_role(&txn).await;
         let path = format!("/api/v1/{}/list", unique("create"));
 
-        let created = create_api_with_links(
-            &db,
+        let created = create_api_in_tx(
+            &txn,
             sys_api::ActiveModel {
                 path: Set(path.clone()),
                 method: Set("POST".to_string()),
@@ -287,11 +262,9 @@ mod tests {
 
         let links = sys_role_api::Entity::find()
             .filter(sys_role_api::Column::ApiId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
-
-        cleanup(&db, &[created.id], &[role_a.id, role_b.id]).await;
 
         assert_eq!(created.path, path);
         assert_eq!(links.len(), 2, "两个角色授权应全部落库");
@@ -299,12 +272,12 @@ mod tests {
 
     /// 空角色列表也能创建 API（不触发无效 SQL）。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn create_api_with_links_supports_empty_role_ids() {
-        let db = test_db().await;
-        let created = create_api_with_links(
-            &db,
+        let txn = test_txn().await;
+        let created = create_api_in_tx(
+            &txn,
             sys_api::ActiveModel {
                 path: Set(format!("/api/v1/{}/empty", unique("create"))),
                 method: Set("POST".to_string()),
@@ -318,8 +291,6 @@ mod tests {
         )
         .await
         .unwrap();
-
-        cleanup(&db, &[created.id], &[]).await;
 
         assert_eq!(created.status, 1);
     }
@@ -395,14 +366,14 @@ mod tests {
 
     /// 更新 API：事务内重建角色授权关联（旧关联清空、新关联落库）。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn update_api_with_links_rebuilds_links_in_transaction() {
-        let db = test_db().await;
-        let role_old = seed_role(&db).await;
-        let role_new = seed_role(&db).await;
-        let created = create_api_with_links(
-            &db,
+        let txn = test_txn().await;
+        let role_old = seed_role(&txn).await;
+        let role_new = seed_role(&txn).await;
+        let created = create_api_in_tx(
+            &txn,
             sys_api::ActiveModel {
                 path: Set(format!("/api/v1/{}/update", unique("update"))),
                 method: Set("POST".to_string()),
@@ -419,17 +390,15 @@ mod tests {
 
         let mut model: sys_api::ActiveModel = created.clone().into();
         model.description = Set("更新后描述".to_string());
-        let updated = update_api_with_links(&db, model, vec![role_new.id], ACTOR_ID)
+        let updated = update_api_in_tx(&txn, model, vec![role_new.id], ACTOR_ID)
             .await
             .unwrap();
 
         let links = sys_role_api::Entity::find()
             .filter(sys_role_api::Column::ApiId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
-
-        cleanup(&db, &[created.id], &[role_old.id, role_new.id]).await;
 
         assert_eq!(updated.description, "更新后描述");
         assert_eq!(links.len(), 1, "旧关联应被清空，只剩新关联");
@@ -438,13 +407,13 @@ mod tests {
 
     /// 软删除：物理清空授权关联，主表不可再被 find_by_id 查到。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn soft_delete_api_removes_links_and_excludes_api() {
-        let db = test_db().await;
-        let role = seed_role(&db).await;
-        let created = create_api_with_links(
-            &db,
+        let txn = test_txn().await;
+        let role = seed_role(&txn).await;
+        let created = create_api_in_tx(
+            &txn,
             sys_api::ActiveModel {
                 path: Set(format!("/api/v1/{}/delete", unique("delete"))),
                 method: Set("POST".to_string()),
@@ -459,15 +428,13 @@ mod tests {
         .await
         .unwrap();
 
-        let deleted = soft_delete_api(&db, created.id).await.unwrap();
-        let after = find_by_id(&db, created.id).await.unwrap();
+        let deleted = soft_delete_api_in_tx(&txn, created.id).await.unwrap();
+        let after = find_by_id(&txn, created.id).await.unwrap();
         let links = sys_role_api::Entity::find()
             .filter(sys_role_api::Column::ApiId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
-
-        cleanup(&db, &[created.id], &[role.id]).await;
 
         assert!(deleted);
         assert!(after.is_none(), "软删后 find_by_id 不应查到 API");
@@ -509,23 +476,17 @@ mod tests {
         .id
     }
 
-    async fn delete_actors(db: &impl ConnectionTrait, ids: &[u64]) {
-        crate::entity::sys_user::Entity::delete_many()
-            .filter(crate::entity::sys_user::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
-    }
+
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn create_api_with_links_stamps_actor_as_creator_and_updater() {
-        let db = test_db().await;
-        let actor_id = seed_actor(&db).await;
+        let txn = test_txn().await;
+        let actor_id = seed_actor(&txn).await;
 
-        let created = create_api_with_links(
-            &db,
+        let created = create_api_in_tx(
+            &txn,
             sys_api::ActiveModel {
                 path: Set(format!("/api/{}", unique("audit_api"))),
                 method: Set("POST".to_string()),
@@ -543,20 +504,18 @@ mod tests {
         assert_eq!(created.created_by, actor_id);
         assert_eq!(created.updated_by, actor_id);
 
-        cleanup(&db, &[created.id], &[]).await;
-        delete_actors(&db, &[actor_id]).await;
     }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn update_api_with_links_refreshes_updated_by_and_keeps_created_by() {
-        let db = test_db().await;
-        let creator_id = seed_actor(&db).await;
-        let updater_id = seed_actor(&db).await;
+        let txn = test_txn().await;
+        let creator_id = seed_actor(&txn).await;
+        let updater_id = seed_actor(&txn).await;
 
-        let created = create_api_with_links(
-            &db,
+        let created = create_api_in_tx(
+            &txn,
             sys_api::ActiveModel {
                 path: Set(format!("/api/{}", unique("audit_api"))),
                 method: Set("POST".to_string()),
@@ -571,8 +530,8 @@ mod tests {
         .await
         .unwrap();
 
-        let updated = update_api_with_links(
-            &db,
+        let updated = update_api_in_tx(
+            &txn,
             sys_api::ActiveModel {
                 id: Set(created.id),
                 description: Set("审计测试接口（改名）".to_string()),
@@ -587,8 +546,6 @@ mod tests {
         assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
         assert_eq!(updated.updated_by, updater_id);
 
-        cleanup(&db, &[created.id], &[]).await;
-        delete_actors(&db, &[creator_id, updater_id]).await;
     }
 
     /// 审计过滤不依赖 keyword：仅传 created_by（不传 keyword）也应生效。
