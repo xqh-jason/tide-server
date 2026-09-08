@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 
 use crate::entity::sys_menu;
 use crate::modules::menu::dto::{
@@ -172,10 +172,11 @@ pub async fn update_menu(
     };
 
     // 检查名称是否已被其他菜单占用（含软删占位，排除自身）
-    if let Some(existing) = menu_repo::find_by_name_include_deleted(db, &req.name).await? {
-        if existing.id != req.id {
-            return Err(AppError::Biz(format!("菜单名称已存在：{}", existing.name)));
-        }
+    let dup = menu_repo::find_by_name_include_deleted(db, &req.name)
+        .await?
+        .is_some_and(|existing| existing.id != req.id);
+    if dup {
+        return Err(AppError::Biz("菜单名称已存在".to_string()));
     }
 
     let menu_type = req.menu_type;
@@ -228,14 +229,25 @@ fn validate_component(component: &str, menu_type: i8) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 删除菜单：判存在后软删，repo 层级联软删全部子孙菜单并清空角色关联。
+/// 对外入口：开事务后委托 `delete_menu_in_tx`，成功后提交。
 pub async fn delete_menu(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = delete_menu_in_tx(&txn, id).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内完整业务（存在性 + 级联软删子孙菜单并清空角色关联），不管理事务边界。
+/// 供对外入口与测试外层事务调用。
+pub(crate) async fn delete_menu_in_tx(txn: &DatabaseTransaction, id: u64) -> Result<(), AppError> {
     // 检查菜单是否存在
-    let Some(_) = menu_repo::find_by_id(db, id).await? else {
+    let Some(_) = menu_repo::find_by_id(txn, id).await? else {
         return Err(AppError::Biz("菜单不存在".to_string()));
     };
 
-    menu_repo::soft_delete_menu(db, id).await?;
+    menu_repo::soft_delete_menu_in_tx(txn, id).await?;
     Ok(())
 }
 
@@ -587,12 +599,12 @@ mod tests {
 
     /// 删除不存在的菜单应返回业务错误。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn delete_menu_returns_biz_error_when_menu_missing() {
-        let db = test_db().await;
+        let txn = test_txn().await;
 
-        let missing = delete_menu(&db, 9_999_999_999).await;
+        let missing = delete_menu_in_tx(&txn, 9_999_999_999).await;
         assert!(
             matches!(missing, Err(AppError::Biz(_))),
             "删除不存在的菜单应返回 Biz 业务错误，实际：{missing:?}"

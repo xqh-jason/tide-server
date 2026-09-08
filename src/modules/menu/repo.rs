@@ -7,7 +7,7 @@ use crate::utils::PageData;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{
-    Condition, ConnectionTrait, DatabaseConnection, QueryOrder, QuerySelect, TransactionTrait,
+    Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect,
 };
 
 /// 查询全部启用菜单（W2 超管全量菜单树；按角色过滤 W3 再做）。
@@ -107,13 +107,16 @@ pub async fn update_menu(
 }
 
 /// 软删除菜单：递归收集目标及其全部子孙菜单（BFS），在同一事务内
-/// 清空这些菜单的角色关联（`sys_role_menu` 硬删除）并把主表 `deleted_at` 置为当前时间。
+/// 事务内实现：清空目标及子孙菜单的角色关联并批量软删主表（不 begin/commit）。
 ///
 /// 子级收集**不过滤软删状态**：即使某个中间节点已软删，其下仍正常的子孙也要级联处理，
-/// 避免父已删、子孤立的脏数据。
-pub async fn soft_delete_menu(db: &DatabaseConnection, id: u64) -> anyhow::Result<bool> {
+/// 避免父已删、子孤立的脏数据。事务边界由调用方负责（service 公共入口 / 测试外层事务）。
+pub(crate) async fn soft_delete_menu_in_tx(
+    txn: &DatabaseTransaction,
+    id: u64,
+) -> anyhow::Result<bool> {
     // 目标菜单必须存在（排除软删），否则视为无可删除
-    let Some(menu) = find_by_id(db, id).await? else {
+    let Some(menu) = find_by_id(txn, id).await? else {
         return Ok(false);
     };
 
@@ -124,7 +127,7 @@ pub async fn soft_delete_menu(db: &DatabaseConnection, id: u64) -> anyhow::Resul
         let children = sys_menu::Entity::find()
             .filter(sys_menu::Column::ParentId.is_in(frontier))
             .column(sys_menu::Column::Id)
-            .all(db)
+            .all(txn)
             .await?;
         let child_ids: Vec<u64> = children.into_iter().map(|c| c.id).collect();
         if child_ids.is_empty() {
@@ -135,11 +138,10 @@ pub async fn soft_delete_menu(db: &DatabaseConnection, id: u64) -> anyhow::Resul
     }
 
     let now = chrono::Local::now().naive_local();
-    let txn = db.begin().await?;
     // 关系表硬删除：清掉这些菜单的角色绑定
     sys_role_menu::Entity::delete_many()
         .filter(sys_role_menu::Column::MenuId.is_in(ids.clone()))
-        .exec(&txn)
+        .exec(txn)
         .await?;
     // 主表批量软删（含目标与全部子孙）
     sys_menu::Entity::update_many()
@@ -148,9 +150,8 @@ pub async fn soft_delete_menu(db: &DatabaseConnection, id: u64) -> anyhow::Resul
             sea_orm::sea_query::Expr::value(Some(now)),
         )
         .filter(sys_menu::Column::Id.is_in(ids))
-        .exec(&txn)
+        .exec(txn)
         .await?;
-    txn.commit().await?;
     Ok(true)
 }
 
@@ -380,16 +381,14 @@ mod tests {
 
     /// 软删除：deleted_at 被置为当前时间，且随后 find_by_id 查不到。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn soft_delete_menu_sets_deleted_at() {
-        let db = test_db().await;
-        let menu = seed_menu(&db, &unique("soft_delete"), 1, None).await;
+        let txn = test_txn().await;
+        let menu = seed_menu(&txn, &unique("soft_delete"), 1, None).await;
 
-        let deleted = soft_delete_menu(&db, menu.id).await.unwrap();
-        let after = find_by_id(&db, menu.id).await.unwrap();
-
-        cleanup(&db, &[menu.id]).await;
+        let deleted = soft_delete_menu_in_tx(&txn, menu.id).await.unwrap();
+        let after = find_by_id(&txn, menu.id).await.unwrap();
 
         assert!(deleted);
         assert!(after.is_none(), "软删后 find_by_id 不应查到菜单");
@@ -397,11 +396,11 @@ mod tests {
 
     /// 级联软删：删除父菜单时，所有子孙菜单一起软删（BFS 递归）。
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn soft_delete_menu_cascades_to_all_descendants() {
-        let db = test_db().await;
-        let parent = seed_menu(&db, &unique("cascade_parent"), 1, None).await;
+        let txn = test_txn().await;
+        let parent = seed_menu(&txn, &unique("cascade_parent"), 1, None).await;
         let child = sys_menu::ActiveModel {
             parent_id: Set(parent.id),
             path: Set(format!("/{}", unique("child_path"))),
@@ -417,7 +416,7 @@ mod tests {
             status: Set(1),
             ..Default::default()
         }
-        .insert(&db)
+        .insert(&txn)
         .await
         .unwrap();
         let grandchild = sys_menu::ActiveModel {
@@ -435,16 +434,14 @@ mod tests {
             status: Set(1),
             ..Default::default()
         }
-        .insert(&db)
+        .insert(&txn)
         .await
         .unwrap();
 
-        let deleted = soft_delete_menu(&db, parent.id).await.unwrap();
-        let parent_after = find_by_id(&db, parent.id).await.unwrap();
-        let child_after = find_by_id(&db, child.id).await.unwrap();
-        let grandchild_after = find_by_id(&db, grandchild.id).await.unwrap();
-
-        cleanup(&db, &[parent.id, child.id, grandchild.id]).await;
+        let deleted = soft_delete_menu_in_tx(&txn, parent.id).await.unwrap();
+        let parent_after = find_by_id(&txn, parent.id).await.unwrap();
+        let child_after = find_by_id(&txn, child.id).await.unwrap();
+        let grandchild_after = find_by_id(&txn, grandchild.id).await.unwrap();
 
         assert!(deleted);
         assert!(parent_after.is_none(), "父菜单应被软删");
