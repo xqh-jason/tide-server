@@ -24,8 +24,6 @@ pub struct JobLogResp {
     pub duration_ms: u32,
     /// 开始时间（`yyyy-MM-dd HH:mm:ss`）
     pub created_at: String,
-    /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
-    pub updated_at: String,
 }
 
 impl From<sys_job_log::Model> for JobLogResp {
@@ -38,7 +36,6 @@ impl From<sys_job_log::Model> for JobLogResp {
             error_msg: m.error_msg,
             duration_ms: m.duration_ms,
             created_at: crate::utils::serde_format::format_datetime(m.created_at),
-            updated_at: crate::utils::serde_format::format_datetime(m.updated_at),
         }
     }
 }

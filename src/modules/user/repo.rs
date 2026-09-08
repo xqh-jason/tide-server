@@ -3,7 +3,7 @@ use crate::entity::{sys_role, sys_user, sys_user_role};
 use crate::modules::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder};
+use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
 
 /// 查询单个有效用户（排除软删除）。
 pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
@@ -221,6 +221,21 @@ pub async fn find_all_users(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Mod
         .all(db)
         .await?;
     Ok(models)
+}
+
+pub async fn find_role_ids_by_user_id(
+    db: &impl ConnectionTrait,
+    user_id: u64,
+) -> anyhow::Result<Vec<u64>> {
+    let models = sys_user_role::Entity::find()
+        .filter(sys_user_role::Column::UserId.eq(user_id))
+        .column(sys_user_role::Column::RoleId)
+        .all(db)
+        .await?;
+    Ok(models
+        .into_iter()
+        .map(|model| model.role_id)
+        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]

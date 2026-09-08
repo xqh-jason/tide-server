@@ -18,7 +18,6 @@ pub struct Model {
     /// 本次耗时（毫秒）
     pub duration_ms: u32,
     pub created_at: DateTime,
-    pub updated_at: DateTime,
     pub deleted_at: Option<DateTime>,
 }
 

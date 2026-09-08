@@ -64,6 +64,8 @@ pub struct UserResp {
     pub created_by_name: String,
     /// 更新人显示名（`sys_user.username`）
     pub updated_by_name: String,
+    /// 角色 ID 列表（`sys_role.id`）
+    pub role_ids: Vec<u64>,
 }
 
 /// `sys_user::Model` → `UserResp` 字段搬运。
@@ -82,6 +84,7 @@ impl From<sys_user::Model> for UserResp {
             updated_by: m.updated_by,
             created_by_name: String::new(),
             updated_by_name: String::new(),
+            role_ids: Vec::new(),
         }
     }
 }

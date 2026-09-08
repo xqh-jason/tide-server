@@ -15,7 +15,6 @@
     { "name": "resp", "rust_type": "String", "optional": true, "default": "", "comment": "响应体（脱敏截断后）" },
     { "name": "error_message", "rust_type": "String", "optional": true, "default": "", "comment": "失败提示" },
     { "name": "created_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "updated_at", "rust_type": "DateTime", "readonly": true },
     { "name": "deleted_at", "rust_type": "Option<DateTime>", "readonly": true }
   ],
   "unique_fields": [],

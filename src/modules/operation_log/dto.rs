@@ -53,8 +53,6 @@ pub struct OperationLogItem {
     pub error_message: String,
     /// 记录时间（`yyyy-MM-dd HH:mm:ss`）
     pub created_at: String,
-    /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
-    pub updated_at: String,
 }
 /// 操作日志详情响应：含脱敏截断后的 body / resp。
 #[derive(Debug, Serialize, ToSchema)]
@@ -109,7 +107,6 @@ impl From<sys_operation_log::Model> for OperationLogItem {
             agent: m.agent,
             error_message: m.error_message,
             created_at: crate::utils::serde_format::format_datetime(m.created_at),
-            updated_at: crate::utils::serde_format::format_datetime(m.updated_at),
         }
     }
 }

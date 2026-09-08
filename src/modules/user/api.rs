@@ -92,9 +92,10 @@ pub async fn get_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<Use
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let resp = user_service::get_user(&state.db, req.id).await?;
-    let resp = fill_user_names(&state.db, vec![resp], UserResp::from)
+    let mut resp = fill_user_names(&state.db, vec![resp], UserResp::from)
         .await?
         .remove(0);
+    resp.role_ids = user_service::get_role_ids_by_user_id(&state.db, resp.id).await?;
     Ok(ApiResponse::ok(resp))
 }
 

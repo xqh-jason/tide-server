@@ -20,7 +20,6 @@ pub struct Model {
     /// 内部原因或成功提示
     pub msg: String,
     pub created_at: DateTime,
-    pub updated_at: DateTime,
     pub deleted_at: Option<DateTime>,
 }
 

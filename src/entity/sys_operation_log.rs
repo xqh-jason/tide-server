@@ -30,7 +30,6 @@ pub struct Model {
     /// 失败提示
     pub error_message: String,
     pub created_at: DateTime,
-    pub updated_at: DateTime,
     pub deleted_at: Option<DateTime>,
 }
 

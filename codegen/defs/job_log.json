@@ -10,7 +10,6 @@
     { "name": "error_msg", "rust_type": "String", "optional": true, "default": "", "comment": "失败原因（截断 2KB）" },
     { "name": "duration_ms", "rust_type": "u32", "optional": true, "default": 0, "comment": "本次耗时（毫秒）" },
     { "name": "created_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "updated_at", "rust_type": "DateTime", "readonly": true },
     { "name": "deleted_at", "rust_type": "Option<DateTime>", "readonly": true, "soft_delete": true }
   ],
   "unique_fields": [],

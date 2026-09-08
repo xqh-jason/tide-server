@@ -1,8 +1,8 @@
 use sea_orm::ActiveValue::Set;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 
-use crate::entity::sys_user;
 use crate::entity::sys_role;
+use crate::entity::sys_user;
 use crate::modules::permission::repo as permission_repo;
 use crate::modules::permission::{
     ADMIN_USERNAME, SUPER_ROLE_KEY, SYSTEM_USER_CREATE, SYSTEM_USER_UPDATE,
@@ -103,7 +103,10 @@ async fn ensure_no_super_assignment(
         return Ok(());
     }
     let actor_roles = user_repo::find_roles_by_user_id(txn, actor_id).await?;
-    if actor_roles.iter().any(|role| role.role_key == SUPER_ROLE_KEY) {
+    if actor_roles
+        .iter()
+        .any(|role| role.role_key == SUPER_ROLE_KEY)
+    {
         return Ok(());
     }
     Err(AppError::Biz("不允许分配系统内置超级管理员角色".into()))
@@ -407,6 +410,14 @@ pub async fn update_user_status(
     user.status = Set(status);
     user_repo::update_user(txn, user, actor_id).await?;
     Ok(true)
+}
+
+pub async fn get_role_ids_by_user_id(
+    txn: &impl ConnectionTrait,
+    user_id: u64,
+) -> Result<Vec<u64>, AppError> {
+    let role_ids = user_repo::find_role_ids_by_user_id(txn, user_id).await?;
+    Ok(role_ids)
 }
 
 #[cfg(test)]
@@ -1359,8 +1370,14 @@ mod tests {
         let b_hit = users.iter().find(|u| u.id == b.id);
         assert!(a_hit.is_some(), "存活用户应出现");
         assert!(b_hit.is_some(), "软删用户也应出现（历史引用回显场景）");
-        assert!(a_hit.unwrap().deleted_at.is_none(), "存活用户 deleted_at 应为空");
-        assert!(b_hit.unwrap().deleted_at.is_some(), "软删用户 deleted_at 应已置位");
+        assert!(
+            a_hit.unwrap().deleted_at.is_none(),
+            "存活用户 deleted_at 应为空"
+        );
+        assert!(
+            b_hit.unwrap().deleted_at.is_some(),
+            "软删用户 deleted_at 应已置位"
+        );
     }
 
     /// 非 super 操作者不得在创建用户时分配内置超管角色（防自我提权）。
@@ -1375,12 +1392,8 @@ mod tests {
         let super_fixture = load_super_role(&txn).await;
 
         let target = unique_name("elevate_create_target");
-        let result = create_user_in_tx(
-            &txn,
-            actor.id,
-            request(target, vec![super_fixture.role.id]),
-        )
-        .await;
+        let result =
+            create_user_in_tx(&txn, actor.id, request(target, vec![super_fixture.role.id])).await;
         assert!(
             matches!(result, Err(AppError::Biz(ref m)) if m.contains("不允许分配")),
             "非 super 操作者创建用户时分配超管角色应被拒绝: {result:?}"
@@ -1402,7 +1415,11 @@ mod tests {
         let result = update_user_in_tx(
             &txn,
             actor.id,
-            update_request(target.id, target.username.clone(), vec![super_fixture.role.id]),
+            update_request(
+                target.id,
+                target.username.clone(),
+                vec![super_fixture.role.id],
+            ),
         )
         .await;
         assert!(
@@ -1423,12 +1440,13 @@ mod tests {
         let result = update_user_in_tx(
             &txn,
             actor.id,
-            update_request(target.id, target.username.clone(), vec![super_fixture.role.id]),
+            update_request(
+                target.id,
+                target.username.clone(),
+                vec![super_fixture.role.id],
+            ),
         )
         .await;
-        assert!(
-            result.is_ok(),
-            "super 操作者分配超管角色应成功: {result:?}"
-        );
+        assert!(result.is_ok(), "super 操作者分配超管角色应成功: {result:?}");
     }
 }

@@ -17,7 +17,6 @@ enum SysOperationLog {
     Resp,
     ErrorMessage,
     CreatedAt,
-    UpdatedAt,
     DeletedAt,
 }
 
@@ -92,13 +91,6 @@ impl MigrationTrait for Migration {
                             .date_time()
                             .not_null()
                             .default(Expr::current_timestamp()),
-                    )
-                    .col(
-                        ColumnDef::new(SysOperationLog::UpdatedAt)
-                            .date_time()
-                            .not_null()
-                            .default(Expr::current_timestamp())
-                            .extra("ON UPDATE CURRENT_TIMESTAMP"),
                     )
                     .col(ColumnDef::new(SysOperationLog::DeletedAt).date_time().null())
                     .to_owned(),

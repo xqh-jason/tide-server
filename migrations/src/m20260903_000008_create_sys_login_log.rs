@@ -13,7 +13,6 @@ enum SysLoginLog {
     Status,
     Msg,
     CreatedAt,
-    UpdatedAt,
     DeletedAt,
 }
 
@@ -75,13 +74,6 @@ impl MigrationTrait for Migration {
                             .date_time()
                             .not_null()
                             .default(Expr::current_timestamp()),
-                    )
-                    .col(
-                        ColumnDef::new(SysLoginLog::UpdatedAt)
-                            .date_time()
-                            .not_null()
-                            .default(Expr::current_timestamp())
-                            .extra("ON UPDATE CURRENT_TIMESTAMP"),
                     )
                     .col(ColumnDef::new(SysLoginLog::DeletedAt).date_time().null())
                     .to_owned(),

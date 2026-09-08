@@ -5,6 +5,7 @@ use sea_orm::{
 };
 
 use crate::entity::{sys_role, sys_role_api, sys_role_menu};
+use crate::modules::permission::SUPER_ROLE_KEY;
 use crate::modules::role::dto::RoleFilter;
 
 /// 查询单个有效角色（排除软删除）。
@@ -269,20 +270,22 @@ pub async fn find_api_ids_by_role_id(
     Ok(api_ids.into_iter().map(|a| a.api_id).collect::<Vec<_>>())
 }
 
-/// 全量角色（仅排除软删，含停用），按 id 升序。
+/// 全量角色（仅排除软删与超管，含停用），按 id 升序。
 pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<sys_role::Model>> {
     let roles = sys_role::Entity::find()
         .filter(sys_role::Column::DeletedAt.is_null())
+        .filter(sys_role::Column::RoleKey.ne(SUPER_ROLE_KEY))
         .order_by_asc(sys_role::Column::Id)
         .all(db)
         .await?;
     Ok(roles)
 }
 
-/// 全量启用角色（排除软删且 `status = 1`），按 id 升序。
+/// 全量启用角色（排除软删与超管且 `status = 1`），按 id 升序。
 pub async fn find_all_enabled(db: &impl ConnectionTrait) -> anyhow::Result<Vec<sys_role::Model>> {
     let roles = sys_role::Entity::find()
         .filter(sys_role::Column::DeletedAt.is_null())
+        .filter(sys_role::Column::RoleKey.ne(SUPER_ROLE_KEY))
         .filter(sys_role::Column::Status.eq(1))
         .order_by_asc(sys_role::Column::Id)
         .all(db)

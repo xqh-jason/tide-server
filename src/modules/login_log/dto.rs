@@ -26,8 +26,6 @@ pub struct LoginLogResp {
     pub msg: String,
     /// 记录时间（`yyyy-MM-dd HH:mm:ss`）
     pub created_at: String,
-    /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
-    pub updated_at: String,
 }
 
 /// `sys_login_log::Model` → `LoginLogResp` 字段搬运。
@@ -42,7 +40,6 @@ impl From<sys_login_log::Model> for LoginLogResp {
             status: m.status,
             msg: m.msg,
             created_at: crate::utils::serde_format::format_datetime(m.created_at),
-            updated_at: crate::utils::serde_format::format_datetime(m.updated_at),
         }
     }
 }
