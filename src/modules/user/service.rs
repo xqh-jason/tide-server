@@ -2,6 +2,7 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 
 use crate::entity::sys_user;
+use crate::entity::sys_role;
 use crate::modules::permission::repo as permission_repo;
 use crate::modules::permission::{
     ADMIN_USERNAME, SUPER_ROLE_KEY, SYSTEM_USER_CREATE, SYSTEM_USER_UPDATE,
@@ -91,6 +92,23 @@ pub async fn get_access_codes(
     Ok(permissions)
 }
 
+/// super 角色分配保护：非 super 操作者不得把内置超管角色绑定到目标用户，
+/// 防止拥有 `system:user:create/update` 权限码的普通管理员自我提权。
+async fn ensure_no_super_assignment(
+    txn: &impl ConnectionTrait,
+    actor_id: u64,
+    roles: &[sys_role::Model],
+) -> Result<(), AppError> {
+    if !roles.iter().any(|role| role.role_key == SUPER_ROLE_KEY) {
+        return Ok(());
+    }
+    let actor_roles = user_repo::find_roles_by_user_id(txn, actor_id).await?;
+    if actor_roles.iter().any(|role| role.role_key == SUPER_ROLE_KEY) {
+        return Ok(());
+    }
+    Err(AppError::Biz("不允许分配系统内置超级管理员角色".into()))
+}
+
 /// 创建用户（发起人 `actor_id` 需拥有 `system:user:create` 权限）。
 /// 对外入口：开事务后委托 `create_user_in_tx`，成功后提交。
 pub async fn create_user(
@@ -158,7 +176,7 @@ pub(crate) async fn create_user_in_tx(
             ));
         }
 
-        for role in roles {
+        for role in &roles {
             if role.status != 1 || role.deleted_at.is_some() {
                 role_err_msgs.push(format!("角色 {} 不存在或已禁用", role.role_name));
             }
@@ -166,6 +184,9 @@ pub(crate) async fn create_user_in_tx(
         if !role_err_msgs.is_empty() {
             return Err(AppError::Biz(role_err_msgs.join(", ")));
         }
+
+        // 非 super 操作者不得分配内置超管角色（防自我提权）。
+        ensure_no_super_assignment(txn, actor_id, &roles).await?;
     }
 
     let model = user_repo::create_user_in_tx(
@@ -279,7 +300,7 @@ pub(crate) async fn update_user_in_tx(
                     .join(", ")
             ));
         }
-        for role in roles {
+        for role in &roles {
             if role.status != 1 || role.deleted_at.is_some() {
                 role_err_msgs.push(format!("角色 {} 不存在或已禁用", role.role_name));
             }
@@ -287,6 +308,9 @@ pub(crate) async fn update_user_in_tx(
         if !role_err_msgs.is_empty() {
             return Err(AppError::Biz(role_err_msgs.join(", ")));
         }
+
+        // 非 super 操作者不得分配内置超管角色（防自我提权）。
+        ensure_no_super_assignment(txn, actor_id, &roles).await?;
     }
 
     // 密码为空代表不更新密码（沿用库中原有密文）。
