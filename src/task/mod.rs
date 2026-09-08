@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 
 use crate::infra::state::AppState;
 
+pub mod chunk_cleanup;
 pub mod job_log_cleanup;
 pub mod login_log_cleanup;
 pub mod operation_log_cleanup;
@@ -58,6 +59,14 @@ pub fn handlers() -> &'static HashMap<&'static str, JobHandler> {
                         as Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>
                 }) as JobHandler,
             ),
+            // 断点续传分片清理任务（见 chunk_cleanup.rs）
+            (
+                chunk_cleanup::HANDLER_NAME,
+                (|state: &AppState| {
+                    Box::pin(chunk_cleanup::run(state))
+                        as Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>
+                }) as JobHandler,
+            ),
         ])
     })
 }
@@ -72,5 +81,6 @@ mod tests {
     fn handlers_registry_contains_builtin_handlers() {
         assert!(handlers().contains_key(login_log_cleanup::HANDLER_NAME));
         assert!(handlers().contains_key(job_log_cleanup::HANDLER_NAME));
+        assert!(handlers().contains_key(chunk_cleanup::HANDLER_NAME));
     }
 }

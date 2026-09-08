@@ -17,6 +17,8 @@ pub struct Model {
     pub mime: String,
     /// 字节数
     pub size: u64,
+    /// 整文件 md5（断点续传合并后回填；秒传查询依据，存量记录 NULL 不参与）
+    pub md5: Option<String>,
     pub created_at: DateTime,
     pub updated_at: DateTime,
     /// 上传人 ID

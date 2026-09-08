@@ -6,7 +6,7 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, QueryOrder};
 
-use crate::entity::{sys_file, sys_file::Model};
+use crate::entity::{sys_file, sys_file::Model, sys_file_chunk};
 use crate::modules::file::dto::FileFilter;
 
 /// 按主键查有效记录（排除软删）。
@@ -83,6 +83,67 @@ pub async fn soft_delete_file(db: &impl ConnectionTrait, id: u64) -> anyhow::Res
         return Ok(true);
     }
     Ok(false)
+}
+
+// ── W6-3 断点续传：分片记录（sys_file_chunk，硬删不软删） ──
+
+/// 分片 upsert：同 (file_md5, chunk_number) 命中则覆盖 chunk_path（幂等重传语义），
+/// 未命中插入。唯一键 `uk_sys_file_chunk_file_md5_chunk_number` 兜底并发。
+///
+/// 实现步骤：
+/// 1. 按 `FileMd5.eq(file_md5) + ChunkNumber.eq(chunk_number)` 查现有记录；
+/// 2. 命中：转 ActiveModel 覆盖 `chunk_path` 后 update；
+/// 3. 未命中：构造 ActiveModel（created_at 保持 NotSet 交数据库默认值）insert。
+pub async fn upsert_chunk(
+    db: &impl ConnectionTrait,
+    file_md5: &str,
+    chunk_number: u32,
+    chunk_path: &str,
+) -> anyhow::Result<()> {
+    let _ = (db, file_md5, chunk_number, chunk_path);
+    todo!("W6-3 任务 4：分片 upsert")
+}
+
+/// 该会话已传分片序号列表，按 chunk_number 升序。
+///
+/// 实现步骤：Entity::find + filter(FileMd5.eq) + order_by_asc(ChunkNumber)，
+/// 只取 chunk_number（select_only().column() 或取整行后 map 均可）。
+pub async fn find_chunk_numbers_by_md5(
+    db: &impl ConnectionTrait,
+    file_md5: &str,
+) -> anyhow::Result<Vec<u32>> {
+    let _ = (db, file_md5);
+    todo!("W6-3 任务 4：已传分片序号查询")
+}
+
+/// 硬删该会话全部分片记录，返回删除行数（合并成功 / 放弃上传 / 定时清理共用）。
+pub async fn delete_chunks_by_md5(
+    db: &impl ConnectionTrait,
+    file_md5: &str,
+) -> anyhow::Result<u64> {
+    let _ = (db, file_md5);
+    todo!("W6-3 任务 4：分片硬删")
+}
+
+/// 秒传查询：md5 命中未删文件记录（存量记录 md5 为 NULL 天然不命中，无需特判）。
+pub async fn find_file_by_md5(
+    db: &impl ConnectionTrait,
+    file_md5: &str,
+) -> anyhow::Result<Option<Model>> {
+    let _ = (db, file_md5);
+    todo!("W6-3 任务 4：秒传查询")
+}
+
+/// 定时清理用：created_at 早于 cutoff 的分片所属 md5 去重列表。
+///
+/// 实现步骤：filter(CreatedAt.lt(cutoff)) → 只取 FileMd5 → 去重
+/// （select_only + column 或取整行 map 后 Rust 侧 dedup 均可，行数有限）。
+pub async fn find_expired_chunk_md5s(
+    db: &impl ConnectionTrait,
+    cutoff: chrono::NaiveDateTime,
+) -> anyhow::Result<Vec<String>> {
+    let _ = (db, cutoff);
+    todo!("W6-3 任务 4：过期分片会话查询")
 }
 
 #[cfg(test)]
@@ -416,5 +477,150 @@ mod tests {
             .exec(&db)
             .await
             .unwrap();
+    }
+
+    // ── W6-3 断点续传：分片 repo 测试（sys_file_chunk 真删，唯一 md5 造数防互扰） ──
+
+    use crate::entity::sys_file_chunk;
+
+    /// 唯一 32 位小写 hex md5（SEQ 自增零填充，格式与真实 md5 同形，防测试间互扰）。
+    fn unique_chunk_md5() -> String {
+        format!("{:032x}", SEQ.fetch_add(1, Ordering::Relaxed) as u128)
+    }
+
+    /// 造一条分片记录；created_at 可控（过期测试需要）。
+    async fn seed_chunk(
+        db: &impl ConnectionTrait,
+        file_md5: &str,
+        chunk_number: u32,
+        chunk_path: &str,
+        created_at: chrono::NaiveDateTime,
+    ) -> sys_file_chunk::Model {
+        sys_file_chunk::ActiveModel {
+            file_md5: Set(file_md5.to_string()),
+            chunk_number: Set(chunk_number),
+            chunk_path: Set(chunk_path.to_string()),
+            created_at: Set(created_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn upsert_chunk_overwrites_path_without_duplication() {
+        let db = test_txn().await;
+        let md5 = unique_chunk_md5();
+
+        upsert_chunk(&db, &md5, 0, "chunks/a/00000.part")
+            .await
+            .unwrap();
+        upsert_chunk(&db, &md5, 0, "chunks/a/00000.part.retried")
+            .await
+            .unwrap();
+
+        let rows = sys_file_chunk::Entity::find()
+            .filter(sys_file_chunk::Column::FileMd5.eq(&md5))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "同 (md5, number) 二次 upsert 行数不翻倍");
+        assert_eq!(
+            rows[0].chunk_path, "chunks/a/00000.part.retried",
+            "重传应覆盖 chunk_path（幂等语义）"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_chunk_numbers_by_md5_returns_sorted_and_scoped() {
+        let db = test_txn().await;
+        let md5 = unique_chunk_md5();
+        let other = unique_chunk_md5();
+        let now = chrono::Local::now().naive_local();
+
+        seed_chunk(&db, &md5, 2, "p2", now).await;
+        seed_chunk(&db, &md5, 0, "p0", now).await;
+        seed_chunk(&db, &md5, 1, "p1", now).await;
+        seed_chunk(&db, &other, 5, "p5", now).await;
+
+        let numbers = find_chunk_numbers_by_md5(&db, &md5).await.unwrap();
+        assert_eq!(
+            numbers,
+            vec![0, 1, 2],
+            "只含该 md5 且按 chunk_number 升序（2,0,1 插入序打乱）"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_chunks_by_md5_clears_rows() {
+        let db = test_txn().await;
+        let md5 = unique_chunk_md5();
+        let now = chrono::Local::now().naive_local();
+        seed_chunk(&db, &md5, 0, "p0", now).await;
+        seed_chunk(&db, &md5, 1, "p1", now).await;
+
+        let deleted = delete_chunks_by_md5(&db, &md5).await.unwrap();
+        let left = find_chunk_numbers_by_md5(&db, &md5).await.unwrap();
+        let again = delete_chunks_by_md5(&db, &md5).await.unwrap();
+
+        assert_eq!(deleted, 2, "应删除该会话 2 条分片");
+        assert!(left.is_empty(), "删除后该 md5 无残留记录");
+        assert_eq!(again, 0, "重复删除返回 0（幂等）");
+    }
+
+    #[tokio::test]
+    async fn find_file_by_md5_hits_undeleted_only() {
+        let db = test_txn().await;
+        let md5 = unique_chunk_md5();
+        let now = chrono::Local::now().naive_local();
+        let live = seed(&db, &format!("{md5}live.txt"), now, None).await;
+        let _dead = seed(&db, &format!("{md5}dead.txt"), now, Some(now)).await;
+
+        // seed 夹具不写 md5（NotSet → NULL），用 update_many 分别盖同值 md5
+        use sea_orm::sea_query::Expr;
+        for id in [live.id, _dead.id] {
+            sys_file::Entity::update_many()
+                .filter(sys_file::Column::Id.eq(id))
+                .col_expr(sys_file::Column::Md5, Expr::value(md5.as_str()))
+                .exec(&db)
+                .await
+                .unwrap();
+        }
+
+        let hit = find_file_by_md5(&db, &md5).await.unwrap();
+        assert_eq!(
+            hit.map(|m| m.id),
+            Some(live.id),
+            "md5 命中未删记录；软删行（同 md5）不得命中"
+        );
+        let miss = find_file_by_md5(&db, &unique_chunk_md5()).await.unwrap();
+        assert!(miss.is_none(), "无命中返回 None");
+    }
+
+    #[tokio::test]
+    async fn find_expired_chunk_md5s_returns_old_only() {
+        let db = test_txn().await;
+        let old_md5 = unique_chunk_md5();
+        let fresh_md5 = unique_chunk_md5();
+        let now = chrono::Local::now().naive_local();
+
+        seed_chunk(&db, &old_md5, 0, "p0", now - chrono::Duration::hours(2)).await;
+        seed_chunk(&db, &old_md5, 1, "p1", now - chrono::Duration::hours(2)).await;
+        seed_chunk(&db, &fresh_md5, 0, "p0", now).await;
+
+        let expired = find_expired_chunk_md5s(&db, now - chrono::Duration::hours(1))
+            .await
+            .unwrap();
+        assert!(expired.contains(&old_md5), "过期会话应在列：{expired:?}");
+        assert!(
+            !expired.contains(&fresh_md5),
+            "未过期会话不得在列：{expired:?}"
+        );
+        assert_eq!(
+            expired.iter().filter(|m| **m == old_md5).count(),
+            1,
+            "同会话多片应去重为一个 md5"
+        );
     }
 }

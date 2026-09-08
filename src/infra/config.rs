@@ -33,6 +33,15 @@ pub struct Upload {
     pub max_size_mb: u64,
     /// 扩展名白名单（小写、去点）；必填，缺失时启动即失败，避免静默拒绝所有上传
     pub allows: Vec<String>,
+    /// 断点续传：整文件大小上限（MB），独立于普通上传的 max_size_mb
+    #[serde(default = "default_resumable_max_size_mb")]
+    pub resumable_max_size_mb: u64,
+    /// 断点续传：单分片大小上限（MB）
+    #[serde(default = "default_chunk_max_size_mb")]
+    pub chunk_max_size_mb: u64,
+    /// 断点续传：分片保留时长（小时），超时未合并由 chunk_cleanup 清理
+    #[serde(default = "default_chunk_retain_hours")]
+    pub chunk_retain_hours: u64,
 }
 
 fn default_upload_dir() -> String {
@@ -43,9 +52,29 @@ fn default_max_size_mb() -> u64 {
     10
 }
 
+fn default_resumable_max_size_mb() -> u64 {
+    500
+}
+
+fn default_chunk_max_size_mb() -> u64 {
+    10
+}
+
+fn default_chunk_retain_hours() -> u64 {
+    24
+}
+
 impl Upload {
     pub fn max_size_bytes(&self) -> u64 {
         self.max_size_mb * 1024 * 1024
+    }
+
+    pub fn resumable_max_size_bytes(&self) -> u64 {
+        self.resumable_max_size_mb * 1024 * 1024
+    }
+
+    pub fn chunk_max_size_bytes(&self) -> u64 {
+        self.chunk_max_size_mb * 1024 * 1024
     }
 }
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +103,15 @@ impl Config {
         }
         if cfg.upload.max_size_mb == 0 {
             anyhow::bail!("config.upload.max_size_mb 必须大于 0");
+        }
+        if cfg.upload.resumable_max_size_mb == 0 {
+            anyhow::bail!("config.upload.resumable_max_size_mb 必须大于 0");
+        }
+        if cfg.upload.chunk_max_size_mb == 0 {
+            anyhow::bail!("config.upload.chunk_max_size_mb 必须大于 0");
+        }
+        if cfg.upload.chunk_retain_hours == 0 {
+            anyhow::bail!("config.upload.chunk_retain_hours 必须大于 0");
         }
         if cfg.upload.dir.trim().is_empty() {
             anyhow::bail!("config.upload.dir 不能为空");

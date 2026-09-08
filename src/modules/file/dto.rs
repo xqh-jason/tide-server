@@ -122,3 +122,68 @@ pub struct UploadInput {
     /// multipart 解析后 FilePart 的临时文件路径（作用域结束自动清理，落盘需 rename/copy）
     pub temp_path: PathBuf,
 }
+
+// ── W6-3 断点续传 DTO（规格 docs/superpowers/specs/2026-09-08-w6-resumable-upload-design.md §5） ──
+
+/// 断点探测请求。
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkStatusReq {
+    /// 整文件 md5（32 位小写 hex，断点会话标识）
+    pub file_md5: String,
+    /// 原始文件名（合并成功后入库用）
+    pub file_name: String,
+}
+
+/// 断点探测响应：`done=true` 时 `file` 为秒传结果，前端直接使用、跳过上传。
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkStatusResp {
+    /// 已传分片序号（0-based，升序）
+    pub uploaded: Vec<u32>,
+    /// 整文件是否已存在（秒传）
+    pub done: bool,
+    /// 秒传命中的文件（含 url）
+    pub file: Option<FileUploadResp>,
+}
+
+/// 分片上传业务入参（handler 从 multipart `file` 字段 + 文本字段组装）。
+#[derive(Debug, Clone)]
+pub struct ChunkUploadInput {
+    /// 整文件 md5（32 位小写 hex）
+    pub file_md5: String,
+    /// 原始文件名（含扩展名，白名单校验依据）
+    pub file_name: String,
+    /// 分片序号（0-based）
+    pub chunk_number: u32,
+    /// 分片总数
+    pub chunk_total: u32,
+    /// 分片字节数
+    pub size: u64,
+    /// multipart 临时文件路径（落盘需 rename/copy 转存）
+    pub temp_path: PathBuf,
+}
+
+/// 分片合并请求。
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkMergeReq {
+    /// 整文件 md5（合并后流式重算复核）
+    pub file_md5: String,
+    /// 原始文件名（含扩展名，入库 name 与白名单校验依据）
+    pub file_name: String,
+    /// 分片总数（须与分片上传声明一致）
+    pub chunk_total: u32,
+    /// 整文件声明字节数（≤ resumable_max_size_mb，落库前按实际复核）
+    pub size: u64,
+    /// Content-Type（缺省 application/octet-stream）
+    pub mime: Option<String>,
+}
+
+/// 放弃上传请求（幂等，md5 无分片也返回成功）。
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkRemoveReq {
+    /// 整文件 md5
+    pub file_md5: String,
+}

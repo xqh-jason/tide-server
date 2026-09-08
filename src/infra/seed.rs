@@ -8,7 +8,10 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
-use crate::entity::{sys_api, sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+use crate::entity::{
+    sys_api, sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role, sys_role_menu,
+    sys_user, sys_user_role,
+};
 use crate::utils::crypt;
 
 /// admin 初始密码（开发环境约定）。
@@ -464,14 +467,24 @@ const fn api(
 const API_SEEDS: &[ApiSeed] = &[
     // 用户管理（POST /api/v1/user/*，排除 info / access-codes 契约端点）
     api("/api/v1/user/list", "POST", "用户列表查询", "用户管理"),
-    api("/api/v1/user/by-username", "POST", "按用户名查询用户", "用户管理"),
+    api(
+        "/api/v1/user/by-username",
+        "POST",
+        "按用户名查询用户",
+        "用户管理",
+    ),
     api("/api/v1/user/create", "POST", "用户新增", "用户管理"),
     api("/api/v1/user/update", "POST", "用户修改", "用户管理"),
     api("/api/v1/user/get", "POST", "用户详情", "用户管理"),
     api("/api/v1/user/update-status", "POST", "用户启停", "用户管理"),
     api("/api/v1/user/delete", "POST", "用户删除", "用户管理"),
     api("/api/v1/user/list-all", "POST", "全量用户列表", "用户管理"),
-    api("/api/v1/user/list-all-includes-soft-deleted", "POST", "全量用户列表（含软删，审计筛选）", "用户管理"),
+    api(
+        "/api/v1/user/list-all-includes-soft-deleted",
+        "POST",
+        "全量用户列表（含软删，审计筛选）",
+        "用户管理",
+    ),
     // 角色管理
     api("/api/v1/role/list", "POST", "角色列表查询", "角色管理"),
     api("/api/v1/role/create", "POST", "角色新增", "角色管理"),
@@ -480,7 +493,12 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/role/delete", "POST", "角色删除", "角色管理"),
     api("/api/v1/role/update-status", "POST", "角色启停", "角色管理"),
     api("/api/v1/role/list-all", "POST", "全量角色列表", "角色管理"),
-    api("/api/v1/role/list-all-enabled", "POST", "启用角色列表", "角色管理"),
+    api(
+        "/api/v1/role/list-all-enabled",
+        "POST",
+        "启用角色列表",
+        "角色管理",
+    ),
     // 菜单管理
     api("/api/v1/menu/list", "POST", "菜单列表查询", "菜单管理"),
     api("/api/v1/menu/create", "POST", "菜单新增", "菜单管理"),
@@ -488,17 +506,67 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/menu/get", "POST", "菜单详情", "菜单管理"),
     api("/api/v1/menu/delete", "POST", "菜单删除", "菜单管理"),
     // 数据字典（类型 + 字典项）
-    api("/api/v1/dictionary/list", "POST", "字典类型列表查询", "数据字典"),
-    api("/api/v1/dictionary/create", "POST", "字典类型新增", "数据字典"),
-    api("/api/v1/dictionary/update", "POST", "字典类型修改", "数据字典"),
+    api(
+        "/api/v1/dictionary/list",
+        "POST",
+        "字典类型列表查询",
+        "数据字典",
+    ),
+    api(
+        "/api/v1/dictionary/create",
+        "POST",
+        "字典类型新增",
+        "数据字典",
+    ),
+    api(
+        "/api/v1/dictionary/update",
+        "POST",
+        "字典类型修改",
+        "数据字典",
+    ),
     api("/api/v1/dictionary/get", "POST", "字典类型详情", "数据字典"),
-    api("/api/v1/dictionary/delete", "POST", "字典类型删除", "数据字典"),
-    api("/api/v1/dictionary/get-by-type", "POST", "按类型查询字典项（通用）", "数据字典"),
-    api("/api/v1/dictionary-detail/list", "POST", "字典项列表查询", "数据字典"),
-    api("/api/v1/dictionary-detail/create", "POST", "字典项新增", "数据字典"),
-    api("/api/v1/dictionary-detail/update", "POST", "字典项修改", "数据字典"),
-    api("/api/v1/dictionary-detail/get", "POST", "字典项详情", "数据字典"),
-    api("/api/v1/dictionary-detail/delete", "POST", "字典项删除", "数据字典"),
+    api(
+        "/api/v1/dictionary/delete",
+        "POST",
+        "字典类型删除",
+        "数据字典",
+    ),
+    api(
+        "/api/v1/dictionary/get-by-type",
+        "POST",
+        "按类型查询字典项（通用）",
+        "数据字典",
+    ),
+    api(
+        "/api/v1/dictionary-detail/list",
+        "POST",
+        "字典项列表查询",
+        "数据字典",
+    ),
+    api(
+        "/api/v1/dictionary-detail/create",
+        "POST",
+        "字典项新增",
+        "数据字典",
+    ),
+    api(
+        "/api/v1/dictionary-detail/update",
+        "POST",
+        "字典项修改",
+        "数据字典",
+    ),
+    api(
+        "/api/v1/dictionary-detail/get",
+        "POST",
+        "字典项详情",
+        "数据字典",
+    ),
+    api(
+        "/api/v1/dictionary-detail/delete",
+        "POST",
+        "字典项删除",
+        "数据字典",
+    ),
     // 接口管理
     api("/api/v1/sys-api/list", "POST", "API 列表查询", "接口管理"),
     api("/api/v1/sys-api/create", "POST", "API 新增", "接口管理"),
@@ -506,18 +574,62 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/sys-api/get", "POST", "API 详情", "接口管理"),
     api("/api/v1/sys-api/delete", "POST", "API 删除", "接口管理"),
     // 操作日志
-    api("/api/v1/operation-log/list", "POST", "操作日志列表查询", "操作日志"),
-    api("/api/v1/operation-log/get", "POST", "操作日志详情", "操作日志"),
-    api("/api/v1/operation-log/delete", "POST", "操作日志删除", "操作日志"),
-    api("/api/v1/operation-log/delete-batch", "POST", "操作日志批量删除", "操作日志"),
+    api(
+        "/api/v1/operation-log/list",
+        "POST",
+        "操作日志列表查询",
+        "操作日志",
+    ),
+    api(
+        "/api/v1/operation-log/get",
+        "POST",
+        "操作日志详情",
+        "操作日志",
+    ),
+    api(
+        "/api/v1/operation-log/delete",
+        "POST",
+        "操作日志删除",
+        "操作日志",
+    ),
+    api(
+        "/api/v1/operation-log/delete-batch",
+        "POST",
+        "操作日志批量删除",
+        "操作日志",
+    ),
     // 登录日志
-    api("/api/v1/login-log/list", "POST", "登录日志列表查询", "登录日志"),
+    api(
+        "/api/v1/login-log/list",
+        "POST",
+        "登录日志列表查询",
+        "登录日志",
+    ),
     api("/api/v1/login-log/get", "POST", "登录日志详情", "登录日志"),
-    api("/api/v1/login-log/delete", "POST", "登录日志删除", "登录日志"),
-    api("/api/v1/login-log/delete-batch", "POST", "登录日志批量删除", "登录日志"),
+    api(
+        "/api/v1/login-log/delete",
+        "POST",
+        "登录日志删除",
+        "登录日志",
+    ),
+    api(
+        "/api/v1/login-log/delete-batch",
+        "POST",
+        "登录日志批量删除",
+        "登录日志",
+    ),
     // 文件管理（download 为 GET）
     api("/api/v1/file/list", "POST", "文件列表查询", "文件管理"),
     api("/api/v1/file/upload", "POST", "文件上传", "文件管理"),
+    api(
+        "/api/v1/file/chunk/status",
+        "POST",
+        "断点续传探测",
+        "文件管理",
+    ),
+    api("/api/v1/file/chunk/upload", "POST", "分片上传", "文件管理"),
+    api("/api/v1/file/chunk/merge", "POST", "分片合并", "文件管理"),
+    api("/api/v1/file/chunk/remove", "POST", "分片清理", "文件管理"),
     api("/api/v1/file/get", "POST", "文件详情", "文件管理"),
     api("/api/v1/file/download", "GET", "文件下载", "文件管理"),
     api("/api/v1/file/delete", "POST", "文件删除", "文件管理"),
@@ -528,7 +640,12 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/config/get", "POST", "参数详情", "参数配置"),
     api("/api/v1/config/delete", "POST", "参数删除", "参数配置"),
     // 网站设置（GET get 为公开接口，不登记）
-    api("/api/v1/site-config/update", "POST", "网站设置更新", "网站设置"),
+    api(
+        "/api/v1/site-config/update",
+        "POST",
+        "网站设置更新",
+        "网站设置",
+    ),
     // 定时任务
     api("/api/v1/job/list", "POST", "任务列表查询", "定时任务"),
     api("/api/v1/job/create", "POST", "任务新增", "定时任务"),
@@ -538,10 +655,20 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/job/update-status", "POST", "任务启停", "定时任务"),
     api("/api/v1/job/run-once", "POST", "任务立即执行", "定时任务"),
     // 任务日志
-    api("/api/v1/job-log/list", "POST", "执行日志列表查询", "任务日志"),
+    api(
+        "/api/v1/job-log/list",
+        "POST",
+        "执行日志列表查询",
+        "任务日志",
+    ),
     api("/api/v1/job-log/get", "POST", "执行日志详情", "任务日志"),
     api("/api/v1/job-log/delete", "POST", "执行日志删除", "任务日志"),
-    api("/api/v1/job-log/delete-batch", "POST", "执行日志批量删除", "任务日志"),
+    api(
+        "/api/v1/job-log/delete-batch",
+        "POST",
+        "执行日志批量删除",
+        "任务日志",
+    ),
 ];
 
 /// 启动初始化：确保开发种子数据存在（幂等，可重复调用）。
@@ -718,6 +845,27 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             handler_name: Set(crate::task::login_log_cleanup::HANDLER_NAME.to_string()),
             status: Set(1),
             remark: Set("种子示例：每日 03:30:00 清理 90 天前登录日志".to_string()),
+            created_by: Set(admin_id),
+            updated_by: Set(admin_id),
+            ..Default::default()
+        }
+        .insert(db)
+        .await?;
+    }
+
+    // 5.1 断点续传分片清理任务（幂等按 job_name；每小时整点执行）
+    const CHUNK_CLEANUP_JOB_NAME: &str = "分片文件每小时清理";
+    let chunk_cleanup_job = sys_job::Entity::find()
+        .filter(sys_job::Column::JobName.eq(CHUNK_CLEANUP_JOB_NAME))
+        .one(db)
+        .await?;
+    if chunk_cleanup_job.is_none() {
+        sys_job::ActiveModel {
+            job_name: Set(CHUNK_CLEANUP_JOB_NAME.to_string()),
+            cron_expr: Set("0 0 * * * *".to_string()),
+            handler_name: Set(crate::task::chunk_cleanup::HANDLER_NAME.to_string()),
+            status: Set(1),
+            remark: Set("内置任务：每小时清理超过保留期未合并的断点续传分片".to_string()),
             created_by: Set(admin_id),
             updated_by: Set(admin_id),
             ..Default::default()
@@ -1017,7 +1165,11 @@ mod tests {
         assert_eq!(count as usize, API_SEEDS.len(), "全部 API 种子应存在");
 
         // 契约端点不应被登记（登记即 fail-closed 会拒绝非超管用户）
-        for contract_path in ["/api/v1/user/info", "/api/v1/user/access-codes", "/api/v1/user/menus"] {
+        for contract_path in [
+            "/api/v1/user/info",
+            "/api/v1/user/access-codes",
+            "/api/v1/user/menus",
+        ] {
             let leaked = sys_api::Entity::find()
                 .filter(sys_api::Column::Path.eq(contract_path))
                 .count(&db)
