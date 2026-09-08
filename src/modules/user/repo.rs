@@ -3,7 +3,9 @@ use crate::entity::{sys_role, sys_user, sys_user_role};
 use crate::modules::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseConnection, QueryOrder, TransactionTrait};
+use sea_orm::{
+    Condition, ConnectionTrait, DatabaseTransaction, QueryOrder,
+};
 
 /// 查询单个有效用户（排除软删除）。
 pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
@@ -64,6 +66,7 @@ pub async fn find_roles_by_user_id(
 /// 分页 + 动态过滤查询（列表接口核心）：
 /// - 过滤条件用 `Condition` 动态拼接（有值才 add，无值跳过）
 /// - 分页用 `PaginatorTrait::paginate`，`page_index` 为 0-based
+///
 /// 返回 `PageData<Model>`（总条数 / 总页数 / 当前页数据）。
 pub async fn find_page(
     db: &impl ConnectionTrait,
@@ -104,22 +107,18 @@ pub async fn find_page(
     crate::utils::paginate(select, db, page_index, page_size).await
 }
 
-/// 事务创建用户并批量绑定角色关联（`role_ids` 为空则不建关联）。
-///
-/// `actor_id` 为操作人，审计字段（`created_by` / `updated_by`）由 repo 统一盖章，
-/// 调用方无需在 ActiveModel 中设置。
-pub async fn create_user_with_links(
-    db: &DatabaseConnection,
+/// 事务内实现：插入用户 + 角色关联（不 begin/commit，边界由调用方负责）。
+pub(crate) async fn create_user_in_tx(
+    txn: &DatabaseTransaction,
     user: sys_user::ActiveModel,
     role_ids: Vec<u64>,
     actor_id: u64,
 ) -> anyhow::Result<sys_user::Model> {
-    let txn = db.begin().await?;
     // 创建场景：创建人与更新人同源
     let mut user = user;
     user.created_by = Set(actor_id);
     user.updated_by = Set(actor_id);
-    let user = user.insert(&txn).await?;
+    let user = user.insert(txn).await?;
 
     if !role_ids.is_empty() {
         let user_role_ids = role_ids
@@ -130,33 +129,30 @@ pub async fn create_user_with_links(
             });
 
         sys_user_role::Entity::insert_many(user_role_ids)
-            .exec(&txn)
+            .exec(txn)
             .await?;
     }
-
-    txn.commit().await?;
 
     Ok(user)
 }
 
-/// 事务更新用户并重建角色关联（先删旧关联，再插新关联）。
-pub async fn update_user_with_links(
-    db: &DatabaseConnection,
+/// 事务内实现：更新用户 + 重建角色关联（不 begin/commit，边界由调用方负责）。
+pub(crate) async fn update_user_in_tx(
+    txn: &DatabaseTransaction,
     user: sys_user::ActiveModel,
     role_ids: Vec<u64>,
     actor_id: u64,
 ) -> anyhow::Result<sys_user::Model> {
-    let txn = db.begin().await?;
     // 更新场景：只刷新更新人；created_by 保持 NotSet，不会被覆盖
     let mut user = user;
     user.updated_by = Set(actor_id);
-    let user = user.update(&txn).await?;
+    let user = user.update(txn).await?;
 
     if !role_ids.is_empty() {
         // 先删除旧角色关联
         sys_user_role::Entity::delete_many()
             .filter(sys_user_role::Column::UserId.eq(user.id))
-            .exec(&txn)
+            .exec(txn)
             .await?;
 
         // 再插入新角色关联
@@ -168,11 +164,9 @@ pub async fn update_user_with_links(
             });
 
         sys_user_role::Entity::insert_many(user_role_ids)
-            .exec(&txn)
+            .exec(txn)
             .await?;
     }
-
-    txn.commit().await?;
 
     Ok(user)
 }
@@ -190,25 +184,24 @@ pub async fn update_user(
     Ok(true)
 }
 
-/// 软删除用户：同一事务内物理清空 `sys_user_role` 角色关联，并把主表
-/// `deleted_at` 置为当前时间（软删；username 保留占用唯一键，防重建撞名）。
-pub async fn soft_delete_user(db: &DatabaseConnection, id: u64) -> anyhow::Result<()> {
-    let txn = db.begin().await?;
-
+/// 事务内实现：清空角色关联 + 软删主表（不 begin/commit，边界由调用方负责）。
+pub(crate) async fn soft_delete_user_in_tx(
+    txn: &DatabaseTransaction,
+    id: u64,
+) -> anyhow::Result<()> {
     // 物理清空角色关联（关系表硬删除约定）
     sys_user_role::Entity::delete_many()
         .filter(sys_user_role::Column::UserId.eq(id))
-        .exec(&txn)
+        .exec(txn)
         .await?;
 
     // 软删主表（不存在或已软删时静默跳过，不报错）
-    if let Some(user) = sys_user::Entity::find_by_id(id).one(&txn).await? {
+    if let Some(user) = sys_user::Entity::find_by_id(id).one(txn).await? {
         let mut user: sys_user::ActiveModel = user.into();
         user.deleted_at = Set(Some(chrono::Local::now().naive_local()));
-        user.update(&txn).await?;
+        user.update(txn).await?;
     }
 
-    txn.commit().await?;
     Ok(())
 }
 
@@ -265,18 +258,13 @@ mod tests {
             nickname: Set("测试用户".to_string()),
             ..Default::default()
         };
-        let inserted = model.insert(&db).await.unwrap();
+        let _inserted = model.insert(&db).await.unwrap();
 
         // 2. 查询并断言
         let found = find_by_username(&db, &username).await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().username, username);
 
-        // 3. 清理（delete_by_id 是 Entity 的方法）
-        sys_user::Entity::delete_by_id(inserted.id)
-            .exec(&db)
-            .await
-            .unwrap();
     }
 
     #[tokio::test]
@@ -299,7 +287,7 @@ mod tests {
             nickname: Set("分页测试".to_string()),
             ..Default::default()
         };
-        let inserted = model.insert(&db).await.unwrap();
+        let _inserted = model.insert(&db).await.unwrap();
 
         // 关键词命中 + 0-based 第 0 页
         let data = find_page(
@@ -332,10 +320,6 @@ mod tests {
         .unwrap();
         assert_eq!(data.total, 0);
 
-        sys_user::Entity::delete_by_id(inserted.id)
-            .exec(&db)
-            .await
-            .unwrap();
     }
 
     /// find_roles_by_user_id 只返回启用且未删的角色：停用/软删角色不贡献
@@ -408,14 +392,13 @@ mod tests {
     }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn create_user_with_links_supports_empty_role_ids() {
-        let db = test_db().await;
+        let txn = test_txn().await;
         let username = unique_name("create_user_empty_roles");
 
-        let created = create_user_with_links(
-            &db,
+        let created = create_user_in_tx(&txn,
             sys_user::ActiveModel {
                 username: Set(username.clone()),
                 password: Set("hashed-password".to_string()),
@@ -428,7 +411,7 @@ mod tests {
         .await
         .unwrap();
 
-        let found = find_by_username(&db, &username)
+        let found = find_by_username(&txn, &username)
             .await
             .unwrap()
             .expect("用户应已创建");
@@ -436,20 +419,11 @@ mod tests {
 
         let links = sys_user_role::Entity::find()
             .filter(sys_user_role::Column::UserId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
         assert!(links.is_empty());
 
-        sys_user_role::Entity::delete_many()
-            .filter(sys_user_role::Column::UserId.eq(created.id))
-            .exec(&db)
-            .await
-            .unwrap();
-        sys_user::Entity::delete_by_id(created.id)
-            .exec(&db)
-            .await
-            .unwrap();
     }
 
     #[tokio::test]
@@ -473,11 +447,6 @@ mod tests {
 
         let found = find_by_username(&db, &username).await.unwrap();
 
-        // 无论当前实现是否过滤软删除，都先物理清理测试数据，避免失败时残留。
-        sys_user::Entity::delete_by_id(inserted.id)
-            .exec(&db)
-            .await
-            .unwrap();
 
         assert!(found.is_none(), "已删除用户不应被普通业务查询找到");
     }
@@ -489,7 +458,7 @@ mod tests {
         let live_username = format!("{keyword}_live");
         let deleted_username = format!("{keyword}_deleted");
 
-        let live = sys_user::ActiveModel {
+        let _live = sys_user::ActiveModel {
             username: Set(live_username.clone()),
             password: Set("x".to_string()),
             nickname: Set("正常分页用户".to_string()),
@@ -525,14 +494,6 @@ mod tests {
         )
         .await;
 
-        sys_user::Entity::delete_by_id(live.id)
-            .exec(&db)
-            .await
-            .unwrap();
-        sys_user::Entity::delete_by_id(deleted.id)
-            .exec(&db)
-            .await
-            .unwrap();
 
         let data = result.unwrap();
         assert_eq!(data.total, 1);
@@ -607,21 +568,6 @@ mod tests {
             .map(|role| role.role_key)
             .collect::<Vec<_>>();
 
-        sys_user_role::Entity::delete_many()
-            .filter(sys_user_role::Column::UserId.eq(user.id))
-            .exec(&db)
-            .await
-            .unwrap();
-        for role in roles {
-            sys_role::Entity::delete_by_id(role.id)
-                .exec(&db)
-                .await
-                .unwrap();
-        }
-        sys_user::Entity::delete_by_id(user.id)
-            .exec(&db)
-            .await
-            .unwrap();
 
         assert_eq!(found_keys.len(), 1);
         assert!(found_keys.contains(&enabled_key));
@@ -646,29 +592,16 @@ mod tests {
         .id
     }
 
-    /// 清理：先删关联表，再删主表（含操作人）。
-    async fn cleanup_users(db: &impl ConnectionTrait, ids: &[u64]) {
-        for id in ids {
-            sys_user_role::Entity::delete_many()
-                .filter(sys_user_role::Column::UserId.eq(*id))
-                .exec(db)
-                .await
-                .unwrap();
-        }
-        for id in ids {
-            sys_user::Entity::delete_by_id(*id).exec(db).await.unwrap();
-        }
-    }
+
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn create_user_with_links_stamps_actor_as_creator_and_updater() {
-        let db = test_db().await;
-        let actor_id = seed_actor(&db).await;
+        let txn = test_txn().await;
+        let actor_id = seed_actor(&txn).await;
 
-        let created = create_user_with_links(
-            &db,
+        let created = create_user_in_tx(&txn,
             sys_user::ActiveModel {
                 username: Set(unique_name("audit_target")),
                 password: Set("x".to_string()),
@@ -684,19 +617,17 @@ mod tests {
         assert_eq!(created.created_by, actor_id);
         assert_eq!(created.updated_by, actor_id);
 
-        cleanup_users(&db, &[created.id, actor_id]).await;
     }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn update_user_with_links_refreshes_updated_by_and_keeps_created_by() {
-        let db = test_db().await;
-        let creator_id = seed_actor(&db).await;
-        let updater_id = seed_actor(&db).await;
+        let txn = test_txn().await;
+        let creator_id = seed_actor(&txn).await;
+        let updater_id = seed_actor(&txn).await;
 
-        let created = create_user_with_links(
-            &db,
+        let created = create_user_in_tx(&txn,
             sys_user::ActiveModel {
                 username: Set(unique_name("audit_target")),
                 password: Set("x".to_string()),
@@ -710,8 +641,7 @@ mod tests {
         .unwrap();
 
         // 换另一个操作人做局部更新：updated_by 应刷新，created_by 保持原值
-        let updated = update_user_with_links(
-            &db,
+        let updated = update_user_in_tx(&txn,
             sys_user::ActiveModel {
                 id: Set(created.id),
                 nickname: Set("改名后".to_string()),
@@ -729,20 +659,19 @@ mod tests {
         // 通用更新（状态更新场景）同样要盖章
         let mut model: sys_user::ActiveModel = updated.into();
         model.status = Set(0);
-        let after_status = update_user(&db, model, updater_id).await.unwrap();
+        let after_status = update_user(&txn, model, updater_id).await.unwrap();
         assert!(after_status);
-        let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();
+        let reloaded = find_by_id(&txn, created.id).await.unwrap().unwrap();
         assert_eq!(reloaded.updated_by, updater_id);
 
-        cleanup_users(&db, &[created.id, creator_id, updater_id]).await;
     }
 
     #[tokio::test]
-    // 例外：被测函数内部自带事务（sea-orm 1.1.20 真库无 savepoint，
-    // 事务内嵌套 begin 会隐式提交），故用真实连接 + 手写清理。
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn soft_delete_user_clears_role_links_and_marks_deleted() {
-        let db = test_db().await;
-        let actor_id = seed_actor(&db).await;
+        let txn = test_txn().await;
+        let actor_id = seed_actor(&txn).await;
         let role = sys_role::ActiveModel {
             role_name: Set(unique_name("del_role")),
             role_key: Set(unique_name("del_role_key")),
@@ -751,12 +680,11 @@ mod tests {
             remark: Set(String::new()),
             ..Default::default()
         }
-        .insert(&db)
+        .insert(&txn)
         .await
         .unwrap();
 
-        let created = create_user_with_links(
-            &db,
+        let created = create_user_in_tx(&txn,
             sys_user::ActiveModel {
                 username: Set(unique_name("del_target")),
                 password: Set("x".to_string()),
@@ -772,29 +700,24 @@ mod tests {
         // 绑定后确有关联
         let links = sys_user_role::Entity::find()
             .filter(sys_user_role::Column::UserId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
         assert_eq!(links.len(), 1, "删除前应存在角色关联");
 
-        soft_delete_user(&db, created.id).await.unwrap();
+        soft_delete_user_in_tx(&txn, created.id).await.unwrap();
 
         assert!(
-            find_by_id(&db, created.id).await.unwrap().is_none(),
+            find_by_id(&txn, created.id).await.unwrap().is_none(),
             "软删后活记录查询不可见"
         );
         let links_after = sys_user_role::Entity::find()
             .filter(sys_user_role::Column::UserId.eq(created.id))
-            .all(&db)
+            .all(&txn)
             .await
             .unwrap();
         assert!(links_after.is_empty(), "角色关联应被物理清空");
 
-        cleanup_users(&db, &[created.id, actor_id]).await;
-        sys_role::Entity::delete_by_id(role.id)
-            .exec(&db)
-            .await
-            .unwrap();
     }
 
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
@@ -949,10 +872,5 @@ mod tests {
         .unwrap();
         assert_eq!(updated_before.total, 1);
 
-        sys_user::Entity::delete_many()
-            .filter(sys_user::Column::Id.is_in([a.id, b.id]))
-            .exec(&db)
-            .await
-            .unwrap();
     }
 }

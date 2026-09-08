@@ -185,16 +185,10 @@ pub struct CreateUserReq {
     /// 邮箱，空串表示未设置
     #[serde(default)]
     pub email: String,
-    /// 状态：`1` 启用（默认）、`0` 禁用
-    #[serde(default = "default_user_status")]
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
     /// 角色 ID 列表，允许空（不绑角色）
     pub role_ids: Vec<u64>,
-}
-
-/// `status` 缺省时默认启用（`1`）。
-fn default_user_status() -> i8 {
-    1
 }
 
 /// 更新用户请求。值域校验见同模块 `validate.rs` 中 `impl Validate for UpdateUserReq`。
