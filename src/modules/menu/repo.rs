@@ -6,9 +6,7 @@ use crate::modules::menu::dto::MenuFilter;
 use crate::utils::PageData;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{
-    Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect,
-};
+use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
 
 /// 查询全部启用菜单（W2 超管全量菜单树；按角色过滤 W3 再做）。
 pub async fn find_all_menus(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Model>> {
@@ -255,14 +253,6 @@ mod tests {
         .insert(db)
         .await
         .unwrap()
-    }
-
-    async fn cleanup(db: &impl ConnectionTrait, ids: &[u64]) {
-        sys_menu::Entity::delete_many()
-            .filter(sys_menu::Column::Id.is_in(ids.iter().copied()))
-            .exec(db)
-            .await
-            .unwrap();
     }
 
     /// 创建菜单：ActiveModel 显式字段按值落库。

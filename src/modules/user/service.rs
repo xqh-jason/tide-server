@@ -8,9 +8,7 @@ use crate::modules::permission::{
     service as permission_service,
 };
 use crate::modules::role::service as role_service;
-use crate::modules::user::dto::{
-    CreateUserReq, UpdateUserReq, UserBriefResp, UserFilter, UserListReq,
-};
+use crate::modules::user::dto::{CreateUserReq, UpdateUserReq, UserFilter, UserListReq};
 use crate::modules::user::repo as user_repo;
 use crate::utils::PageData;
 use crate::utils::crypt;
@@ -336,7 +334,10 @@ pub async fn delete_user(db: &DatabaseConnection, user_id: u64) -> Result<(), Ap
 /// 事务内完整业务（存在性 + admin 保护 + 软删），不管理事务边界。
 ///
 /// 供对外入口（本文件 `delete_user`）与测试外层事务调用。
-pub(crate) async fn delete_user_in_tx(txn: &DatabaseTransaction, user_id: u64) -> Result<(), AppError> {
+pub(crate) async fn delete_user_in_tx(
+    txn: &DatabaseTransaction,
+    user_id: u64,
+) -> Result<(), AppError> {
     let Some(user) = user_repo::find_by_id(txn, user_id).await? else {
         return Err(AppError::Biz("用户不存在".into()));
     };
@@ -348,10 +349,18 @@ pub(crate) async fn delete_user_in_tx(txn: &DatabaseTransaction, user_id: u64) -
     Ok(())
 }
 
-/// 全量用户（含软删）：审计过滤的用户选择器数据源，不做分页与脱敏以外的处理。
-pub async fn list_all_users(txn: &impl ConnectionTrait) -> Result<Vec<UserBriefResp>, AppError> {
+/// 全量用户（排除软删）：用户管理场景的数据源，不做分页处理。
+pub async fn list_all_users(txn: &impl ConnectionTrait) -> Result<Vec<sys_user::Model>, AppError> {
+    let models = user_repo::find_all_users(txn).await?;
+    Ok(models)
+}
+
+/// 全量用户（含软删）：审计过滤的用户选择器数据源，用于历史引用回显。
+pub async fn list_all_users_includes_soft_deleted(
+    txn: &impl ConnectionTrait,
+) -> Result<Vec<sys_user::Model>, AppError> {
     let models = user_repo::find_all_include_deleted(txn).await?;
-    Ok(models.into_iter().map(UserBriefResp::from).collect())
+    Ok(models)
 }
 
 /// 更新用户状态（启用/禁用）；内置超管 admin 不允许修改状态（审计字段由 repo 盖章）。
@@ -375,6 +384,7 @@ pub async fn update_user_status(
     user_repo::update_user(txn, user, actor_id).await?;
     Ok(true)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,8 +581,6 @@ mod tests {
         .unwrap();
     }
 
-
-
     #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
@@ -741,7 +749,8 @@ mod tests {
         bind_user_role(&txn, actor.id, super_fixture.role.id).await;
         let username = unique_name("create_user_invalid_role");
 
-        let result = create_user_in_tx(&txn, actor.id, request(username.clone(), vec![u64::MAX])).await;
+        let result =
+            create_user_in_tx(&txn, actor.id, request(username.clone(), vec![u64::MAX])).await;
         assert!(
             matches!(result, Err(AppError::Biz(ref message)) if message.contains("角色")),
             "应返回业务错误: {result:?}"
@@ -1114,9 +1123,10 @@ mod tests {
         bind_user_role(&txn, actor.id, super_fixture.role.id).await;
 
         let target = {
-            let created = create_user_in_tx(&txn, actor.id, request(unique_name("to_admin"), vec![]))
-                .await
-                .unwrap();
+            let created =
+                create_user_in_tx(&txn, actor.id, request(unique_name("to_admin"), vec![]))
+                    .await
+                    .unwrap();
             let saved = user_repo::find_by_id(&txn, created.id)
                 .await
                 .unwrap()
@@ -1151,9 +1161,10 @@ mod tests {
         bind_user_role(&txn, actor.id, super_fixture.role.id).await;
 
         let other = {
-            let created = create_user_in_tx(&txn, actor.id, request(unique_name("dup_owner"), vec![]))
-                .await
-                .unwrap();
+            let created =
+                create_user_in_tx(&txn, actor.id, request(unique_name("dup_owner"), vec![]))
+                    .await
+                    .unwrap();
             let saved = user_repo::find_by_id(&txn, created.id)
                 .await
                 .unwrap()
@@ -1161,9 +1172,10 @@ mod tests {
             saved
         };
         let target = {
-            let created = create_user_in_tx(&txn, actor.id, request(unique_name("dup_self"), vec![]))
-                .await
-                .unwrap();
+            let created =
+                create_user_in_tx(&txn, actor.id, request(unique_name("dup_self"), vec![]))
+                    .await
+                    .unwrap();
             let saved = user_repo::find_by_id(&txn, created.id)
                 .await
                 .unwrap()
@@ -1232,7 +1244,6 @@ mod tests {
             .unwrap()
             .expect("软删记录仍存在（username 占位）");
         assert!(deleted.deleted_at.is_some(), "deleted_at 应已置位");
-
     }
 
     #[tokio::test]
@@ -1255,42 +1266,145 @@ mod tests {
         );
     }
 
-    /// 全量用户（含软删）：软删用户必须出现，且只暴露 id / username。
+    /// list_all_users 只返回未软删用户；软删用户不应出现在用户管理场景的全量列表。
     #[tokio::test]
-    async fn list_all_users_includes_soft_deleted() {
-        use crate::entity::sys_user;
-        use sea_orm::ActiveModelTrait;
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
+    async fn list_all_users_excludes_soft_deleted() {
+        use sea_orm::ActiveValue::Set;
 
-        let db = test_txn().await;
-        let name_a = unique_name("all_user_a");
-        let name_b = unique_name("all_user_b_del");
+        let txn = test_txn().await;
 
         let a = sys_user::ActiveModel {
-            username: Set(name_a.clone()),
+            username: Set(unique_name("all_user_a")),
             password: Set("x".to_string()),
             nickname: Set("存活用户".to_string()),
             ..Default::default()
         }
-        .insert(&db)
+        .insert(&txn)
         .await
         .unwrap();
         let mut b = sys_user::ActiveModel {
-            username: Set(name_b.clone()),
+            username: Set(unique_name("all_user_b_del")),
             password: Set("x".to_string()),
             nickname: Set("软删用户".to_string()),
             ..Default::default()
         };
         b.deleted_at = Set(Some(chrono::Local::now().naive_local()));
-        let b = b.insert(&db).await.unwrap();
+        let b = b.insert(&txn).await.unwrap();
 
-        let users = list_all_users(&db).await.unwrap();
+        let users = list_all_users(&txn).await.unwrap();
+        assert!(users.iter().any(|u| u.id == a.id), "存活用户应出现");
+        assert!(
+            !users.iter().any(|u| u.id == b.id),
+            "软删用户不应出现在不含软删的全量列表"
+        );
+    }
+
+    /// list_all_users_includes_soft_deleted：软删用户必须出现（审计过滤的
+    /// 历史引用回显场景），存活与软删通过 deleted_at 区分。
+    #[tokio::test]
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
+    // 测试名不能与被测函数同名，否则 tests 模块内遮蔽 super 导入的同名函数。
+    async fn list_all_users_soft_deleted_still_visible() {
+        use sea_orm::ActiveValue::Set;
+
+        let txn = test_txn().await;
+
+        let a = sys_user::ActiveModel {
+            username: Set(unique_name("all_user_a")),
+            password: Set("x".to_string()),
+            nickname: Set("存活用户".to_string()),
+            ..Default::default()
+        }
+        .insert(&txn)
+        .await
+        .unwrap();
+        let mut b = sys_user::ActiveModel {
+            username: Set(unique_name("all_user_b_del")),
+            password: Set("x".to_string()),
+            nickname: Set("软删用户".to_string()),
+            ..Default::default()
+        };
+        b.deleted_at = Set(Some(chrono::Local::now().naive_local()));
+        let b = b.insert(&txn).await.unwrap();
+
+        let users = list_all_users_includes_soft_deleted(&txn).await.unwrap();
         let a_hit = users.iter().find(|u| u.id == a.id);
         let b_hit = users.iter().find(|u| u.id == b.id);
         assert!(a_hit.is_some(), "存活用户应出现");
         assert!(b_hit.is_some(), "软删用户也应出现（历史引用回显场景）");
-        assert_eq!(a_hit.unwrap().username, name_a);
-        assert_eq!(b_hit.unwrap().username, name_b);
-        assert!(!a_hit.unwrap().deleted, "存活用户 deleted 应为 false");
-        assert!(b_hit.unwrap().deleted, "软删用户 deleted 应为 true");
+        assert!(a_hit.unwrap().deleted_at.is_none(), "存活用户 deleted_at 应为空");
+        assert!(b_hit.unwrap().deleted_at.is_some(), "软删用户 deleted_at 应已置位");
+    }
+
+    /// 非 super 操作者不得在创建用户时分配内置超管角色（防自我提权）。
+    #[tokio::test]
+    async fn create_user_rejects_super_role_assignment_by_non_super_actor() {
+        let txn = test_txn().await;
+        let actor = seed_actor(&txn, None).await;
+        let role = seed_role(&txn, 1, None).await;
+        let menu = seed_button(&txn, SYSTEM_USER_CREATE).await;
+        bind_user_role(&txn, actor.id, role.id).await;
+        bind_role_menu(&txn, role.id, menu.id).await;
+        let super_fixture = load_super_role(&txn).await;
+
+        let target = unique_name("elevate_create_target");
+        let result = create_user_in_tx(
+            &txn,
+            actor.id,
+            request(target, vec![super_fixture.role.id]),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("不允许分配")),
+            "非 super 操作者创建用户时分配超管角色应被拒绝: {result:?}"
+        );
+    }
+
+    /// 非 super 操作者不得在更新用户时附加内置超管角色。
+    #[tokio::test]
+    async fn update_user_rejects_super_role_assignment_by_non_super_actor() {
+        let txn = test_txn().await;
+        let actor = seed_actor(&txn, None).await;
+        let role = seed_role(&txn, 1, None).await;
+        let menu = seed_button(&txn, SYSTEM_USER_UPDATE).await;
+        bind_user_role(&txn, actor.id, role.id).await;
+        bind_role_menu(&txn, role.id, menu.id).await;
+        let super_fixture = load_super_role(&txn).await;
+        let target = seed_target_user(&txn, unique_name("elevate_update_target")).await;
+
+        let result = update_user_in_tx(
+            &txn,
+            actor.id,
+            update_request(target.id, target.username.clone(), vec![super_fixture.role.id]),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("不允许分配")),
+            "非 super 操作者更新用户时附加超管角色应被拒绝: {result:?}"
+        );
+    }
+
+    /// super 操作者可以分配内置超管角色（自身即超管，无提权问题）。
+    #[tokio::test]
+    async fn update_user_allows_super_role_assignment_by_super_actor() {
+        let txn = test_txn().await;
+        let actor = seed_actor(&txn, None).await;
+        let super_fixture = load_super_role(&txn).await;
+        bind_user_role(&txn, actor.id, super_fixture.role.id).await;
+        let target = seed_target_user(&txn, unique_name("super_assign_target")).await;
+
+        let result = update_user_in_tx(
+            &txn,
+            actor.id,
+            update_request(target.id, target.username.clone(), vec![super_fixture.role.id]),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "super 操作者分配超管角色应成功: {result:?}"
+        );
     }
 }

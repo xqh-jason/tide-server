@@ -3,9 +3,7 @@ use crate::entity::{sys_role, sys_user, sys_user_role};
 use crate::modules::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{
-    Condition, ConnectionTrait, DatabaseTransaction, QueryOrder,
-};
+use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder};
 
 /// 查询单个有效用户（排除软删除）。
 pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
@@ -215,6 +213,16 @@ pub async fn find_all_include_deleted(db: &impl ConnectionTrait) -> anyhow::Resu
     Ok(models)
 }
 
+/// 全量用户（仅排除软删），按 id 升序。
+pub async fn find_all_users(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Model>> {
+    let models = sys_user::Entity::find()
+        .filter(sys_user::Column::DeletedAt.is_null())
+        .order_by_asc(sys_user::Column::Id)
+        .all(db)
+        .await?;
+    Ok(models)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,7 +272,6 @@ mod tests {
         let found = find_by_username(&db, &username).await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().username, username);
-
     }
 
     #[tokio::test]
@@ -319,7 +326,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(data.total, 0);
-
     }
 
     /// find_roles_by_user_id 只返回启用且未删的角色：停用/软删角色不贡献
@@ -398,7 +404,8 @@ mod tests {
         let txn = test_txn().await;
         let username = unique_name("create_user_empty_roles");
 
-        let created = create_user_in_tx(&txn,
+        let created = create_user_in_tx(
+            &txn,
             sys_user::ActiveModel {
                 username: Set(username.clone()),
                 password: Set("hashed-password".to_string()),
@@ -423,7 +430,6 @@ mod tests {
             .await
             .unwrap();
         assert!(links.is_empty());
-
     }
 
     #[tokio::test]
@@ -446,7 +452,6 @@ mod tests {
         mark_deleted.update(&db).await.unwrap();
 
         let found = find_by_username(&db, &username).await.unwrap();
-
 
         assert!(found.is_none(), "已删除用户不应被普通业务查询找到");
     }
@@ -493,7 +498,6 @@ mod tests {
             10,
         )
         .await;
-
 
         let data = result.unwrap();
         assert_eq!(data.total, 1);
@@ -568,7 +572,6 @@ mod tests {
             .map(|role| role.role_key)
             .collect::<Vec<_>>();
 
-
         assert_eq!(found_keys.len(), 1);
         assert!(found_keys.contains(&enabled_key));
         assert!(!found_keys.contains(&disabled_key));
@@ -592,8 +595,6 @@ mod tests {
         .id
     }
 
-
-
     #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
@@ -601,7 +602,8 @@ mod tests {
         let txn = test_txn().await;
         let actor_id = seed_actor(&txn).await;
 
-        let created = create_user_in_tx(&txn,
+        let created = create_user_in_tx(
+            &txn,
             sys_user::ActiveModel {
                 username: Set(unique_name("audit_target")),
                 password: Set("x".to_string()),
@@ -616,7 +618,6 @@ mod tests {
 
         assert_eq!(created.created_by, actor_id);
         assert_eq!(created.updated_by, actor_id);
-
     }
 
     #[tokio::test]
@@ -627,7 +628,8 @@ mod tests {
         let creator_id = seed_actor(&txn).await;
         let updater_id = seed_actor(&txn).await;
 
-        let created = create_user_in_tx(&txn,
+        let created = create_user_in_tx(
+            &txn,
             sys_user::ActiveModel {
                 username: Set(unique_name("audit_target")),
                 password: Set("x".to_string()),
@@ -641,7 +643,8 @@ mod tests {
         .unwrap();
 
         // 换另一个操作人做局部更新：updated_by 应刷新，created_by 保持原值
-        let updated = update_user_in_tx(&txn,
+        let updated = update_user_in_tx(
+            &txn,
             sys_user::ActiveModel {
                 id: Set(created.id),
                 nickname: Set("改名后".to_string()),
@@ -663,7 +666,6 @@ mod tests {
         assert!(after_status);
         let reloaded = find_by_id(&txn, created.id).await.unwrap().unwrap();
         assert_eq!(reloaded.updated_by, updater_id);
-
     }
 
     #[tokio::test]
@@ -684,7 +686,8 @@ mod tests {
         .await
         .unwrap();
 
-        let created = create_user_in_tx(&txn,
+        let created = create_user_in_tx(
+            &txn,
             sys_user::ActiveModel {
                 username: Set(unique_name("del_target")),
                 password: Set("x".to_string()),
@@ -717,7 +720,6 @@ mod tests {
             .await
             .unwrap();
         assert!(links_after.is_empty(), "角色关联应被物理清空");
-
     }
 
     /// 审计字段过滤：created_by/updated_by 精确 + created_at/updated_at 含边界范围。
@@ -871,6 +873,5 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated_before.total, 1);
-
     }
 }

@@ -18,11 +18,10 @@ pub const SYSTEM_USER_CREATE: &str = "system:user:create";
 /// 更新系统用户所需的权限码。
 pub const SYSTEM_USER_UPDATE: &str = "system:user:update";
 
-/// 超级管理员角色键，项目约定拥有全部权限（授权短路依据）。
+/// 超级管理员角色键（内置保留字）：授权判定短路依据（`has_permission` /
+/// `has_api_permission`）；同时作为保留字禁止普通角色创建/改名占用、
+/// 禁止非 super 操作者通过用户管理分配给其他用户。
 pub const SUPER_ROLE_KEY: &str = "super";
 
 /// 内置超管用户名（`seed` 启动时创建并固定重置密码，不允许被编辑）。
 pub const ADMIN_USERNAME: &str = "admin";
-
-/// 超管角色键保留字（与 `SUPER_ROLE_KEY` 同值）：禁止普通角色创建/改名占用该键。
-pub const SUPER_ADMIN_ROLE_KEY: &str = "super";

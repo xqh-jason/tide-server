@@ -145,10 +145,24 @@ pub async fn delete_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<
     Ok(ApiResponse::ok(()))
 }
 
-/// 全量用户（含软删）：审计过滤的用户选择器数据源。
+/// 全量用户（排除软删）：用户管理场景的下拉数据源。
 #[endpoint]
-pub async fn list_all_users(depot: &mut Depot) -> ApiResult<Vec<UserBriefResp>> {
+pub async fn list_all_users(depot: &mut Depot) -> ApiResult<Vec<UserResp>> {
     let state = AppState::from_depot(depot)?;
     let users = user_service::list_all_users(&state.db).await?;
-    Ok(ApiResponse::ok(users))
+    Ok(ApiResponse::ok(
+        users.into_iter().map(UserResp::from).collect(),
+    ))
+}
+
+/// 全量用户（含软删）：审计过滤的用户选择器数据源，仅暴露 id/username/deleted 简要字段。
+#[endpoint]
+pub async fn list_all_users_includes_soft_deleted(
+    depot: &mut Depot,
+) -> ApiResult<Vec<UserBriefResp>> {
+    let state = AppState::from_depot(depot)?;
+    let users = user_service::list_all_users_includes_soft_deleted(&state.db).await?;
+    Ok(ApiResponse::ok(
+        users.into_iter().map(UserBriefResp::from).collect(),
+    ))
 }

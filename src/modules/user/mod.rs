@@ -25,5 +25,9 @@ pub fn routes() -> Router {
         .push(Router::with_path("update-status").post(api::update_user_status))
         .push(Router::with_path("delete").post(api::delete_user))
         // 全量用户（含软删）：审计过滤的用户选择器数据源
-        .push(Router::with_path("all").post(api::list_all_users))
+        .push(
+            Router::with_path("list-all-includes-soft-deleted")
+                .post(api::list_all_users_includes_soft_deleted),
+        )
+        .push(Router::with_path("list-all").post(api::list_all_users))
 }

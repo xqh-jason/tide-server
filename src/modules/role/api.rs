@@ -100,3 +100,23 @@ pub async fn update_role_status(
     role_service::update_role_status(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(()))
 }
+
+/// 全量角色（排除软删，含停用）：角色管理列表外的下拉数据源。
+#[endpoint]
+pub async fn list_all_roles(depot: &mut Depot) -> ApiResult<Vec<RoleResp>> {
+    let state = AppState::from_depot(depot)?;
+    let roles = role_service::get_all_roles(&state.db).await?;
+    Ok(ApiResponse::ok(
+        fill_user_names(&state.db, roles, RoleResp::from).await?,
+    ))
+}
+
+/// 全量启用角色（排除软删与停用）：分配角色等业务场景的下拉数据源。
+#[endpoint]
+pub async fn list_all_enabled_roles(depot: &mut Depot) -> ApiResult<Vec<RoleResp>> {
+    let state = AppState::from_depot(depot)?;
+    let roles = role_service::get_all_enabled_roles(&state.db).await?;
+    Ok(ApiResponse::ok(
+        fill_user_names(&state.db, roles, RoleResp::from).await?,
+    ))
+}

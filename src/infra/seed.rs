@@ -18,9 +18,6 @@ pub const SEED_ADMIN_USERNAME: &str = "admin";
 /// 超级管理员角色键（与 `permission::SUPER_ROLE_KEY` 同值，避免依赖方向循环）。
 const SEED_SUPER_ROLE_KEY: &str = "super";
 
-/// 种子数据的操作人：内置 admin（种子即其所建，与存量数据回填口径一致）。
-const SEED_ACTOR_ID: u64 = 1;
-
 /// 播种互斥锁：ensure_seed 的"先查后插"在并发下不幂等（TOCTOU），
 /// 启动初始化与测试并发调用时通过进程内锁串行化。
 static SEED_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -453,20 +450,24 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         admin.password = Set(password_hash);
         admin.update(db).await?.id
     } else {
-        sys_user::ActiveModel {
+        let inserted = sys_user::ActiveModel {
             username: Set(SEED_ADMIN_USERNAME.to_string()),
             password: Set(password_hash),
             emp_no: Set("admin".to_string()),
             nickname: Set("超级管理员".to_string()),
             status: Set(1),
-            // 种子数据统一记为 admin 所建（id=1），与存量数据回填口径一致
-            created_by: Set(SEED_ACTOR_ID),
-            updated_by: Set(SEED_ACTOR_ID),
             ..Default::default()
         }
         .insert(db)
-        .await?
-        .id
+        .await?;
+        let admin_id = inserted.id;
+        // 种子数据的操作人统一记为 admin 自己：自增 id 非 1 时回填真实 id，
+        // 避免 created_by 指向不存在的用户。
+        let mut audit: sys_user::ActiveModel = inserted.into();
+        audit.created_by = Set(admin_id);
+        audit.updated_by = Set(admin_id);
+        audit.update(db).await?;
+        admin_id
     };
 
     // 2. super 角色：不存在则创建
@@ -483,9 +484,9 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             sort: Set(0),
             status: Set(1),
             remark: Set("系统内置超管角色".to_string()),
-            // 种子数据统一记为 admin 所建（id=1）
-            created_by: Set(SEED_ACTOR_ID),
-            updated_by: Set(SEED_ACTOR_ID),
+            // 种子数据的操作人统一记为 admin 自己
+            created_by: Set(admin_id),
+            updated_by: Set(admin_id),
             ..Default::default()
         }
         .insert(db)
@@ -532,9 +533,9 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
                 menu_type: Set(seed.menu_type),
                 permission: Set(seed.permission.to_string()),
                 status: Set(1),
-                // 种子数据统一记为 admin 所建（id=1）
-                created_by: Set(SEED_ACTOR_ID),
-                updated_by: Set(SEED_ACTOR_ID),
+                // 种子数据的操作人统一记为 admin 自己
+                created_by: Set(admin_id),
+                updated_by: Set(admin_id),
                 ..Default::default()
             }
             .insert(db)
@@ -562,8 +563,8 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
                 "通用启用/禁用状态（1 启用、0 禁用），作为各表 status 字段校验的数据字典"
                     .to_string(),
             ),
-            created_by: Set(SEED_ACTOR_ID),
-            updated_by: Set(SEED_ACTOR_ID),
+            created_by: Set(admin_id),
+            updated_by: Set(admin_id),
             ..Default::default()
         }
         .insert(db)
@@ -585,8 +586,8 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
                 extend: Set(String::new()),
                 sort: Set(*sort),
                 status: Set(1),
-                created_by: Set(SEED_ACTOR_ID),
-                updated_by: Set(SEED_ACTOR_ID),
+                created_by: Set(admin_id),
+                updated_by: Set(admin_id),
                 ..Default::default()
             }
             .insert(db)
@@ -607,8 +608,8 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             handler_name: Set(crate::task::login_log_cleanup::HANDLER_NAME.to_string()),
             status: Set(1),
             remark: Set("种子示例：每日 03:30:00 清理 90 天前登录日志".to_string()),
-            created_by: Set(SEED_ACTOR_ID),
-            updated_by: Set(SEED_ACTOR_ID),
+            created_by: Set(admin_id),
+            updated_by: Set(admin_id),
             ..Default::default()
         }
         .insert(db)
@@ -717,6 +718,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count_before, count_after, "重复播种不应产生重复菜单");
+    }
+
+    /// 审计字段自引用：admin 的 created_by / updated_by 应记为自身 id
+    /// （自增 id 非 1 的库上也成立，避免指向不存在的用户）。
+    #[tokio::test]
+    async fn ensure_seed_admin_audit_fields_reference_itself() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let admin = sys_user::Entity::find()
+            .filter(sys_user::Column::Username.eq(SEED_ADMIN_USERNAME))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("admin 应存在");
+        assert_eq!(admin.created_by, admin.id, "created_by 应为 admin 自身 id");
+        assert_eq!(admin.updated_by, admin.id, "updated_by 应为 admin 自身 id");
     }
 
     /// W5-1：操作日志菜单页面与删除按钮权限码应随种子就绪。

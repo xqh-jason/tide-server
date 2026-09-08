@@ -1,4 +1,4 @@
-use crate::modules::permission::SUPER_ADMIN_ROLE_KEY;
+use crate::modules::permission::SUPER_ROLE_KEY;
 use crate::modules::role::dto::UpdateRoleStatusReq;
 use crate::utils::PageData;
 use crate::{
@@ -8,7 +8,9 @@ use crate::{
     },
     utils::error::AppError,
 };
-use sea_orm::{ActiveValue::Set, ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
+use sea_orm::{
+    ActiveValue::Set, ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait,
+};
 
 use crate::entity::sys_role;
 
@@ -128,14 +130,23 @@ pub(crate) async fn update_role_in_tx(
     actor_id: u64,
     req: &UpdateRoleReq,
 ) -> Result<sys_role::Model, AppError> {
-    let Some(_) = role_repo::find_by_id(txn, req.id).await? else {
+    // 注意：必须先加载库中现有记录，校验其 role_key（而非 req 里的新值），
+    // 否则内置超管角色可被改名转移（如改为 other_key 绕过保留字检查）。
+    let Some(role) = role_repo::find_by_id(txn, req.id).await? else {
         return Err(AppError::Biz("角色不存在".to_string()));
     };
 
-    // 内置超管不允许修改状态。
-    if req.role_key == SUPER_ADMIN_ROLE_KEY {
+    // 内置超管角色不允许修改（role_key / 名称 / 状态 / 菜单 / API 关联均冻结）。
+    if role.role_key == SUPER_ROLE_KEY {
         return Err(AppError::Biz(
-            "系统内置超级管理员角色不允许修改状态".to_string(),
+            "系统内置超级管理员角色不允许修改".to_string(),
+        ));
+    }
+
+    // 保留字：任何普通角色不得改名为内置超管键。
+    if req.role_key == SUPER_ROLE_KEY {
+        return Err(AppError::Biz(
+            "角色键 super 为系统保留字，不允许使用".to_string(),
         ));
     }
 
@@ -195,11 +206,18 @@ pub async fn delete_role(db: &DatabaseConnection, id: u64) -> Result<(), AppErro
     result
 }
 
-/// 事务内完整业务（存在性 + 软删），不管理事务边界。供对外入口与测试外层事务调用。
+/// 事务内完整业务（存在性 + 超管保护 + 软删），不管理事务边界。供对外入口与测试外层事务调用。
 pub(crate) async fn delete_role_in_tx(txn: &DatabaseTransaction, id: u64) -> Result<(), AppError> {
-    let Some(_) = role_repo::find_by_id(txn, id).await? else {
+    let Some(role) = role_repo::find_by_id(txn, id).await? else {
         return Err(AppError::Biz(format!("角色不存在：{id}")));
     };
+    // 内置超管角色不允许删除：删除会使 admin 失去超管短路，且 seed 只补缺不重建，
+    // 系统将永久失守。
+    if role.role_key == SUPER_ROLE_KEY {
+        return Err(AppError::Biz(
+            "系统内置超级管理员角色不允许删除".to_string(),
+        ));
+    }
     role_repo::soft_delete_role_in_tx(txn, id).await?;
     Ok(())
 }
@@ -215,7 +233,7 @@ pub async fn update_role_status(
     };
 
     // 内置超管管理员不允许修改状态。
-    if role.role_key == SUPER_ADMIN_ROLE_KEY {
+    if role.role_key == SUPER_ROLE_KEY {
         return Err(AppError::Biz(
             "系统内置超级管理员角色不允许修改状态".to_string(),
         ));
@@ -239,6 +257,18 @@ pub async fn get_role_menu_ids(db: &impl ConnectionTrait, id: u64) -> Result<Vec
 /// 查询角色关联的 API 权限点 ID 列表（排除软删除）；不存在返回空列表。
 pub async fn get_role_api_ids(db: &impl ConnectionTrait, id: u64) -> Result<Vec<u64>, AppError> {
     Ok(role_repo::find_api_ids_by_role_id(db, id).await?)
+}
+
+/// 全量角色（排除软删，含停用）。
+pub async fn get_all_roles(db: &impl ConnectionTrait) -> Result<Vec<sys_role::Model>, AppError> {
+    Ok(role_repo::find_all(db).await?)
+}
+
+/// 全量启用角色（排除软删与停用）。
+pub async fn get_all_enabled_roles(
+    db: &impl ConnectionTrait,
+) -> Result<Vec<sys_role::Model>, AppError> {
+    Ok(role_repo::find_all_enabled(db).await?)
 }
 
 #[cfg(test)]
@@ -363,12 +393,14 @@ mod tests {
         )
         .await;
 
-        let result_live = create_role_in_tx(&txn,
+        let result_live = create_role_in_tx(
+            &txn,
             ACTOR_ID,
             &create_req(unique("dup_live_name"), key_live.clone()),
         )
         .await;
-        let result_deleted = create_role_in_tx(&txn,
+        let result_deleted = create_role_in_tx(
+            &txn,
             ACTOR_ID,
             &create_req(unique("dup_deleted_name"), key_deleted.clone()),
         )
@@ -406,12 +438,14 @@ mod tests {
             api_ids: Vec::new(),
         };
 
-        let dup = update_role_in_tx(&txn,
+        let dup = update_role_in_tx(
+            &txn,
             ACTOR_ID,
             &update_req(unique("role_b_dup"), key_a.clone()),
         )
         .await;
-        let keep_self = update_role_in_tx(&txn,
+        let keep_self = update_role_in_tx(
+            &txn,
             ACTOR_ID,
             &update_req(unique("role_b_renamed"), key_b.clone()),
         )
@@ -433,7 +467,8 @@ mod tests {
     async fn update_role_returns_biz_error_when_role_missing() {
         let txn = test_txn().await;
 
-        let missing = update_role_in_tx(&txn,
+        let missing = update_role_in_tx(
+            &txn,
             ACTOR_ID,
             &UpdateRoleReq {
                 id: 9_999_999_999,
@@ -461,7 +496,8 @@ mod tests {
             Some(chrono::Local::now().naive_local()),
         )
         .await;
-        let update_deleted = update_role_in_tx(&txn,
+        let update_deleted = update_role_in_tx(
+            &txn,
             ACTOR_ID,
             &UpdateRoleReq {
                 id: deleted.id,
@@ -494,7 +530,8 @@ mod tests {
         let api_a = seed_api(&txn).await;
         let api_b = seed_api(&txn).await;
 
-        let created = create_role_in_tx(&txn,
+        let created = create_role_in_tx(
+            &txn,
             ACTOR_ID,
             &CreateRoleReq {
                 role_name: role_name.clone(),
@@ -509,7 +546,8 @@ mod tests {
         .await
         .expect("创建带关联角色应成功");
 
-        let updated = update_role_in_tx(&txn,
+        let updated = update_role_in_tx(
+            &txn,
             ACTOR_ID,
             &UpdateRoleReq {
                 id: created.id,
@@ -543,7 +581,8 @@ mod tests {
         assert_eq!(api_links[0].api_id, api_a.id);
 
         // 传空数组 = 清空关联
-        update_role_in_tx(&txn,
+        update_role_in_tx(
+            &txn,
             ACTOR_ID,
             &UpdateRoleReq {
                 id: created.id,
@@ -571,5 +610,129 @@ mod tests {
 
         assert!(menu_links_cleared.is_empty(), "空数组应清空菜单关联");
         assert!(api_links_cleared.is_empty(), "空数组应清空 API 关联");
+    }
+
+    /// 已存在的 `super` 是全局唯一角色，测试只能复用；事务内新建则随回滚消失。
+    async fn load_super_role(db: &impl ConnectionTrait) -> sys_role::Model {
+        if let Some(role) = sys_role::Entity::find()
+            .filter(sys_role::Column::RoleKey.eq(SUPER_ROLE_KEY))
+            .one(db)
+            .await
+            .unwrap()
+        {
+            return role;
+        }
+        sys_role::ActiveModel {
+            role_name: Set("超级管理员".to_string()),
+            role_key: Set(SUPER_ROLE_KEY.to_string()),
+            sort: Set(0),
+            status: Set(1),
+            remark: Set("service 层测试创建".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    /// 内置超管角色不允许被更新：关键回归——以前校验的是 req.role_key（新值），
+    /// 把 super 改名为其他 key 可绕过保留字检查，导致 admin 失去超管短路。
+    #[tokio::test]
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
+    async fn update_role_rejects_super_role_even_with_renamed_key() {
+        let txn = test_txn().await;
+        let super_role = load_super_role(&txn).await;
+
+        let rename_away = update_role_in_tx(
+            &txn,
+            ACTOR_ID,
+            &UpdateRoleReq {
+                id: super_role.id,
+                role_name: unique("hijack_name"),
+                role_key: unique("hijack_key"),
+                sort: 0,
+                status: 1,
+                remark: String::new(),
+                menu_ids: Vec::new(),
+                api_ids: Vec::new(),
+            },
+        )
+        .await;
+        assert!(
+            matches!(rename_away, Err(AppError::Biz(_))),
+            "改名转移内置超管 role_key 应被拒绝: {rename_away:?}"
+        );
+
+        let keep_key = update_role_in_tx(
+            &txn,
+            ACTOR_ID,
+            &UpdateRoleReq {
+                id: super_role.id,
+                role_name: unique("keep_key_name"),
+                role_key: SUPER_ROLE_KEY.to_string(),
+                sort: 0,
+                status: 1,
+                remark: String::new(),
+                menu_ids: Vec::new(),
+                api_ids: Vec::new(),
+            },
+        )
+        .await;
+        assert!(
+            matches!(keep_key, Err(AppError::Biz(_))),
+            "原键原值更新内置超管同样应被拒绝: {keep_key:?}"
+        );
+    }
+
+    /// 保留字：任何普通角色不得改名为内置超管键 super。
+    #[tokio::test]
+    async fn update_role_rejects_reserved_super_key() {
+        let txn = test_txn().await;
+        let role = seed_role(&txn, &unique("normal_role"), &unique("normal_key"), 1, None).await;
+
+        let result = update_role_in_tx(
+            &txn,
+            ACTOR_ID,
+            &UpdateRoleReq {
+                id: role.id,
+                role_name: unique("normal_role_v2"),
+                role_key: SUPER_ROLE_KEY.to_string(),
+                sort: 0,
+                status: 1,
+                remark: String::new(),
+                menu_ids: Vec::new(),
+                api_ids: Vec::new(),
+            },
+        )
+        .await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("保留字")),
+            "普通角色改名为 super 应被拒绝: {result:?}"
+        );
+    }
+
+    /// 内置超管角色不允许删除：删除会使 admin 失去超管短路且 seed 无法重建。
+    #[tokio::test]
+    async fn delete_role_rejects_super_role() {
+        let txn = test_txn().await;
+        let super_role = load_super_role(&txn).await;
+
+        let result = delete_role_in_tx(&txn, super_role.id).await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("不允许删除")),
+            "删除内置超管角色应被拒绝: {result:?}"
+        );
+
+        let still_alive = sys_role::Entity::find()
+            .filter(sys_role::Column::Id.eq(super_role.id))
+            .one(&txn)
+            .await
+            .unwrap()
+            .expect("super 角色应仍然存在");
+        assert!(
+            still_alive.deleted_at.is_none(),
+            "super 角色不应被软删除"
+        );
     }
 }

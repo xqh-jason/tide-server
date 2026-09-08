@@ -1,7 +1,7 @@
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{
-    Condition, ConnectionTrait, DatabaseTransaction, QuerySelect,
+    Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect,
 };
 
 use crate::entity::{sys_role, sys_role_api, sys_role_menu};
@@ -192,7 +192,10 @@ pub(crate) async fn update_role_in_tx(
 }
 
 /// 事务内实现：清空菜单/API 关联 + 软删主表（不 begin/commit，边界由调用方负责）。
-pub(crate) async fn soft_delete_role_in_tx(txn: &DatabaseTransaction, id: u64) -> anyhow::Result<bool> {
+pub(crate) async fn soft_delete_role_in_tx(
+    txn: &DatabaseTransaction,
+    id: u64,
+) -> anyhow::Result<bool> {
     // 删除旧菜单关联
     sys_role_menu::Entity::delete_many()
         .filter(sys_role_menu::Column::RoleId.eq(id))
@@ -264,6 +267,27 @@ pub async fn find_api_ids_by_role_id(
         .all(db)
         .await?;
     Ok(api_ids.into_iter().map(|a| a.api_id).collect::<Vec<_>>())
+}
+
+/// 全量角色（仅排除软删，含停用），按 id 升序。
+pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<sys_role::Model>> {
+    let roles = sys_role::Entity::find()
+        .filter(sys_role::Column::DeletedAt.is_null())
+        .order_by_asc(sys_role::Column::Id)
+        .all(db)
+        .await?;
+    Ok(roles)
+}
+
+/// 全量启用角色（排除软删且 `status = 1`），按 id 升序。
+pub async fn find_all_enabled(db: &impl ConnectionTrait) -> anyhow::Result<Vec<sys_role::Model>> {
+    let roles = sys_role::Entity::find()
+        .filter(sys_role::Column::DeletedAt.is_null())
+        .filter(sys_role::Column::Status.eq(1))
+        .order_by_asc(sys_role::Column::Id)
+        .all(db)
+        .await?;
+    Ok(roles)
 }
 
 #[cfg(test)]
@@ -346,7 +370,6 @@ mod tests {
         .unwrap()
     }
 
-
     #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
@@ -366,7 +389,8 @@ mod tests {
             ..Default::default()
         };
 
-        let created = create_role_in_tx(&txn,
+        let created = create_role_in_tx(
+            &txn,
             role,
             vec![menu_a.id, menu_b.id],
             vec![api_a.id, api_b.id],
@@ -436,7 +460,8 @@ mod tests {
         let old_api = seed_api(&txn).await;
         let new_api = seed_api(&txn).await;
         let role_name = unique("update_link_role");
-        let created = create_role_in_tx(&txn,
+        let created = create_role_in_tx(
+            &txn,
             sys_role::ActiveModel {
                 role_name: Set(role_name.clone()),
                 role_key: Set(unique("update_link_key")),
@@ -453,7 +478,8 @@ mod tests {
         .unwrap();
 
         // 更新：改名 + 全量替换关联（旧菜单/旧 API 清掉，换成新菜单/新 API）。
-        let updated = update_role_in_tx(&txn,
+        let updated = update_role_in_tx(
+            &txn,
             sys_role::ActiveModel {
                 id: Set(created.id),
                 role_name: Set(format!("{role_name}_v2")),
@@ -564,7 +590,8 @@ mod tests {
         let menu = seed_menu(&txn).await;
         let api = seed_api(&txn).await;
         let role_name = unique("soft_delete_role");
-        let created = create_role_in_tx(&txn,
+        let created = create_role_in_tx(
+            &txn,
             sys_role::ActiveModel {
                 role_name: Set(role_name.clone()),
                 role_key: Set(unique("soft_delete_key")),
@@ -660,7 +687,8 @@ mod tests {
         let txn = test_txn().await;
         let actor_id = seed_actor(&txn).await;
 
-        let created = create_role_in_tx(&txn,
+        let created = create_role_in_tx(
+            &txn,
             sys_role::ActiveModel {
                 role_name: Set(unique("audit_role")),
                 role_key: Set(unique("audit_role_key")),
@@ -676,7 +704,6 @@ mod tests {
 
         assert_eq!(created.created_by, actor_id);
         assert_eq!(created.updated_by, actor_id);
-
     }
 
     #[tokio::test]
@@ -687,7 +714,8 @@ mod tests {
         let creator_id = seed_actor(&txn).await;
         let updater_id = seed_actor(&txn).await;
 
-        let created = create_role_in_tx(&txn,
+        let created = create_role_in_tx(
+            &txn,
             sys_role::ActiveModel {
                 role_name: Set(unique("audit_role")),
                 role_key: Set(unique("audit_role_key")),
@@ -701,7 +729,8 @@ mod tests {
         .await
         .unwrap();
 
-        let updated = update_role_in_tx(&txn,
+        let updated = update_role_in_tx(
+            &txn,
             sys_role::ActiveModel {
                 id: Set(created.id),
                 role_name: Set(unique("audit_role_renamed")),
@@ -716,7 +745,6 @@ mod tests {
 
         assert_eq!(updated.created_by, creator_id, "创建人不应被更新覆盖");
         assert_eq!(updated.updated_by, updater_id);
-
     }
 
     #[tokio::test]
@@ -727,7 +755,8 @@ mod tests {
         let creator_id = seed_actor(&txn).await;
         let updater_id = seed_actor(&txn).await;
 
-        let created = create_role_in_tx(&txn,
+        let created = create_role_in_tx(
+            &txn,
             sys_role::ActiveModel {
                 role_name: Set(unique("audit_role")),
                 role_key: Set(unique("audit_role_key")),
@@ -749,7 +778,6 @@ mod tests {
         let reloaded = find_by_id(&txn, created.id).await.unwrap().unwrap();
         assert_eq!(reloaded.created_by, creator_id);
         assert_eq!(reloaded.updated_by, updater_id);
-
     }
 
     /// 审计过滤不依赖 keyword：仅传 created_by（不传 keyword）也应生效。
@@ -923,6 +951,5 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated_before.total, 1);
-
     }
 }

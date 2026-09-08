@@ -3,10 +3,18 @@ use serde::Deserialize;
 /// 应用配置，从根目录 config.toml 加载。
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    /// 运行环境：`development` / `production`。开发种子数据（admin 弱口令重置）
+    /// 仅在 `development` 下执行，缺省视为开发环境。
+    #[serde(default = "default_env")]
+    pub env: String,
     pub server: Server,
     pub database: Database,
     pub jwt: Jwt,
     pub upload: Upload,
+}
+
+fn default_env() -> String {
+    "development".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]

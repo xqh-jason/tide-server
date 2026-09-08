@@ -12,8 +12,14 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let mut opt = sea_orm::ConnectOptions::new(config.database.url.clone());
     opt.sqlx_logging(config.database.log_sql);
     let db = sea_orm::Database::connect(opt).await?;
-    // 开发种子数据（幂等）：admin / super / 默认菜单与 RBAC 关联
-    crate::infra::seed::ensure_seed(&db).await?;
+    // 开发种子数据（幂等）：admin / super / 默认菜单与 RBAC 关联。
+    // 仅开发环境执行——种子会每次启动把 admin 密码重置为弱口令 admin123，
+    // 生产环境误挂载会导致系统失守。
+    if config.env == "development" {
+        crate::infra::seed::ensure_seed(&db).await?;
+    } else {
+        tracing::info!("env={} 非开发环境，跳过开发种子数据初始化", config.env);
+    }
     // 定时任务调度器（W6-2）：先建调度器与 AppState，再装载启用任务并 start。
     // 顺序固定「先 add 后 start」——未 start 即 drop 会刷错误日志。
     // 包 Arc 前显式 init：add/start 内部虽有惰性 init（幂等），但首次 add 会打印
