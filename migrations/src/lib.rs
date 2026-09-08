@@ -13,6 +13,9 @@ mod m20260904_000010_add_audit_columns;
 mod m20260905_000011_create_sys_file;
 mod m20260905_000012_create_sys_config_and_sys_site_config;
 mod m20260907_000013_create_sys_job_and_sys_job_log;
+mod m20260908_000014_add_role_api_api_index;
+mod m20260908_000015_add_role_menu_menu_index;
+mod m20260908_000016_normalize_index_names;
 
 pub struct Migrator;
 
@@ -33,6 +36,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260905_000011_create_sys_file::Migration),
             Box::new(m20260905_000012_create_sys_config_and_sys_site_config::Migration),
             Box::new(m20260907_000013_create_sys_job_and_sys_job_log::Migration),
+            Box::new(m20260908_000014_add_role_api_api_index::Migration),
+            Box::new(m20260908_000015_add_role_menu_menu_index::Migration),
+            Box::new(m20260908_000016_normalize_index_names::Migration),
         ]
     }
 }

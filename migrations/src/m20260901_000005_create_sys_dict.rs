@@ -82,8 +82,12 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // 幂等：sys_dict 是原型表，后续 000009 搬迁后会将其删除（其 down 不还原）；
+        // 全量回滚到此步时表可能已不存在，用 IF EXISTS 保证回滚链可完整走完。
         manager
-            .drop_table(Table::drop().table(SysDict::Table).to_owned())
-            .await
+            .get_connection()
+            .execute_unprepared("DROP TABLE IF EXISTS `sys_dict`")
+            .await?;
+        Ok(())
     }
 }
