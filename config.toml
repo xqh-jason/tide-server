@@ -37,9 +37,3 @@ allows = [
   "txt",
   "zip",
 ]
-# 断点续传：整文件大小上限（MB），独立于普通上传的 max_size_mb
-resumable_max_size_mb = 500
-# 断点续传：单分片大小上限（MB）
-chunk_max_size_mb = 10
-# 分片保留时长（小时）：超时未合并的分片由定时任务 chunk_cleanup 清理
-chunk_retain_hours = 24

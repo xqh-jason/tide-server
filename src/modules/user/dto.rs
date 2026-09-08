@@ -216,7 +216,7 @@ pub struct UpdateUserReq {
     pub email: String,
     /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
-    /// 角色 ID 列表（全量替换，允许空即清空角色）
+    /// 角色 ID 列表
     pub role_ids: Vec<u64>,
 }
 

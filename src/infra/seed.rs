@@ -621,15 +621,6 @@ const API_SEEDS: &[ApiSeed] = &[
     // 文件管理（download 为 GET）
     api("/api/v1/file/list", "POST", "文件列表查询", "文件管理"),
     api("/api/v1/file/upload", "POST", "文件上传", "文件管理"),
-    api(
-        "/api/v1/file/chunk/status",
-        "POST",
-        "断点续传探测",
-        "文件管理",
-    ),
-    api("/api/v1/file/chunk/upload", "POST", "分片上传", "文件管理"),
-    api("/api/v1/file/chunk/merge", "POST", "分片合并", "文件管理"),
-    api("/api/v1/file/chunk/remove", "POST", "分片清理", "文件管理"),
     api("/api/v1/file/get", "POST", "文件详情", "文件管理"),
     api("/api/v1/file/download", "GET", "文件下载", "文件管理"),
     api("/api/v1/file/delete", "POST", "文件删除", "文件管理"),
@@ -845,27 +836,6 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             handler_name: Set(crate::task::login_log_cleanup::HANDLER_NAME.to_string()),
             status: Set(1),
             remark: Set("种子示例：每日 03:30:00 清理 90 天前登录日志".to_string()),
-            created_by: Set(admin_id),
-            updated_by: Set(admin_id),
-            ..Default::default()
-        }
-        .insert(db)
-        .await?;
-    }
-
-    // 5.1 断点续传分片清理任务（幂等按 job_name；每小时整点执行）
-    const CHUNK_CLEANUP_JOB_NAME: &str = "分片文件每小时清理";
-    let chunk_cleanup_job = sys_job::Entity::find()
-        .filter(sys_job::Column::JobName.eq(CHUNK_CLEANUP_JOB_NAME))
-        .one(db)
-        .await?;
-    if chunk_cleanup_job.is_none() {
-        sys_job::ActiveModel {
-            job_name: Set(CHUNK_CLEANUP_JOB_NAME.to_string()),
-            cron_expr: Set("0 0 * * * *".to_string()),
-            handler_name: Set(crate::task::chunk_cleanup::HANDLER_NAME.to_string()),
-            status: Set(1),
-            remark: Set("内置任务：每小时清理超过保留期未合并的断点续传分片".to_string()),
             created_by: Set(admin_id),
             updated_by: Set(admin_id),
             ..Default::default()

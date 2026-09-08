@@ -730,9 +730,6 @@ mod tests {
             .await
             .unwrap()
             .expect("super 角色应仍然存在");
-        assert!(
-            still_alive.deleted_at.is_none(),
-            "super 角色不应被软删除"
-        );
+        assert!(still_alive.deleted_at.is_none(), "super 角色不应被软删除");
     }
 }

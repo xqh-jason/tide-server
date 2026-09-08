@@ -117,7 +117,10 @@ pub fn validate_update_user(req: &UpdateUserReq, status_allowed: &[i8]) -> Resul
 }
 
 /// 更新用户状态请求校验。
-pub fn validate_update_user_status(req: &UpdateUserStatusReq, status_allowed: &[i8]) -> Result<(), String> {
+pub fn validate_update_user_status(
+    req: &UpdateUserStatusReq,
+    status_allowed: &[i8],
+) -> Result<(), String> {
     let mut errors = Vec::new();
 
     if req.id == 0 {
@@ -171,7 +174,10 @@ mod tests {
         let mut req = create_req();
         req.username = "u".to_string();
         let err = validate_create_user(&req, &[0, 1]).unwrap_err();
-        assert!(err.contains("用户名长度须在 2-20 个字符之间"), "实际: {err}");
+        assert!(
+            err.contains("用户名长度须在 2-20 个字符之间"),
+            "实际: {err}"
+        );
     }
 
     #[test]
@@ -195,12 +201,18 @@ mod tests {
         let mut req = create_req();
         req.phone.clear();
         req.email.clear();
-        assert!(validate_create_user(&req, &[0, 1]).is_ok(), "空串表示未设置，不应报错");
+        assert!(
+            validate_create_user(&req, &[0, 1]).is_ok(),
+            "空串表示未设置，不应报错"
+        );
     }
 
     #[test]
     fn update_empty_password_passes() {
-        assert!(validate_update_user(&update_req(), &[0, 1]).is_ok(), "密码留空表示不修改");
+        assert!(
+            validate_update_user(&update_req(), &[0, 1]).is_ok(),
+            "密码留空表示不修改"
+        );
     }
 
     #[test]

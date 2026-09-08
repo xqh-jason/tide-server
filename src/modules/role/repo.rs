@@ -1,8 +1,6 @@
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{
-    Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect,
-};
+use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_role, sys_role_api, sys_role_menu};
 use crate::modules::permission::SUPER_ROLE_KEY;

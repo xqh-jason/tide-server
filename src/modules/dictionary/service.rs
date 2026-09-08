@@ -196,7 +196,10 @@ pub async fn get_dictionary_by_type(
 /// （如 `type="status"` 返回 `[0, 1]`，对应 seed 中「禁用/启用」）。
 ///
 /// 复用 `get_dictionary_by_type`：类型缺失/停用会报错；字典项 value 需能解析为 `i8`。
-pub async fn enabled_int_values(db: &impl ConnectionTrait, r#type: &str) -> Result<Vec<i8>, AppError> {
+pub async fn enabled_int_values(
+    db: &impl ConnectionTrait,
+    r#type: &str,
+) -> Result<Vec<i8>, AppError> {
     let (_, details) = get_dictionary_by_type(db, r#type).await?;
     details
         .iter()

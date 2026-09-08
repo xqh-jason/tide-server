@@ -33,8 +33,6 @@ sea-orm = { version = "1", features = [
 chrono = { version = "0.4.20", features = ["serde"] }
 # W5-4 文件上传：存储名 <uuid v4>.<ext> 生成（simple hex，防覆盖与路径穿越）
 uuid = { version = "1", features = ["v4"] }
-# W6-3 断点续传：合并结果流式 md5 重算（与前端声明 fileMd5 双向复核；非安全用途仅作去重标识）
-md5 = "0.8"
 # W5-5 图形验证码：4 位数字 PNG 渲染（含扭曲/噪点 filter）
 captcha = "1"
 # 密码哈希（W2 认证底座：注册/登录共用）

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::entity::sys_operation_log;
 use crate::utils::PageQuery;
+use crate::utils::user_ref::UserRefNames;
 
 /// 操作日志列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
@@ -53,7 +54,16 @@ pub struct OperationLogItem {
     pub error_message: String,
     /// 记录时间（`yyyy-MM-dd HH:mm:ss`）
     pub created_at: String,
+    /// 操作用户名称
+    pub action_by_name: String,
 }
+
+impl UserRefNames for OperationLogItem {
+    fn set_user_ref_names(&mut self, names: &std::collections::HashMap<u64, String>) {
+        self.action_by_name = names.get(&self.user_id).cloned().unwrap_or_default();
+    }
+}
+
 /// 操作日志详情响应：含脱敏截断后的 body / resp。
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -107,6 +117,7 @@ impl From<sys_operation_log::Model> for OperationLogItem {
             agent: m.agent,
             error_message: m.error_message,
             created_at: crate::utils::serde_format::format_datetime(m.created_at),
+            action_by_name: String::new(),
         }
     }
 }

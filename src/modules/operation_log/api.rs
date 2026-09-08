@@ -10,6 +10,7 @@ use crate::modules::operation_log::dto::{
 use crate::modules::operation_log::service as operation_log_service;
 use crate::modules::user::service as user_service;
 use crate::utils::request::JsonBody;
+use crate::utils::user_ref::fill_user_names;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
 /// 操作日志列表（POST + JSON body）：列表项不含 body / resp。
@@ -21,7 +22,12 @@ pub async fn list_operation_logs(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let data = operation_log_service::page_operation_logs(&state.db, &req).await?;
-    Ok(ApiResponse::ok(data.into()))
+    let items = fill_user_names(&state.db, data.items, OperationLogItem::from).await?;
+    Ok(ApiResponse::ok(PageResult::new(
+        data.total,
+        data.total_pages,
+        items,
+    )))
 }
 
 /// 操作日志详情（POST + JSON body：`{ "id": ... }`）：含脱敏截断后的 body / resp。

@@ -16,7 +16,6 @@ mod m20260907_000013_create_sys_job_and_sys_job_log;
 mod m20260908_000014_add_role_api_api_index;
 mod m20260908_000015_add_role_menu_menu_index;
 mod m20260908_000016_normalize_index_names;
-mod m20260908_000018_create_sys_file_chunk_and_add_md5;
 
 pub struct Migrator;
 
@@ -40,7 +39,6 @@ impl MigratorTrait for Migrator {
             Box::new(m20260908_000014_add_role_api_api_index::Migration),
             Box::new(m20260908_000015_add_role_menu_menu_index::Migration),
             Box::new(m20260908_000016_normalize_index_names::Migration),
-            Box::new(m20260908_000018_create_sys_file_chunk_and_add_md5::Migration),
         ]
     }
 }
