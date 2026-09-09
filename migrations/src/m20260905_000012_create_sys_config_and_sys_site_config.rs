@@ -68,7 +68,11 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(""),
                     )
-                    .col(ColumnDef::new(SysConfig::ConfigKey).string_len(64).not_null())
+                    .col(
+                        ColumnDef::new(SysConfig::ConfigKey)
+                            .string_len(64)
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(SysConfig::ConfigValue)
                             .string_len(255)

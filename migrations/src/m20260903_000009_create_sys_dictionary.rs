@@ -159,7 +159,11 @@ impl MigrationTrait for Migration {
                             .default(Expr::current_timestamp())
                             .extra("ON UPDATE CURRENT_TIMESTAMP"),
                     )
-                    .col(ColumnDef::new(SysDictionaryDetail::DeletedAt).date_time().null())
+                    .col(
+                        ColumnDef::new(SysDictionaryDetail::DeletedAt)
+                            .date_time()
+                            .null(),
+                    )
                     .to_owned(),
             )
             .await?;

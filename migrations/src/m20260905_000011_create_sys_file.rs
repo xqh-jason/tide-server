@@ -41,7 +41,11 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(SysFile::Name).string_len(255).not_null())
-                    .col(ColumnDef::new(SysFile::StoredName).string_len(255).not_null())
+                    .col(
+                        ColumnDef::new(SysFile::StoredName)
+                            .string_len(255)
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(SysFile::Ext)
                             .string_len(20)

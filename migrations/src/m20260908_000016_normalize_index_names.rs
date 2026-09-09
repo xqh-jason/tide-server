@@ -16,10 +16,34 @@ pub struct Migration;
 
 /// (表, 旧索引名, 新索引名, 列, 是否唯一)
 const RENAMES: [(&str, &str, &str, &str, bool); 6] = [
-    ("sys_user", "username", "uk_sys_user_username", "username", true),
-    ("sys_role", "role_key", "uk_sys_role_role_key", "role_key", true),
-    ("sys_dictionary", "type", "uk_sys_dictionary_type", "`type`", true),
-    ("sys_job", "uk_job_name", "uk_sys_job_job_name", "job_name", true),
+    (
+        "sys_user",
+        "username",
+        "uk_sys_user_username",
+        "username",
+        true,
+    ),
+    (
+        "sys_role",
+        "role_key",
+        "uk_sys_role_role_key",
+        "role_key",
+        true,
+    ),
+    (
+        "sys_dictionary",
+        "type",
+        "uk_sys_dictionary_type",
+        "`type`",
+        true,
+    ),
+    (
+        "sys_job",
+        "uk_job_name",
+        "uk_sys_job_job_name",
+        "job_name",
+        true,
+    ),
     (
         "sys_api",
         "uk_api_path_method",
@@ -45,9 +69,7 @@ async fn apply(
         let (from, to) = if swap { (old, new) } else { (new, old) };
         let unique_sql = if unique { "UNIQUE" } else { "" };
         let drop_sql = format!("ALTER TABLE `{table}` DROP INDEX `{from}`");
-        let add_sql = format!(
-            "ALTER TABLE `{table}` ADD {unique_sql} INDEX `{to}` ({columns})"
-        );
+        let add_sql = format!("ALTER TABLE `{table}` ADD {unique_sql} INDEX `{to}` ({columns})");
         // drop 幂等：历史环境若缺该索引则跳过（忽略错误）；重复 add 由 DDL 失败即报错兜底。
         let _ = conn.execute_unprepared(&drop_sql).await;
         conn.execute_unprepared(&add_sql).await?;

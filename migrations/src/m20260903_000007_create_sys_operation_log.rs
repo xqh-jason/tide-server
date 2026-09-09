@@ -92,7 +92,11 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(Expr::current_timestamp()),
                     )
-                    .col(ColumnDef::new(SysOperationLog::DeletedAt).date_time().null())
+                    .col(
+                        ColumnDef::new(SysOperationLog::DeletedAt)
+                            .date_time()
+                            .null(),
+                    )
                     .to_owned(),
             )
             .await?;

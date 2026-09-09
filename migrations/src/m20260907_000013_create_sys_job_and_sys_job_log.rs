@@ -120,11 +120,7 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(SysJobLog::JobId).big_unsigned().not_null())
-                    .col(
-                        ColumnDef::new(SysJobLog::JobName)
-                            .string_len(64)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(SysJobLog::JobName).string_len(64).not_null())
                     .col(
                         ColumnDef::new(SysJobLog::Status)
                             .tiny_integer()
