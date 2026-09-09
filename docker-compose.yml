@@ -1,15 +1,76 @@
+# W7-1 一键编排：MySQL（含本地开发端口 3307）+ 后端 API + 前端静态托管
+#
+# 快速开始：
+#   docker compose up -d --build
+# 访问 http://localhost（前端）→ 登录后各页面可用；健康检查 http://localhost/api/v1/health
+#
+# 可覆盖变量见 .env.example（复制为 .env 后生效）：
+#   MYSQL_ROOT_PASSWORD / SVB_JWT_SECRET
+
 services:
   mysql:
     image: mysql:8
     container_name: salvo-vben-mysql
     environment:
       TZ: Asia/Shanghai
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
       MYSQL_DATABASE: salvo_vben
+    command:
+      # 显式 utf8mb4 字符集（与连接串 charset 对齐，中文不乱码）
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
     ports:
+      # 3307 映射保留：本机开发（cargo run）直接复用同一实例
       - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      # $$ 转义让变量在容器内展开（compose 不参与插值）
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: salvo-vben-backend
+    environment:
+      # 容器内固定走 production：不执行弱口令重置等开发种子
+      SVB_ENV: production
+      # 首次部署置 SVB_SEED_ENABLED=true 启动一次（见 README「首次部署 bootstrap」），
+      # 创建初始 admin / super 角色后应改回 false 并立即修改 admin 密码
+      SVB_SEED__ENABLED: ${SVB_SEED_ENABLED:-false}
+      SVB_DATABASE__URL: "mysql://root:${MYSQL_ROOT_PASSWORD:-root}@mysql:3306/salvo_vben?charset=utf8mb4&timezone=%2B08:00"
+      SVB_JWT__SECRET: ${SVB_JWT_SECRET:-dev-secret-change-me}
+    volumes:
+      - backend_uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  frontend:
+    build:
+      # 前端仓库与后端同级（salvo-vben-web），其 Dockerfile + docker/nginx.conf 见该仓库
+      context: ../salvo-vben-web
+      dockerfile: Dockerfile
+    container_name: salvo-vben-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   mysql_data:
+  backend_uploads:

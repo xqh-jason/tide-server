@@ -100,13 +100,13 @@ pub async fn update_job(
     };
     scheduler::validate_handler_name(&req.handler_name)?;
     scheduler::validate_cron_expr(&req.cron_expr)?;
-    if let Some(existing) = job_repo::find_by_job_name_include_deleted(db, &req.job_name).await? {
-        if existing.id != req.id {
-            return Err(AppError::Biz(format!(
-                "任务名称已存在：{}",
-                existing.job_name
-            )));
-        }
+    if let Some(existing) = job_repo::find_by_job_name_include_deleted(db, &req.job_name).await?
+        && existing.id != req.id
+    {
+        return Err(AppError::Biz(format!(
+            "任务名称已存在：{}",
+            existing.job_name
+        )));
     }
 
     let model = sys_job::ActiveModel {

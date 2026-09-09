@@ -217,12 +217,10 @@ pub async fn get_user(
     txn: &impl ConnectionTrait,
     user_id: u64,
 ) -> Result<sys_user::Model, AppError> {
-    let user = user_repo::find_by_id(txn, user_id).await?;
-
-    if user.is_none() {
+    let Some(user) = user_repo::find_by_id(txn, user_id).await? else {
         return Err(AppError::Biz("用户不存在".into()));
-    }
-    Ok(user.unwrap())
+    };
+    Ok(user)
 }
 
 /// 更新用户（发起人 `actor_id` 需拥有 `system:user:update` 权限）。
@@ -664,7 +662,7 @@ mod tests {
             Err(_) => None,
         };
         assert!(
-            matches!(&result, Ok(_)),
+            result.is_ok(),
             "拥有 system:user:create 的普通用户应创建成功: {result:?}"
         );
         assert_eq!(saved_name.as_deref(), Some(target.as_str()));
@@ -691,10 +689,7 @@ mod tests {
                 .map(|user| user.username),
             Err(_) => None,
         };
-        assert!(
-            matches!(&result, Ok(_)),
-            "有效 super 角色应创建成功: {result:?}"
-        );
+        assert!(result.is_ok(), "有效 super 角色应创建成功: {result:?}");
         assert_eq!(saved_name.as_deref(), Some(target.as_str()));
     }
 
@@ -917,7 +912,7 @@ mod tests {
                 sys_role::ActiveModel {
                     role_name: Set(format!("乱序角色 {order}")),
                     role_key: Set(unique_name("unsorted_role")),
-                    sort: Set(order as i32),
+                    sort: Set(order),
                     status: Set(1),
                     remark: Set(String::new()),
                     ..Default::default()
@@ -1162,11 +1157,10 @@ mod tests {
                 create_user_in_tx(&txn, actor.id, request(unique_name("to_admin"), vec![]))
                     .await
                     .unwrap();
-            let saved = user_repo::find_by_id(&txn, created.id)
+            user_repo::find_by_id(&txn, created.id)
                 .await
                 .unwrap()
-                .expect("目标用户应已保存");
-            saved
+                .expect("目标用户应已保存")
         };
 
         let result = update_user_in_tx(
@@ -1200,22 +1194,20 @@ mod tests {
                 create_user_in_tx(&txn, actor.id, request(unique_name("dup_owner"), vec![]))
                     .await
                     .unwrap();
-            let saved = user_repo::find_by_id(&txn, created.id)
+            user_repo::find_by_id(&txn, created.id)
                 .await
                 .unwrap()
-                .expect("占用用户名用户应已保存");
-            saved
+                .expect("占用用户名用户应已保存")
         };
         let target = {
             let created =
                 create_user_in_tx(&txn, actor.id, request(unique_name("dup_self"), vec![]))
                     .await
                     .unwrap();
-            let saved = user_repo::find_by_id(&txn, created.id)
+            user_repo::find_by_id(&txn, created.id)
                 .await
                 .unwrap()
-                .expect("目标用户应已保存");
-            saved
+                .expect("目标用户应已保存")
         };
 
         let result = update_user_in_tx(

@@ -51,10 +51,7 @@ pub async fn has_api_permission(
     let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
 
     // 是否有超级管理员角色
-    if roles
-        .iter()
-        .any(|role| role.role_key == SUPER_ROLE_KEY.to_string())
-    {
+    if roles.iter().any(|role| role.role_key == SUPER_ROLE_KEY) {
         return Ok(true);
     }
 

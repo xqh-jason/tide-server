@@ -115,10 +115,9 @@ pub async fn update_dictionary(
     // 2) type 查重排除自身：占用他人 type 才拒绝
     if let Some(existing) =
         dict_repo::find_dictionary_by_type_include_deleted(db, &req.r#type).await?
+        && existing.id != req.id
     {
-        if existing.id != req.id {
-            return Err(AppError::Biz(format!("字典类型编码已存在：{}", req.r#type)));
-        }
+        return Err(AppError::Biz(format!("字典类型编码已存在：{}", req.r#type)));
     }
 
     // 3) 全量覆盖更新（编辑表单整体提交）；审计字段由 repo 统一盖章
@@ -321,10 +320,9 @@ pub async fn update_dictionary_detail(
     // 3) value 查重排除自身：保留自己的 value 合法，占用他人的才拒绝
     if let Some(existing) =
         dict_repo::find_alive_detail_by_value(db, req.dictionary_id, &req.value).await?
+        && existing.id != req.id
     {
-        if existing.id != req.id {
-            return Err(AppError::Biz(format!("字典值已存在：{}", req.value)));
-        }
+        return Err(AppError::Biz(format!("字典值已存在：{}", req.value)));
     }
 
     // 4) 全量覆盖更新（编辑表单整体提交；审计字段由 repo 统一盖章）

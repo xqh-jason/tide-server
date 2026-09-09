@@ -146,10 +146,10 @@ fn extract_biz_error_message(resp_text: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(resp_text) else {
         return String::new();
     };
-    if value.get("code").and_then(|c| c.as_i64()) == Some(0) {
-        if let Some(message) = value.get("message").and_then(|m| m.as_str()) {
-            return message.to_string();
-        }
+    if value.get("code").and_then(|c| c.as_i64()) == Some(0)
+        && let Some(message) = value.get("message").and_then(|m| m.as_str())
+    {
+        return message.to_string();
     }
     String::new()
 }

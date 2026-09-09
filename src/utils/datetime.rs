@@ -32,7 +32,11 @@ pub fn parse_datetime(
     match NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
         Ok(d) => {
             let (h, mi, s) = if end_of_day { (23, 59, 59) } else { (0, 0, 0) };
-            Ok(Some(d.and_hms_opt(h, mi, s).expect("边界时刻恒合法")))
+            // 边界时刻恒合法（23:59:59 / 00:00:00 均在 NaiveDateTime 表示范围内），
+            // 仅为规避 expect_used deny 而保留该错误分支
+            d.and_hms_opt(h, mi, s)
+                .map(Some)
+                .ok_or_else(|| AppError::Biz(format!("{field} 解析失败")))
         }
         Err(_) => Err(AppError::Biz(format!(
             "{field} 格式错误，应为 yyyy-MM-dd HH:mm:ss 或 yyyy-MM-dd"

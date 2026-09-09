@@ -67,6 +67,8 @@ fn join_errors(errors: Vec<String>) -> Result<(), String> {
 }
 
 /// 菜单写请求通用字段校验（create/update 共用，不含 id）。
+/// 参数镜像前端表单全量字段，一次性校验减少散落的分支，故放行 too_many_arguments。
+#[allow(clippy::too_many_arguments)]
 fn check_common_fields(
     path: &str,
     name: &str,

@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  # 测试与迁移统一连 CI 的 MySQL service container（任务 2 的环境变量覆盖，免改 config.toml）
+  SVB_DATABASE__URL: "mysql://root:root@localhost:3306/salvo_vben?charset=utf8mb4&timezone=%2B08:00"
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 钉住 Rust 工具链
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # 两个 crate（根 + migrations）共享同一 target，无需按 crate 细分缓存
+          workspaces: . -> target
+
+      - name: rustfmt 格式校验
+        run: |
+          cargo fmt --check
+          (cd migrations && cargo fmt --check)
+
+      - name: clippy 静态检查（含测试代码）
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          (cd migrations && cargo clippy --all-targets -- -D warnings)
+
+  test:
+    name: 真库集成测试
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: salvo_vben
+        ports:
+          - "3306:3306"
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 钉住 Rust 工具链
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: 跑全量测试
+        run: |
+          # 先建表（migrations 为独立 crate；config.toml 默认 3307 已被 env 覆盖到 3306）
+          cd migrations && DATABASE_URL="$SVB_DATABASE__URL" cargo run -- up && cd ..
+          cargo test

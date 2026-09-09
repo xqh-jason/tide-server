@@ -1,0 +1,33 @@
+# 运行时/构建产物
+target/
+**/target
+uploads/
+tmp/
+backups/
+
+# 文档与图表（镜像不需要）
+docs/
+graphify-out/
+src/graphify-out/
+.graphify-out/
+
+# 元数据与工具配置
+.git/
+.github/
+.codebuddy/
+.codex/
+.zcode/
+.agents/
+.opencode/
+.claude/
+skills/
+.vscode/
+.idea/
+*.iml
+
+# 环境与本地产物
+.env
+.env.*
+config.local.toml
+*.log
+.DS_Store

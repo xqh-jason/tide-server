@@ -91,10 +91,10 @@ pub async fn update_config(
         .await?
         .ok_or_else(|| AppError::Biz(format!("配置不存在：{}", req.id)))?;
     // key 查重排除自身：改键撞到别的行（含软删占位）→ 拒绝
-    if let Some(hit) = config_repo::find_config_by_key_include_deleted(db, &req.config_key).await? {
-        if hit.id != req.id {
-            return Err(AppError::Biz(format!("配置键已存在：{}", req.config_key)));
-        }
+    if let Some(hit) = config_repo::find_config_by_key_include_deleted(db, &req.config_key).await?
+        && hit.id != req.id
+    {
+        return Err(AppError::Biz(format!("配置键已存在：{}", req.config_key)));
     }
     Ok(config_repo::update_config(
         db,

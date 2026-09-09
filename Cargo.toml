@@ -3,6 +3,20 @@ name = "salvo-vben-admin"
 version = "0.1.0"
 edition = "2024"
 
+# W7-1 工程化基线：CI 与本地共用同一套 lints 口径
+# （cargo clippy --all-targets 与 CI 的 -D warnings 叠加生效）
+[lints.rust]
+# deny 而非 forbid：config.rs 测试模块需操纵进程环境变量（edition 2024 中
+# std::env::set_var/remove_var 为 unsafe），以模块级 #[allow] 局部放行；
+# 生产代码仍受此 lint 约束，禁止引入 unsafe。
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"    # 业务与测试统一走 anyhow/?；unwrap 一律 deny（含 expect 语义之外的懒散解包）
+expect_used = "deny"    # 同上；确需中断语义时用 anyhow::bail 或显式 panic!（带中文说明）
+dbg_macro = "deny"      # 调试宏不得入库
+todo = "deny"           # todo!() 占位只允许存在于计划骨架阶段，工程化后禁止
+
 [dependencies]
 # Web 框架（oapi: #[endpoint] OpenAPI 契约；状态注入用手写中间件，见 src/middleware）
 # 注：affix-state feature 依赖 salvo_extra 0.95.2，rsproxy 镜像暂无该版本，故手写等价实现

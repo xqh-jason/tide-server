@@ -68,7 +68,10 @@ pub async fn get_job(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<JobR
     let req = body.into_inner();
     let model = job_service::get_job(&state.db, req.id).await?;
     let items = fill_user_names(&state.db, vec![model], JobResp::from).await?;
-    Ok(ApiResponse::ok(items.into_iter().next().unwrap().into()))
+    let Some(resp) = items.into_iter().next() else {
+        return Err(AppError::Biz("定时任务不存在".into()));
+    };
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 删除定时任务（POST + JSON body：`{ "id": ... }`，软删并同步移除调度）。

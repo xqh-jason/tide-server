@@ -140,7 +140,7 @@ mod tests {
         let answer = cached_answer(&cache, &resp.captcha_id);
         let wrong = if answer == "0000" { "1111" } else { "0000" };
 
-        let first = verify_captcha(&cache, &resp.captcha_id, &wrong);
+        let first = verify_captcha(&cache, &resp.captcha_id, wrong);
         assert!(matches!(first, Err(AppError::Biz(ref m)) if m.contains("验证码错误")));
         assert!(cache.get(&key).is_none(), "失败同样消费，防反复试同一码");
     }

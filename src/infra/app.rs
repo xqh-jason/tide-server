@@ -12,13 +12,14 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let mut opt = sea_orm::ConnectOptions::new(config.database.url.clone());
     opt.sqlx_logging(config.database.log_sql);
     let db = sea_orm::Database::connect(opt).await?;
-    // 开发种子数据（幂等）：admin / super / 默认菜单与 RBAC 关联。
-    // 仅开发环境执行——种子会每次启动把 admin 密码重置为弱口令 admin123，
-    // 生产环境误挂载会导致系统失守。
-    if config.env == "development" {
+    // 种子数据初始化（幂等）：admin / super / 默认菜单与 RBAC 关联。
+    // development 环境恒执行；生产仅当显式开启 seed.enabled（SVB_SEED__ENABLED=true）
+    // 时执行——供首次部署一次性 bootstrap 初始账号，完成后应立即关闭并改密。
+    // 不置位时跳过，避免每次启动把 admin 密码重置为弱口令导致系统失守。
+    if config.env == "development" || config.seed.enabled {
         crate::infra::seed::ensure_seed(&db).await?;
     } else {
-        tracing::info!("env={} 非开发环境，跳过开发种子数据初始化", config.env);
+        tracing::info!("env={} 且未开启 seed，跳过种子数据初始化", config.env);
     }
     // 定时任务调度器（W6-2）：先建调度器与 AppState，再装载启用任务并 start。
     // 顺序固定「先 add 后 start」——未 start 即 drop 会刷错误日志。
