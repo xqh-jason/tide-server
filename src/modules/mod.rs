@@ -39,6 +39,13 @@
 //!
 //! 涉及关联表写入的 repo 函数统一使用 `<动词>_<实体>_with_links` 后缀
 //! （如 `create_role_with_links` / `create_api_with_links`），无关联直接 `<动词>_<实体>`。
+//!
+//! # 新增业务域装配点（三步）
+//!
+//! 1. `src/entity/mod.rs` 加 `pub mod <域>;`
+//! 2. 本文件 `pub mod <域>;`
+//! 3. 本文件末尾 `DOMAINS` 登记表追加一行（path 前缀 + 公开/受保护 + 出口函数），
+//!    `infra/router.rs` 据此自动挂载，无需再动路由装配。
 
 pub mod auth;
 pub mod captcha;
@@ -55,3 +62,126 @@ pub mod role;
 pub mod sys_api;
 pub mod system;
 pub mod user;
+
+use salvo::prelude::Router;
+
+/// 域出口挂载方式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MountGuard {
+    /// 公开出口：不挂登录 / 操作日志 / 接口授权中间件。
+    Public,
+    /// 受保护出口：挂 `AuthRequired` + `OperationLog` + `ApiPermission` 三件套。
+    Protected,
+}
+
+/// 一条挂载记录：`path` 为 `api/v1` 下的前缀；空串表示直接挂 `api/v1`（出口自带 path，
+/// 如 `system::routes()` 自带 `/health`、`auth::routes()` 自带 `/auth`）。
+/// 同一前缀可并挂多个出口（如 `/user` 下 user CRUD 与 menu 域的菜单契约端点）。
+pub struct DomainMount {
+    pub path: &'static str,
+    pub guard: MountGuard,
+    pub routers: &'static [fn() -> Router],
+}
+
+/// 业务域挂载登记表（装配点收敛）：新增业务域在此追加一行，
+/// `infra/router.rs` 据此循环挂载，不再逐域手写 push + 中间件三件套。
+/// 顺序贴合历史挂载顺序，便于 diff 对照。逐条与原挂载结构等价：
+/// path 前缀、公开/受保护、同前缀并挂出口集合均一致。
+pub const DOMAINS: &[DomainMount] = &[
+    // 健康检查：出口自带 `/health`，公开
+    DomainMount {
+        path: "",
+        guard: MountGuard::Public,
+        routers: &[system::routes],
+    },
+    // 图形验证码：公开（登录前调用）
+    DomainMount {
+        path: "captcha",
+        guard: MountGuard::Public,
+        routers: &[captcha::routes],
+    },
+    // 登录 / 登出：出口自带 `/auth` 前缀，公开
+    DomainMount {
+        path: "",
+        guard: MountGuard::Public,
+        routers: &[auth::routes],
+    },
+    // 用户管理 CRUD + 菜单契约端点（POST /api/v1/user/menus，业务在 menu 域）
+    DomainMount {
+        path: "user",
+        guard: MountGuard::Protected,
+        routers: &[user::routes, menu::user_routes],
+    },
+    // 菜单管理 CRUD：POST /api/v1/menu/{list,create,update,get,delete}
+    DomainMount {
+        path: "menu",
+        guard: MountGuard::Protected,
+        routers: &[menu::routes],
+    },
+    // 数据字典类型：POST /api/v1/dictionary/{list,create,update,get,delete,get-by-type}
+    DomainMount {
+        path: "dictionary",
+        guard: MountGuard::Protected,
+        routers: &[dictionary::routes],
+    },
+    // 数据字典项：POST /api/v1/dictionary-detail/{list,create,update,get,delete}
+    DomainMount {
+        path: "dictionary-detail",
+        guard: MountGuard::Protected,
+        routers: &[dictionary::detail_routes],
+    },
+    // 角色管理：POST /api/v1/role/{list,create,update,get,delete}
+    DomainMount {
+        path: "role",
+        guard: MountGuard::Protected,
+        routers: &[role::routes],
+    },
+    // API 管理：POST /api/v1/sys-api/{list,create,update,get,delete}
+    DomainMount {
+        path: "sys-api",
+        guard: MountGuard::Protected,
+        routers: &[sys_api::routes],
+    },
+    // 操作日志：POST /api/v1/operation-log/{list,get,delete,delete-batch}
+    DomainMount {
+        path: "operation-log",
+        guard: MountGuard::Protected,
+        routers: &[operation_log::routes],
+    },
+    // 登录日志：POST /api/v1/login-log/{list,get,delete,delete-batch}
+    DomainMount {
+        path: "login-log",
+        guard: MountGuard::Protected,
+        routers: &[login_log::routes],
+    },
+    // 文件上传：POST /api/v1/file/{list,upload,get,delete} + GET /api/v1/file/download
+    DomainMount {
+        path: "file",
+        guard: MountGuard::Protected,
+        routers: &[file::routes],
+    },
+    // 参数配置：POST /api/v1/config/{list,create,update,get,delete}
+    DomainMount {
+        path: "config",
+        guard: MountGuard::Protected,
+        routers: &[config::routes],
+    },
+    // 定时任务：POST /api/v1/job/{list,create,update,get,delete,update-status,run-once}
+    DomainMount {
+        path: "job",
+        guard: MountGuard::Protected,
+        routers: &[job::routes],
+    },
+    // 执行日志：POST /api/v1/job-log/{list,get,delete,delete-batch}
+    DomainMount {
+        path: "job-log",
+        guard: MountGuard::Protected,
+        routers: &[job_log::routes],
+    },
+    // 网站设置：GET /api/v1/site-config/get 公开 + POST update（子路由自挂中间件）
+    DomainMount {
+        path: "site-config",
+        guard: MountGuard::Public,
+        routers: &[config::site_routes],
+    },
+];
