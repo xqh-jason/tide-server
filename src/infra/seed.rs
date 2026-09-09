@@ -825,9 +825,11 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
 
     // 4.2 数据字典：执行结果状态（type=execResultStatus）。sys_job_log.status 与
     //     sys_login_log.status 共用展示/取值来源（1 成功、0 失败），与 sys_job.status 的
-    //     「启用/禁用」（通用 type=status）无关。历史版本以 type=jobLogStatus 命名且仅
-    //     覆盖任务日志：若旧行仍在且新编码尚未建立，则原地把 type 改为新编码并泛化
-    //     name/remark，保留 id、审计字段与已挂字典项，让新旧环境收敛到同一编码。
+    //     「启用/禁用」（通用 type=status）无关。前端 job 日志 / 登录日志的 Tag 颜色
+    //     直接取字典项 extend（作为 ElTag type），故两项固定写 success / danger。
+    //     历史版本以 type=jobLogStatus 命名且仅覆盖任务日志：若旧行仍在且新编码尚未建立，
+    //     则原地把 type 改为新编码并泛化 name/remark，保留 id、审计字段与已挂字典项，
+    //     让新旧环境收敛到同一编码。
     const SEED_DICT_TYPE_EXEC_RESULT_STATUS: &str = "execResultStatus";
     const LEGACY_DICT_TYPE_JOB_LOG_STATUS: &str = "jobLogStatus";
     let exec_result_status_dict = sys_dictionary::Entity::find()
@@ -868,27 +870,39 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         .await?
         .id
     };
-    let exec_result_status_items: &[(&str, &str, i32)] = &[("成功", "1", 1), ("失败", "0", 2)];
-    for (label, value, sort) in exec_result_status_items {
+    let exec_result_status_items: &[(&str, &str, &str, i32)] =
+        &[("成功", "1", "success", 1), ("失败", "0", "danger", 2)];
+    for (label, value, extend, sort) in exec_result_status_items {
         let existing = sys_dictionary_detail::Entity::find()
             .filter(sys_dictionary_detail::Column::DictionaryId.eq(exec_result_dict_id))
             .filter(sys_dictionary_detail::Column::Value.eq(*value))
             .one(db)
             .await?;
-        if existing.is_none() {
-            sys_dictionary_detail::ActiveModel {
-                dictionary_id: Set(exec_result_dict_id),
-                label: Set(String::from(*label)),
-                value: Set(String::from(*value)),
-                extend: Set(String::new()),
-                sort: Set(*sort),
-                status: Set(1),
-                created_by: Set(admin_id),
-                updated_by: Set(admin_id),
-                ..Default::default()
+        match existing {
+            None => {
+                sys_dictionary_detail::ActiveModel {
+                    dictionary_id: Set(exec_result_dict_id),
+                    label: Set(String::from(*label)),
+                    value: Set(String::from(*value)),
+                    extend: Set(String::from(*extend)),
+                    sort: Set(*sort),
+                    status: Set(1),
+                    created_by: Set(admin_id),
+                    updated_by: Set(admin_id),
+                    ..Default::default()
+                }
+                .insert(db)
+                .await?;
             }
-            .insert(db)
-            .await?;
+            // 兼容历史脏数据：旧 seed / 旧字典搬迁写入的字典项 extend 为空串，原地补写
+            // 默认颜色（字典管理页可改，此处仅在空串时回填，非空保留运维自定义）。
+            Some(item) if item.extend.is_empty() => {
+                let mut active: sys_dictionary_detail::ActiveModel = item.into();
+                active.extend = Set(String::from(*extend));
+                active.updated_by = Set(admin_id);
+                active.update(db).await?;
+            }
+            Some(_) => {}
         }
     }
 
@@ -1186,6 +1200,78 @@ mod tests {
                 "{permission} 应挂在数据字典菜单下"
             );
         }
+    }
+
+    /// 取指定字典项 extend（测试辅助：按 value 精确取字典项）。
+    async fn dict_item_extend(db: &DatabaseConnection, dict_id: u64, value: &str) -> String {
+        sys_dictionary_detail::Entity::find()
+            .filter(sys_dictionary_detail::Column::DictionaryId.eq(dict_id))
+            .filter(sys_dictionary_detail::Column::Value.eq(value))
+            .one(db)
+            .await
+            .unwrap()
+            .expect("字典项应存在")
+            .extend
+    }
+
+    /// 覆盖指定字典项 extend（测试辅助：模拟脏数据 / 运维自定义）。
+    async fn set_dict_item_extend(
+        db: &DatabaseConnection,
+        dict_id: u64,
+        value: &str,
+        extend: &str,
+    ) {
+        let item = sys_dictionary_detail::Entity::find()
+            .filter(sys_dictionary_detail::Column::DictionaryId.eq(dict_id))
+            .filter(sys_dictionary_detail::Column::Value.eq(value))
+            .one(db)
+            .await
+            .unwrap()
+            .expect("字典项应存在");
+        let mut active: sys_dictionary_detail::ActiveModel = item.into();
+        active.extend = Set(extend.to_string());
+        active.update(db).await.unwrap();
+    }
+
+    /// execResultStatus 字典项 extend 契约（前端 Tag 颜色）：成功=success、失败=danger。
+    /// seed 幂等补写：历史空串 extend 被回填，运维自定义非空值不被覆盖。
+    #[tokio::test]
+    async fn ensure_seed_writes_and_backfills_exec_result_status_extend() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let dict_id = sys_dictionary::Entity::find()
+            .filter(sys_dictionary::Column::Type.eq("execResultStatus"))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("execResultStatus 字典应存在")
+            .id;
+
+        // 1. 种子契约：成功 → success、失败 → danger
+        assert_eq!(dict_item_extend(&db, dict_id, "1").await, "success");
+        assert_eq!(dict_item_extend(&db, dict_id, "0").await, "danger");
+
+        // 2. 历史脏数据（extend 空串）：ensure_seed 应回填默认颜色
+        set_dict_item_extend(&db, dict_id, "1", "").await;
+        ensure_seed(&db).await.unwrap();
+        assert_eq!(
+            dict_item_extend(&db, dict_id, "1").await,
+            "success",
+            "空串 extend 应被 seed 回填"
+        );
+
+        // 3. 运维自定义非空 extend：ensure_seed 不覆盖
+        set_dict_item_extend(&db, dict_id, "1", "warning").await;
+        ensure_seed(&db).await.unwrap();
+        assert_eq!(
+            dict_item_extend(&db, dict_id, "1").await,
+            "warning",
+            "非空 extend 应保留运维自定义"
+        );
+
+        // 收尾恢复默认，保持库状态收敛（中途 panic 遗留非空值也可手动复位）
+        set_dict_item_extend(&db, dict_id, "1", "success").await;
     }
 
     /// API 种子：全部管理端点应随 ensure_seed 落库（含可能被管理员软删的
