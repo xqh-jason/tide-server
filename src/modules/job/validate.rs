@@ -7,8 +7,8 @@
 //! cron / handler_name 的语义校验**委托 `scheduler`**（依赖任务注册表与 cron 解析器，
 //! 属调度基础设施领域知识，不在此重复实现），错误经 `AppError` 的 Display 取文案。
 //! status（启用/禁用）的允许值来自通用数据字典（`type="status"` 启用项，与用户/角色等
-//! 模块一致；执行状态 `type="jobLogStatus"` 属 `sys_job_log`，不用于本域启停校验），
-//! 由调用方预取后传入，通用判断见 `utils::check::check_status`。
+//! 模块一致；执行结果 `type="execResultStatus"` 供 `sys_job_log` 与 `sys_login_log`
+//! 共用，不用于本域启停校验），由调用方预取后传入，通用判断见 `utils::check::check_status`。
 //! service 层保留 scheduler 兜底校验（防非 HTTP 入口旁路）与查库查重。
 
 use crate::modules::job::dto::{CreateJobReq, UpdateJobReq, UpdateJobStatusReq};

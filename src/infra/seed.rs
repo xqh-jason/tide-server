@@ -823,22 +823,42 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         }
     }
 
-    // 4.2 数据字典：定时任务执行状态（type=jobLogStatus）。sys_job_log.status 展示/取值
-    //     来源（1 成功、0 失败），与 sys_job.status 的「启用/禁用」（通用 type=status）无关。
-    const SEED_DICT_TYPE_JOB_LOG_STATUS: &str = "jobLogStatus";
-    let job_log_status_dict = sys_dictionary::Entity::find()
-        .filter(sys_dictionary::Column::Type.eq(SEED_DICT_TYPE_JOB_LOG_STATUS))
+    // 4.2 数据字典：执行结果状态（type=execResultStatus）。sys_job_log.status 与
+    //     sys_login_log.status 共用展示/取值来源（1 成功、0 失败），与 sys_job.status 的
+    //     「启用/禁用」（通用 type=status）无关。历史版本以 type=jobLogStatus 命名且仅
+    //     覆盖任务日志：若旧行仍在且新编码尚未建立，则原地把 type 改为新编码并泛化
+    //     name/remark，保留 id、审计字段与已挂字典项，让新旧环境收敛到同一编码。
+    const SEED_DICT_TYPE_EXEC_RESULT_STATUS: &str = "execResultStatus";
+    const LEGACY_DICT_TYPE_JOB_LOG_STATUS: &str = "jobLogStatus";
+    let exec_result_status_dict = sys_dictionary::Entity::find()
+        .filter(sys_dictionary::Column::Type.eq(SEED_DICT_TYPE_EXEC_RESULT_STATUS))
         .one(db)
         .await?;
-    let job_log_status_dict_id = if let Some(d) = job_log_status_dict {
+    let exec_result_dict_id = if let Some(d) = exec_result_status_dict {
         d.id
+    } else if let Some(d) = sys_dictionary::Entity::find()
+        .filter(sys_dictionary::Column::Type.eq(LEGACY_DICT_TYPE_JOB_LOG_STATUS))
+        .one(db)
+        .await?
+    {
+        // 旧命名迁移：type 改新编码、name/remark 泛化到登录 + 任务双场景；字典项不动
+        let mut active: sys_dictionary::ActiveModel = d.into();
+        active.r#type = Set(SEED_DICT_TYPE_EXEC_RESULT_STATUS.to_string());
+        active.name = Set("执行结果状态".to_string());
+        active.remark = Set(
+            "登录日志（sys_login_log）与任务日志（sys_job_log）共用的执行结果字典（1 成功、0 失败）"
+                .to_string(),
+        );
+        active.updated_by = Set(admin_id);
+        active.update(db).await?.id
     } else {
         sys_dictionary::ActiveModel {
-            name: Set("任务执行状态".to_string()),
-            r#type: Set(SEED_DICT_TYPE_JOB_LOG_STATUS.to_string()),
+            name: Set("执行结果状态".to_string()),
+            r#type: Set(SEED_DICT_TYPE_EXEC_RESULT_STATUS.to_string()),
             status: Set(1),
             remark: Set(
-                "定时任务执行状态，sys_job_log.status 展示的数据字典（1 成功、0 失败）".to_string(),
+                "登录日志（sys_login_log）与任务日志（sys_job_log）共用的执行结果字典（1 成功、0 失败）"
+                    .to_string(),
             ),
             created_by: Set(admin_id),
             updated_by: Set(admin_id),
@@ -848,16 +868,16 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         .await?
         .id
     };
-    let job_log_status_items: &[(&str, &str, i32)] = &[("成功", "1", 1), ("失败", "0", 2)];
-    for (label, value, sort) in job_log_status_items {
+    let exec_result_status_items: &[(&str, &str, i32)] = &[("成功", "1", 1), ("失败", "0", 2)];
+    for (label, value, sort) in exec_result_status_items {
         let existing = sys_dictionary_detail::Entity::find()
-            .filter(sys_dictionary_detail::Column::DictionaryId.eq(job_log_status_dict_id))
+            .filter(sys_dictionary_detail::Column::DictionaryId.eq(exec_result_dict_id))
             .filter(sys_dictionary_detail::Column::Value.eq(*value))
             .one(db)
             .await?;
         if existing.is_none() {
             sys_dictionary_detail::ActiveModel {
-                dictionary_id: Set(job_log_status_dict_id),
+                dictionary_id: Set(exec_result_dict_id),
                 label: Set(String::from(*label)),
                 value: Set(String::from(*value)),
                 extend: Set(String::new()),
