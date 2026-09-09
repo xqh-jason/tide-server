@@ -56,7 +56,7 @@ pub struct UserResp {
     /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
     #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
     pub updated_at: chrono::NaiveDateTime,
-    /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
+    /// 创建人 ID（`sys_user.id`；`0` 表示种子/系统写入）
     pub created_by: u64,
     /// 更新人 ID（`sys_user.id`）
     pub updated_by: u64,
@@ -178,7 +178,7 @@ pub struct CreateUserReq {
     pub username: String,
     /// 初始密码，服务端 Argon2id 哈希后落库
     pub password: String,
-    /// 工号；员工编号
+    /// 工号；员工编号，空串表示未设置；非空必须为 6 位数字
     pub emp_no: String,
     /// 用户昵称（显示名）
     pub nickname: String,
@@ -204,7 +204,7 @@ pub struct UpdateUserReq {
     pub username: String,
     /// 密码；传空串表示不更新密码（沿用原密文），非空则须 6-32 个字符
     pub password: String,
-    /// 工号；员工编号，必须是 6 位数字
+    /// 工号；员工编号，空串表示未设置；非空必须为 6 位数字
     pub emp_no: String,
     /// 用户昵称（显示名）
     pub nickname: String,

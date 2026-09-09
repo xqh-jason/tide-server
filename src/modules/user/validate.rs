@@ -57,6 +57,13 @@ fn check_username(username: &str, errors: &mut Vec<String>) {
     }
 }
 
+/// 工号：空串表示未设置（放行）；非空必须为 6 位 ASCII 数字，供 create/update 共用。
+fn check_emp_no(emp_no: &str, errors: &mut Vec<String>) {
+    if !emp_no.is_empty() && (emp_no.len() != 6 || !emp_no.bytes().all(|b| b.is_ascii_digit())) {
+        errors.push("工号必须为 6 位数字（留空表示未设置）".to_string());
+    }
+}
+
 fn check_nickname(nickname: &str, errors: &mut Vec<String>) {
     if nickname.chars().count() > 30 {
         errors.push("昵称长度不能超过 30 个字符".to_string());
@@ -83,6 +90,7 @@ pub fn validate_create_user(req: &CreateUserReq, status_allowed: &[i8]) -> Resul
     check_username(&req.username, &mut errors);
     check_nickname(&req.nickname, &mut errors);
     check_phone_email((&req.phone, &req.email), &mut errors);
+    check_emp_no(&req.emp_no, &mut errors);
     check::check_status(req.status, status_allowed)
         .map_err(|e| errors.push(e))
         .ok();
@@ -103,10 +111,8 @@ pub fn validate_update_user(req: &UpdateUserReq, status_allowed: &[i8]) -> Resul
     if !req.password.is_empty() && !(6..=32).contains(&req.password.chars().count()) {
         errors.push("密码长度须在 6-32 个字符之间（留空表示不修改）".to_string());
     }
-    // 工号：6 位数字
-    if req.emp_no.len() != 6 || !req.emp_no.bytes().all(|b| b.is_ascii_digit()) {
-        errors.push("工号必须为 6 位数字".to_string());
-    }
+    // 工号：空串表示未设置；非空须 6 位 ASCII 数字
+    check_emp_no(&req.emp_no, &mut errors);
     check_nickname(&req.nickname, &mut errors);
     check_phone_email((&req.phone, &req.email), &mut errors);
     check::check_status(req.status, status_allowed)
@@ -220,6 +226,32 @@ mod tests {
         let mut req = update_req();
         req.emp_no = "abc123".to_string();
         let err = validate_update_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("工号必须为 6 位数字"), "实际: {err}");
+    }
+
+    #[test]
+    fn update_empty_emp_no_passes() {
+        let mut req = update_req();
+        req.emp_no.clear();
+        assert!(
+            validate_update_user(&req, &[0, 1]).is_ok(),
+            "工号留空表示未设置，不应报错"
+        );
+    }
+
+    #[test]
+    fn create_invalid_emp_no_reports_message() {
+        let mut req = create_req();
+        req.emp_no = "abc123".to_string();
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("工号必须为 6 位数字"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_short_emp_no_reports_message() {
+        let mut req = create_req();
+        req.emp_no = "123".to_string();
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
         assert!(err.contains("工号必须为 6 位数字"), "实际: {err}");
     }
 
