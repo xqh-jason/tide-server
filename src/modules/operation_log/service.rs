@@ -19,6 +19,9 @@ pub async fn page_operation_logs(
             user_id: req.user_id,
             status: req.status,
             keyword: req.keyword.clone(),
+            ip: req.ip.clone(),
+            created_at_begin: req.created_at_begin.clone(),
+            created_at_end: req.created_at_end.clone(),
         },
         req.page.page_index(),
         req.page.page_size(),
@@ -129,6 +132,9 @@ mod tests {
             user_id,
             status,
             keyword,
+            ip: None,
+            created_at_begin: None,
+            created_at_end: None,
         }
     }
 

@@ -35,6 +35,15 @@ pub async fn find_page(
     if let Some(v) = &filter.keyword {
         cond = cond.add(sys_operation_log::Column::Path.like(format!("%{}%", v)));
     }
+    if let Some(v) = &filter.ip {
+        cond = cond.add(sys_operation_log::Column::Ip.like(format!("%{}%", v)));
+    }
+    if let Some(v) = &filter.created_at_begin {
+        cond = cond.add(sys_operation_log::Column::CreatedAt.gte(v));
+    }
+    if let Some(v) = &filter.created_at_end {
+        cond = cond.add(sys_operation_log::Column::CreatedAt.lte(v));
+    }
 
     let select = sys_operation_log::Entity::find()
         .filter(cond)
@@ -181,8 +190,11 @@ mod tests {
             &db,
             &OperationLogFilter {
                 keyword: Some(kw.clone()),
-                user_id: None,
+                created_at_begin: None,
+                created_at_end: None,
+                ip: None,
                 status: None,
+                user_id: None,
             },
             0,
             10,
@@ -195,6 +207,9 @@ mod tests {
                 keyword: Some(kw.clone()),
                 user_id: Some(2),
                 status: None,
+                created_at_begin: None,
+                created_at_end: None,
+                ip: None,
             },
             0,
             10,
@@ -207,6 +222,9 @@ mod tests {
                 keyword: Some(kw.clone()),
                 user_id: None,
                 status: Some(500),
+                created_at_begin: None,
+                created_at_end: None,
+                ip: None,
             },
             0,
             10,
@@ -253,6 +271,9 @@ mod tests {
                 keyword: Some(kw.clone()),
                 user_id: None,
                 status: None,
+                created_at_begin: None,
+                created_at_end: None,
+                ip: None,
             },
             0,
             10,

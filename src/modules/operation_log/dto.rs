@@ -20,6 +20,12 @@ pub struct OperationLogListReq {
     pub status: Option<i32>,
     /// 请求路径模糊搜索；不传查全部
     pub keyword: Option<String>,
+    /// 客户端 IP 模糊搜索；不传查全部
+    pub ip: Option<String>,
+    /// 创建时间范围起（`yyyy-MM-dd[ HH:mm:ss]`，含边界）；不传查全部
+    pub created_at_begin: Option<String>,
+    /// 创建时间范围止（含边界）；不传查全部
+    pub created_at_end: Option<String>,
 }
 
 /// 操作日志分页过滤条件（repo 层入参）。
@@ -28,6 +34,9 @@ pub struct OperationLogFilter {
     pub user_id: Option<u64>,
     pub status: Option<i32>,
     pub keyword: Option<String>,
+    pub ip: Option<String>,
+    pub created_at_begin: Option<String>,
+    pub created_at_end: Option<String>,
 }
 
 /// 操作日志列表项响应：不含 body / resp。
