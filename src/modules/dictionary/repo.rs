@@ -387,7 +387,7 @@ mod tests {
         let by_name = seed_dictionary(&db, &format!("名称{kw}"), &unique("t"), 1, None).await;
         // 命中 type，启用
         let by_type = seed_dictionary(&db, &unique("nm"), &format!("t{kw}"), 1, None).await;
-        // 命中 name 但停用：只有 status 过滤能排除它
+        // 命中 name 但禁用：只有 status 过滤能排除它
         let disabled = seed_dictionary(&db, &format!("禁用{kw}"), &unique("t2"), 0, None).await;
         // 与 kw 无关，启用：只有 keyword 过滤能排除它
         let unrelated = seed_dictionary(&db, &unique("nm2"), &unique("t3"), 1, None).await;
@@ -395,7 +395,7 @@ mod tests {
         let deleted =
             seed_dictionary(&db, &format!("软删{kw}"), &unique("tdel"), 1, Some(now())).await;
 
-        // 仅 keyword：命中 name / type 的启用与停用记录都在，软删与无关记录排除。
+        // 仅 keyword：命中 name / type 的启用与禁用记录都在，软删与无关记录排除。
         // 注意：查询必须用 kw 圈定范围，避免依赖「全表只有本测试数据」这一不成立前提。
         let all = find_dictionary_page(
             &db,
@@ -409,7 +409,7 @@ mod tests {
         )
         .await
         .unwrap();
-        // keyword + status=1：停用与软删记录排除，只剩命中 name / type 的启用记录
+        // keyword + status=1：禁用与软删记录排除，只剩命中 name / type 的启用记录
         let enabled = find_dictionary_page(
             &db,
             &DictionaryFilter {
@@ -447,7 +447,7 @@ mod tests {
         enabled_ids.sort_unstable();
         let mut expected_enabled = vec![by_name.id, by_type.id];
         expected_enabled.sort_unstable();
-        assert_eq!(enabled.total, 2, "status=1 应排除停用记录与软删记录");
+        assert_eq!(enabled.total, 2, "status=1 应排除禁用记录与软删记录");
         assert_eq!(enabled_ids, expected_enabled);
     }
 
@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(found_alive.map(|m| m.id), Some(alive.id));
     }
 
-    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
+    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 0（种子/系统写入口径）属预期）。
     async fn seed_actor(db: &impl ConnectionTrait) -> u64 {
         crate::entity::sys_user::ActiveModel {
             username: Set(unique("audit_actor")),

@@ -6,12 +6,13 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "sys_operation_log")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
+    /// 日志主键
     pub id: u64,
-    /// 操作人 ID
+    /// 操作人 ID（sys_user.id；未鉴权为 0）
     pub user_id: u64,
     /// 来源 IP
     pub ip: String,
-    /// 请求方法
+    /// HTTP 请求方法（大写，如 GET/POST）
     pub method: String,
     /// 请求路径
     pub path: String,
@@ -19,17 +20,19 @@ pub struct Model {
     pub status: i32,
     /// 请求耗时（毫秒）
     pub latency: i64,
-    /// User-Agent
+    /// User-Agent（超长截断 255 字符）
     pub agent: String,
-    /// 请求体（脱敏截断后）
+    /// 请求体（敏感字段脱敏、UTF-8 边界截断 4KB 后）
     #[sea_orm(column_type = "Text")]
     pub body: String,
-    /// 响应体（脱敏截断后）
+    /// 响应体（敏感字段脱敏、UTF-8 边界截断 4KB 后）
     #[sea_orm(column_type = "Text")]
     pub resp: String,
-    /// 失败提示
+    /// 业务失败提示或传输层错误摘要；成功为空字符串
     pub error_message: String,
+    /// 创建时间
     pub created_at: DateTime,
+    /// 软删除时间；NULL 表示未删除
     pub deleted_at: Option<DateTime>,
 }
 

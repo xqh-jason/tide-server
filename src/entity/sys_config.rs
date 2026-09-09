@@ -6,6 +6,7 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "sys_config")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
+    /// 参数主键
     pub id: u64,
     /// 参数名称
     pub config_name: String,
@@ -15,12 +16,15 @@ pub struct Model {
     pub config_value: String,
     /// 备注
     pub remark: String,
+    /// 创建时间
     pub created_at: DateTime,
+    /// 更新时间；MySQL 自动刷新
     pub updated_at: DateTime,
     /// 创建人 ID
     pub created_by: u64,
     /// 更新人 ID
     pub updated_by: u64,
+    /// 软删除时间；NULL 表示未删除
     pub deleted_at: Option<DateTime>,
 }
 

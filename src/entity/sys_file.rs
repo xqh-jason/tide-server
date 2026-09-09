@@ -6,6 +6,7 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "sys_file")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
+    /// 文件记录主键
     pub id: u64,
     /// 原始文件名（含扩展名，下载时用于 Content-Disposition）
     pub name: String,
@@ -17,12 +18,15 @@ pub struct Model {
     pub mime: String,
     /// 字节数
     pub size: u64,
+    /// 创建时间
     pub created_at: DateTime,
+    /// 更新时间；MySQL 自动刷新
     pub updated_at: DateTime,
     /// 上传人 ID
     pub created_by: u64,
-    /// 更新人 ID
+    /// 更新人 ID（sys_user.id；无更新端点，写入恒等于上传人）
     pub updated_by: u64,
+    /// 软删除时间；NULL 表示未删除
     pub deleted_at: Option<DateTime>,
 }
 

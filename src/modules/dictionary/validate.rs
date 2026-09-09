@@ -7,7 +7,7 @@
 //! status 的允许值**来自数据字典**（`type="status"` 启用项，见
 //! `dictionary::service::enabled_int_values`，本模块自给），由调用方预取后作为
 //! `status_allowed` 传入，通用判断见 `utils::check::check_status`。
-//! 需要查库的规则（type/value 查重、类型/项存在性、类型停用判定）留在 service 层。
+//! 需要查库的规则（type/value 查重、类型/项存在性、类型禁用判定）留在 service 层。
 
 use crate::modules::dictionary::dto::{
     CreateDictionaryDetailReq, CreateDictionaryReq, UpdateDictionaryDetailReq, UpdateDictionaryReq,

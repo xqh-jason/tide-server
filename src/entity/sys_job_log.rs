@@ -6,18 +6,21 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "sys_job_log")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
+    /// 执行日志主键
     pub id: u64,
-    /// 任务 ID（主任务删除后日志保留）
+    /// 任务 ID（sys_job.id；任务删除后日志保留）
     pub job_id: u64,
     /// 任务名称（冗余存，主任务删除后仍可读）
     pub job_name: String,
-    /// 执行结果：1 成功 / 0 失败（含超时）
+    /// 执行结果：1=成功，0=失败（含超时/panic）
     pub status: i8,
-    /// 失败原因（截断 2KB）
+    /// 失败原因（UTF-8 边界截断 2KB）；成功为空字符串
     pub error_msg: String,
     /// 本次耗时（毫秒）
     pub duration_ms: u32,
+    /// 创建时间
     pub created_at: DateTime,
+    /// 软删除时间；NULL 表示未删除
     pub deleted_at: Option<DateTime>,
 }
 

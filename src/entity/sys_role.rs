@@ -15,7 +15,7 @@ pub struct Model {
     pub remark: String,
     pub created_at: DateTime,
     pub updated_at: DateTime,
-    /// 创建人 ID（sys_user.id；种子数据与存量数据为 NULL）
+    /// 创建人 ID（sys_user.id；0 表示种子/系统写入）
     pub created_by: u64,
     /// 更新人 ID（sys_user.id）
     pub updated_by: u64,

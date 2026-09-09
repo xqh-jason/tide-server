@@ -5,7 +5,7 @@
 //! 错误文案以规格 §7 为准：
 //! - `字典类型不存在：{id}` / `字典项不存在：{id}`
 //! - `字典类型编码已存在：{type}` / `字典值已存在：{value}`
-//! - `字典类型不存在或已停用：{type}`
+//! - `字典类型不存在或已禁用：{type}`
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
@@ -171,7 +171,7 @@ pub async fn delete_dictionary(db: &impl ConnectionTrait, id: u64) -> Result<u64
 /// 按类型编码取「类型 + 启用字典项」（前端下拉用）。
 ///
 /// 类型不存在 / 已软删 / `status != 1` 一律返回 Biz，文案统一为
-/// `字典类型不存在或已停用`；类型存在但无可用字典项时返回空 `details`，
+/// `字典类型不存在或已禁用`；类型存在但无可用字典项时返回空 `details`，
 /// 不报错（前端下拉显示空选项即可）。
 pub async fn get_dictionary_by_type(
     db: &impl ConnectionTrait,
@@ -179,11 +179,11 @@ pub async fn get_dictionary_by_type(
 ) -> Result<(sys_dictionary::Model, Vec<sys_dictionary_detail::Model>), AppError> {
     // 1) 取未软删的类型（repo 已过滤 deleted_at）
     let Some(model) = dict_repo::find_dictionary_by_type(db, r#type).await? else {
-        return Err(AppError::Biz(format!("字典类型不存在或已停用：{}", r#type)));
+        return Err(AppError::Biz(format!("字典类型不存在或已禁用：{}", r#type)));
     };
-    // 2) 停用类型不参与下拉
+    // 2) 禁用类型不参与下拉
     if model.status != 1 {
-        return Err(AppError::Biz(format!("字典类型不存在或已停用：{}", r#type)));
+        return Err(AppError::Biz(format!("字典类型不存在或已禁用：{}", r#type)));
     }
 
     // 3) 其下启用项按 sort 升序；空列表不报错
@@ -195,7 +195,7 @@ pub async fn get_dictionary_by_type(
 /// 取某字典类型启用项的**整数值**列表，供服务端字段值校验使用
 /// （如 `type="status"` 返回 `[0, 1]`，对应 seed 中「禁用/启用」）。
 ///
-/// 复用 `get_dictionary_by_type`：类型缺失/停用会报错；字典项 value 需能解析为 `i8`。
+/// 复用 `get_dictionary_by_type`：类型缺失/禁用会报错；字典项 value 需能解析为 `i8`。
 pub async fn enabled_int_values(
     db: &impl ConnectionTrait,
     r#type: &str,
@@ -600,7 +600,7 @@ mod tests {
         );
         assert!(
             matches!(disabled, Err(AppError::Biz(_))),
-            "停用类型应返回 Biz，实际：{disabled:?}"
+            "禁用类型应返回 Biz，实际：{disabled:?}"
         );
     }
 

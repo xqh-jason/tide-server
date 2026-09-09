@@ -70,7 +70,7 @@ pub struct MenuResp {
     pub keep_alive: i8,
     /// 是否隐藏：`1` 隐藏、`0` 显示
     pub hidden: i8,
-    /// 菜单类型：`1` 目录、`2` 页面、`3` 按钮
+    /// 菜单类型：`1` 目录、`2` 菜单、`3` 按钮
     pub menu_type: i8,
     /// 按钮权限码（如 `system:user:create`）；非按钮为空字符串
     pub permission: String,
@@ -82,7 +82,7 @@ pub struct MenuResp {
     /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
     #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
     pub updated_at: chrono::NaiveDateTime,
-    /// 创建人 ID（`sys_user.id`；种子数据为 `null`）
+    /// 创建人 ID（`sys_user.id`；`0` 表示种子/系统写入）
     pub created_by: u64,
     /// 更新人 ID（`sys_user.id`）
     pub updated_by: u64,
@@ -138,7 +138,7 @@ pub struct MenuListReq {
     pub keyword: Option<String>,
     /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,
-    /// 菜单类型精确过滤：`1` 目录、`2` 页面、`3` 按钮；不传查全部
+    /// 菜单类型精确过滤：`1` 目录、`2` 菜单、`3` 按钮；不传查全部
     pub menu_type: Option<i8>,
     /// 创建人 ID 精确过滤（前端用户选择器回填 id）；不传查全部
     pub created_by: Option<u64>,
@@ -192,7 +192,7 @@ pub struct CreateMenuReq {
     pub keep_alive: i8,
     /// 是否隐藏：`1` 隐藏、`0` 显示
     pub hidden: i8,
-    /// 菜单类型：`1` 目录、`2` 页面、`3` 按钮
+    /// 菜单类型：`1` 目录、`2` 菜单、`3` 按钮
     pub menu_type: i8,
     /// 按钮权限码；非按钮传空串
     pub permission: String,
@@ -224,7 +224,7 @@ pub struct UpdateMenuReq {
     pub keep_alive: i8,
     /// 是否隐藏：`1` 隐藏、`0` 显示
     pub hidden: i8,
-    /// 菜单类型：`1` 目录、`2` 页面、`3` 按钮
+    /// 菜单类型：`1` 目录、`2` 菜单、`3` 按钮
     pub menu_type: i8,
     /// 按钮权限码；非按钮为空字符串
     pub permission: String,

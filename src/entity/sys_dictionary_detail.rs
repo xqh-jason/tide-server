@@ -6,25 +6,29 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "sys_dictionary_detail")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
+    /// 字典项主键
     pub id: u64,
-    /// 所属字典类型 ID
+    /// 所属字典类型 ID（sys_dictionary.id）
     pub dictionary_id: u64,
-    /// 展示值
+    /// 字典项显示文本
     pub label: String,
-    /// 字典值
+    /// 字典值（同类型下活记录唯一）
     pub value: String,
-    /// 扩展值
+    /// 扩展字段（JSON 字符串，业务自定义）
     pub extend: String,
-    /// 排序
+    /// 排序值；数值越小越靠前
     pub sort: i32,
-    /// 状态
+    /// 状态：1=启用，0=禁用
     pub status: i8,
+    /// 创建时间
     pub created_at: DateTime,
+    /// 更新时间；MySQL 自动刷新
     pub updated_at: DateTime,
     /// 创建人 ID
     pub created_by: u64,
     /// 更新人 ID
     pub updated_by: u64,
+    /// 软删除时间；NULL 表示未删除
     pub deleted_at: Option<DateTime>,
 }
 

@@ -912,7 +912,7 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
 
     // 7. API 权限点种子：按 path + method 查重（含软删行，唯一索引物理占位）。
     //    只补缺、不覆盖是刻意设计：管理员后续修改的 description / api_group /
-    //    status（停用即放行）不会被启动重置；命中软删行仅告警跳过（不复活），
+    //    status（禁用即放行）不会被启动重置；命中软删行仅告警跳过（不复活），
     //    既尊重删除意图，也避开 uk_api_path_method 唯一索引冲突。
     for seed in API_SEEDS {
         let existing = sys_api::Entity::find()

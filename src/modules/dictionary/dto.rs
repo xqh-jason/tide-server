@@ -24,7 +24,7 @@ pub struct DictionaryResp {
     pub name: String,
     /// 类型编码（全局唯一，含软删占位）
     pub r#type: String,
-    /// 状态：`1` 启用、`0` 停用
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
     /// 备注
     pub remark: String,
@@ -80,7 +80,7 @@ pub struct DictionaryListReq {
     pub page: PageQuery,
     /// 模糊搜索关键字（匹配 name / type）；不传查全部
     pub keyword: Option<String>,
-    /// 状态精确过滤：`1` 启用、`0` 停用；不传查全部
+    /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,
     /// 创建人 ID 精确过滤（前端用户选择器回填 id）；不传查全部
     pub created_by: Option<u64>,
@@ -119,7 +119,7 @@ pub struct CreateDictionaryReq {
     pub name: String,
     /// 类型编码（全局唯一，含软删占位）
     pub r#type: String,
-    /// 状态：`1` 启用、`0` 停用
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
     /// 备注，无备注传空串
     pub remark: String,
@@ -137,7 +137,7 @@ pub struct UpdateDictionaryReq {
     pub name: String,
     /// 类型编码（全局唯一，排除自身查重）
     pub r#type: String,
-    /// 状态：`1` 启用、`0` 停用
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
     /// 备注，无备注传空串
     pub remark: String,
@@ -149,7 +149,7 @@ pub struct UpdateDictionaryReq {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DictionaryTypeReq {
-    /// 字典类型编码（类型不存在或已停用返回业务错误）
+    /// 字典类型编码（类型不存在或已禁用返回业务错误）
     pub r#type: String,
 }
 
@@ -214,7 +214,7 @@ pub struct DictionaryDetailResp {
     pub extend: String,
     /// 排序值，越小越靠前
     pub sort: i32,
-    /// 状态：`1` 启用、`0` 停用
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
     /// 创建时间（`yyyy-MM-dd HH:mm:ss`）
     #[serde(serialize_with = "crate::utils::serde_format::naive_datetime")]
@@ -272,7 +272,7 @@ pub struct DictionaryDetailListReq {
     pub dictionary_id: Option<u64>,
     /// 模糊搜索关键字（匹配 label / value）；不传查全部
     pub keyword: Option<String>,
-    /// 状态精确过滤：`1` 启用、`0` 停用；不传查全部
+    /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,
     /// 创建人 ID 精确过滤（前端用户选择器回填 id）；不传查全部
     pub created_by: Option<u64>,
@@ -318,7 +318,7 @@ pub struct CreateDictionaryDetailReq {
     pub extend: String,
     /// 排序值，越小越靠前
     pub sort: i32,
-    /// 状态：`1` 启用、`0` 停用
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
 }
 
@@ -340,6 +340,6 @@ pub struct UpdateDictionaryDetailReq {
     pub extend: String,
     /// 排序值，越小越靠前
     pub sort: i32,
-    /// 状态：`1` 启用、`0` 停用
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
 }

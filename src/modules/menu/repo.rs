@@ -478,7 +478,7 @@ mod tests {
         assert_eq!(found.as_ref().map(|m| m.id), Some(deleted.id));
     }
 
-    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
+    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 0（种子/系统写入口径）属预期）。
     async fn seed_actor(db: &impl ConnectionTrait) -> u64 {
         crate::entity::sys_user::ActiveModel {
             username: Set(unique("audit_actor")),

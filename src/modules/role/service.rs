@@ -264,12 +264,12 @@ pub async fn get_role_api_ids(db: &impl ConnectionTrait, id: u64) -> Result<Vec<
     Ok(role_repo::find_api_ids_by_role_id(db, id).await?)
 }
 
-/// 全量角色（排除软删，含停用）。
+/// 全量角色（排除软删，含禁用）。
 pub async fn get_all_roles(db: &impl ConnectionTrait) -> Result<Vec<sys_role::Model>, AppError> {
     Ok(role_repo::find_all(db).await?)
 }
 
-/// 全量启用角色（排除软删与停用）。
+/// 全量启用角色（排除软删与禁用）。
 pub async fn get_all_enabled_roles(
     db: &impl ConnectionTrait,
 ) -> Result<Vec<sys_role::Model>, AppError> {

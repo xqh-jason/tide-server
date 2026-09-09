@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(data.total, 0);
     }
 
-    /// find_roles_by_user_id 只返回启用且未删的角色：停用/软删角色不贡献
+    /// find_roles_by_user_id 只返回启用且未删的角色：禁用/软删角色不贡献
     /// （此语义被 permission/menu 域的角色解析依赖，过滤必须发生在 user repo）。
     #[tokio::test]
     async fn find_roles_by_user_id_filters_disabled_and_deleted_roles() {
@@ -408,7 +408,7 @@ mod tests {
 
         let ids: Vec<u64> = roles.into_iter().map(|r| r.id).collect();
         assert!(ids.contains(&active.id), "启用未删角色应返回");
-        assert!(!ids.contains(&disabled.id), "停用角色应被过滤");
+        assert!(!ids.contains(&disabled.id), "禁用角色应被过滤");
         assert!(!ids.contains(&deleted.id), "软删角色应被过滤");
     }
 
@@ -596,7 +596,7 @@ mod tests {
         );
     }
 
-    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
+    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 0（种子/系统写入口径）属预期）。
     async fn seed_actor(db: &impl ConnectionTrait) -> u64 {
         sys_user::ActiveModel {
             username: Set(unique_name("audit_actor")),

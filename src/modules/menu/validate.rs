@@ -12,7 +12,7 @@
 use crate::modules::menu::dto::{CreateMenuReq, UpdateMenuReq};
 use crate::utils::check;
 
-/// 菜单类型白名单：`1` 目录、`2` 页面、`3` 按钮。
+/// 菜单类型白名单：`1` 目录、`2` 菜单、`3` 按钮。
 const MENU_TYPES: &[i8] = &[1, 2, 3];
 /// 布尔开关允许值（keep_alive / hidden 共用）。
 const BOOL_VALUES: &[i8] = &[0, 1];
@@ -88,7 +88,7 @@ fn check_common_fields(
     check_len(icon, "图标名", ICON_MAX, errors);
     check_len(permission, "按钮权限码", PERMISSION_MAX, errors);
     if !MENU_TYPES.contains(&menu_type) {
-        errors.push("菜单类型取值不合法，仅允许：1（目录）、2（页面）、3（按钮）".to_string());
+        errors.push("菜单类型取值不合法，仅允许：1（目录）、2（菜单）、3（按钮）".to_string());
     }
     check_component(component, menu_type, errors);
     check_bool_flag(keep_alive, "keep_alive", errors);

@@ -6,20 +6,23 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "sys_login_log")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
+    /// 日志主键
     pub id: u64,
-    /// 登录成功后的用户 ID，失败为 0
+    /// 登录用户 ID（sys_user.id；失败为 0）
     pub user_id: u64,
-    /// 本次尝试的用户名
+    /// 本次登录尝试的用户名（超长截断 64 字符）
     pub username: String,
     /// 来源 IP
     pub ip: String,
-    /// User-Agent
+    /// User-Agent（超长截断 255 字符）
     pub agent: String,
-    /// 1 成功 / 0 失败
+    /// 结果：1=成功，0=失败
     pub status: i8,
-    /// 内部原因或成功提示
+    /// 结果说明（失败原因或成功提示，如「密码错误」「登录成功」）
     pub msg: String,
+    /// 创建时间
     pub created_at: DateTime,
+    /// 软删除时间；NULL 表示未删除
     pub deleted_at: Option<DateTime>,
 }
 

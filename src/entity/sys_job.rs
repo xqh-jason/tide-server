@@ -6,23 +6,27 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "sys_job")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
+    /// 任务主键
     pub id: u64,
-    /// 任务名称（唯一含软删占位）
+    /// 任务名称（唯一，含软删占位）
     pub job_name: String,
     /// cron 表达式（6 段秒级：秒 分 时 日 月 周）
     pub cron_expr: String,
     /// 任务处理器名（内置注册表键）
     pub handler_name: String,
-    /// 状态：1 启用 / 0 停用
+    /// 状态：1=启用，0=禁用
     pub status: i8,
     /// 备注
     pub remark: String,
+    /// 创建时间
     pub created_at: DateTime,
+    /// 更新时间；MySQL 自动刷新
     pub updated_at: DateTime,
     /// 创建人 ID
     pub created_by: u64,
     /// 更新人 ID
     pub updated_by: u64,
+    /// 软删除时间；NULL 表示未删除
     pub deleted_at: Option<DateTime>,
 }
 

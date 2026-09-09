@@ -56,7 +56,7 @@ pub async fn find_permission_codes_by_role_ids(
 /// 接口级授权（一）：按请求路径与方法查生效 API（未软删且启用）。
 ///
 /// 未登记的 `path + method` 返回 `None`，由 service 层按 fail-open 放行；
-/// 软删除与停用记录不参与拦截（等同未登记）。
+/// 软删除与禁用记录不参与拦截（等同未登记）。
 /// `uk_api_path_method` 唯一索引保证命中至多一行，无需 LIMIT/排序；
 /// method 为请求原值精确匹配（本项目除 `file/download` / `site-config/get` 外
 /// 全部为 POST，两条 GET 均为公开/自挂路由，不经过授权中间件）。
@@ -524,7 +524,7 @@ mod tests {
         let method_mismatch = find_active_api_by_path_method(&db, &active.path, "GET").await;
 
         assert_eq!(hit.unwrap().unwrap().id, active.id, "生效 API 应被命中");
-        assert!(disabled_hit.unwrap().is_none(), "停用 API 不应参与拦截");
+        assert!(disabled_hit.unwrap().is_none(), "禁用 API 不应参与拦截");
         assert!(deleted_hit.unwrap().is_none(), "软删 API 不应参与拦截");
         assert!(method_mismatch.unwrap().is_none(), "method 不匹配不应命中");
     }

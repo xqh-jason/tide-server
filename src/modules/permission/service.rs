@@ -32,7 +32,7 @@ pub async fn has_permission(
 /// 「看得到按钮但调接口被拒」的双保险。
 ///
 /// 判定顺序：
-/// 1. 未登记（无生效 API，含软删/停用）→ 放行（fail-open：`sys_api` 空表与
+/// 1. 未登记（无生效 API，含软删/禁用）→ 放行（fail-open：`sys_api` 空表与
 ///    新增接口零影响，按域逐步登记接管）；
 /// 2. 用户实时有效角色含 `super` → 放行（不信任 JWT 角色快照，与 `has_permission`
 ///    同一短路口径）；
@@ -251,6 +251,6 @@ mod tests {
             has_api_permission(&db, user.id, &disabled.path, &disabled.method).await;
 
         assert!(deleted_result.unwrap(), "软删 API 等同未登记，应放行");
-        assert!(disabled_result.unwrap(), "停用 API 等同未登记，应放行");
+        assert!(disabled_result.unwrap(), "禁用 API 等同未登记，应放行");
     }
 }

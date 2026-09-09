@@ -117,7 +117,7 @@ pub async fn update_role_status(
     Ok(ApiResponse::ok(()))
 }
 
-/// 全量角色（排除软删，含停用）：角色管理列表外的下拉数据源。
+/// 全量角色（排除软删，含禁用）：角色管理列表外的下拉数据源。
 #[endpoint]
 pub async fn list_all_roles(depot: &mut Depot) -> ApiResult<Vec<RoleResp>> {
     let state = AppState::from_depot(depot)?;
@@ -127,7 +127,7 @@ pub async fn list_all_roles(depot: &mut Depot) -> ApiResult<Vec<RoleResp>> {
     ))
 }
 
-/// 全量启用角色（排除软删与停用）：分配角色等业务场景的下拉数据源。
+/// 全量启用角色（排除软删与禁用）：分配角色等业务场景的下拉数据源。
 #[endpoint]
 pub async fn list_all_enabled_roles(depot: &mut Depot) -> ApiResult<Vec<RoleResp>> {
     let state = AppState::from_depot(depot)?;

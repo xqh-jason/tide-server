@@ -268,7 +268,7 @@ pub async fn find_api_ids_by_role_id(
     Ok(api_ids.into_iter().map(|a| a.api_id).collect::<Vec<_>>())
 }
 
-/// 全量角色（仅排除软删与超管，含停用），按 id 升序。
+/// 全量角色（仅排除软删与超管，含禁用），按 id 升序。
 pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<sys_role::Model>> {
     let roles = sys_role::Entity::find()
         .filter(sys_role::Column::DeletedAt.is_null())
@@ -667,7 +667,7 @@ mod tests {
         assert_eq!(found[0].id, live_role.id);
     }
 
-    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 NULL 属预期）。
+    /// 造一个操作人用户（直接 insert，不走 repo；其审计字段为 0（种子/系统写入口径）属预期）。
     async fn seed_actor(db: &impl ConnectionTrait) -> u64 {
         crate::entity::sys_user::ActiveModel {
             username: Set(unique("audit_actor")),

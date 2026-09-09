@@ -6,21 +6,25 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "sys_dictionary")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
+    /// 字典类型主键
     pub id: u64,
-    /// 字典名称
+    /// 字典名称（显示名）
     pub name: String,
     /// 字典类型编码（SQL 列名 `type`，Rust 侧用裸标识符）
     pub r#type: String,
-    /// 状态
+    /// 状态：1=启用，0=禁用
     pub status: i8,
     /// 备注
     pub remark: String,
+    /// 创建时间
     pub created_at: DateTime,
+    /// 更新时间；MySQL 自动刷新
     pub updated_at: DateTime,
     /// 创建人 ID
     pub created_by: u64,
     /// 更新人 ID
     pub updated_by: u64,
+    /// 软删除时间；NULL 表示未删除
     pub deleted_at: Option<DateTime>,
 }
 
