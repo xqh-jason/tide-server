@@ -13,7 +13,10 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
-RUN cargo build --release -p salvo-vben-admin -p migration --locked
+# 根 crate 与 migrations 是两个独立包（非 workspace）：分两次构建
+RUN cargo build --release -p salvo-vben-admin --locked
+WORKDIR /app/migrations
+RUN cargo build --release --locked
 
 # ---- runtime：只保留可执行文件与配置文件 ----
 FROM debian:bookworm-slim
@@ -28,7 +31,7 @@ ENV SVB_ENV=production \
     TZ=Asia/Shanghai
 
 COPY --from=builder /app/target/release/salvo-vben-admin ./
-COPY --from=builder /app/target/release/migration ./
+COPY --from=builder /app/migrations/target/release/migration ./
 COPY config.toml ./config.toml
 COPY docker/entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh && mkdir -p uploads
