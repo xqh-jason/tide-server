@@ -154,6 +154,14 @@ pub async fn find_by_path_method_include_deleted(
     Ok(api)
 }
 
+pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Model>> {
+    let apis = sys_api::Entity::find()
+        .filter(sys_api::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+    Ok(apis)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

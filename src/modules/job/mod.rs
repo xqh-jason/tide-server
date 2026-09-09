@@ -9,7 +9,7 @@ pub mod scheduler;
 pub mod service;
 mod validate;
 
-/// 定时任务端点：`POST /api/v1/job/{list,create,update,get,delete,update-status,run-once}`。
+/// 定时任务端点：`POST /api/v1/job/{list,create,update,get,delete,update-status,run-once,handlers}`。
 pub fn routes() -> Router {
     Router::new()
         .oapi_tags(["定时任务"])
@@ -20,4 +20,5 @@ pub fn routes() -> Router {
         .push(Router::with_path("delete").post(api::delete_job))
         .push(Router::with_path("update-status").post(api::update_job_status))
         .push(Router::with_path("run-once").post(api::run_job_once))
+        .push(Router::with_path("handlers").post(api::list_handlers))
 }

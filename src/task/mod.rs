@@ -29,6 +29,37 @@ pub mod operation_log_cleanup;
 pub type JobHandler =
     fn(&AppState) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>;
 
+/// 处理器展示信息：`name` = 注册表键（= `sys_job.handler_name` 合法值），
+/// `label` = 中文显示名，供前端下拉直接渲染，无需前端写死映射。
+pub struct HandlerDef {
+    pub name: &'static str,
+    pub label: &'static str,
+}
+
+/// 内置 handler 下拉数据源：顺序即前端下拉顺序，与 [`handlers`] 注册对齐。
+///
+/// 与 [`handlers`] 分列两处，但都引用各任务文件的 `HANDLER_NAME` / `HANDLER_LABEL`
+/// 常量（拼错即编译失败）；[`tests::handler_defs_matches_registry`] 守卫两者不漂移。
+pub fn handler_defs() -> &'static [HandlerDef] {
+    static DEFS: OnceLock<Vec<HandlerDef>> = OnceLock::new();
+    DEFS.get_or_init(|| {
+        vec![
+            HandlerDef {
+                name: login_log_cleanup::HANDLER_NAME,
+                label: login_log_cleanup::HANDLER_LABEL,
+            },
+            HandlerDef {
+                name: job_log_cleanup::HANDLER_NAME,
+                label: job_log_cleanup::HANDLER_LABEL,
+            },
+            HandlerDef {
+                name: operation_log_cleanup::HANDLER_NAME,
+                label: operation_log_cleanup::HANDLER_LABEL,
+            },
+        ]
+    })
+}
+
 /// 内置 handler 注册表：键 = `sys_job.handler_name`，CRUD 时校验任务必须命中。
 pub fn handlers() -> &'static HashMap<&'static str, JobHandler> {
     static REG: OnceLock<HashMap<&'static str, JobHandler>> = OnceLock::new();
@@ -72,5 +103,28 @@ mod tests {
     fn handlers_registry_contains_builtin_handlers() {
         assert!(handlers().contains_key(login_log_cleanup::HANDLER_NAME));
         assert!(handlers().contains_key(job_log_cleanup::HANDLER_NAME));
+        assert!(handlers().contains_key(operation_log_cleanup::HANDLER_NAME));
+    }
+
+    /// 守卫：`handler_defs` 与注册表 key 一一对应、label 非空——防止新增/删除
+    /// handler 时只改一处，导致前端下拉漏项或多出「注册表里不存在」的选项。
+    #[test]
+    fn handler_defs_matches_registry() {
+        let registry = handlers();
+        let defs = handler_defs();
+
+        assert_eq!(
+            defs.len(),
+            registry.len(),
+            "defs 与注册表数量应一致（新增 handler 需同步 label）"
+        );
+        for def in defs {
+            assert!(
+                registry.contains_key(def.name),
+                "defs 中的 name 必须在注册表内：{}",
+                def.name
+            );
+            assert!(!def.label.is_empty(), "label 不应为空：{}", def.name);
+        }
     }
 }

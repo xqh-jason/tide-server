@@ -35,6 +35,9 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     );
     crate::modules::job::scheduler::init_scheduler(&state).await?;
 
+    // CORS 中间件挂在 Service 层（先于 router 的 InjectState），因此提前取出配置副本构造，
+    // 不依赖 Depot 注入的状态。
+    let cors = crate::middleware::cors::Cors(state.config.cors.clone());
     let router = crate::infra::router::build(state);
 
     // OpenAPI 契约交付：JSON 文档 + Swagger UI 页面（W1 目标）。
@@ -47,7 +50,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     tracing::info!("server listening on http://{addr}");
     let acceptor = TcpListener::new(addr).bind().await;
     // 统一错误兜底：框架级错误（解析失败/404/405/5xx）渲染为 HTTP 200 + 契约体。
-    let service = salvo::Service::new(router).catcher(crate::infra::catcher::build());
+    // CORS 防御挂在最外层：任何来源的预检请求（OPTIONS）都会先被 CORS 中间件终结，
+    // 不落入 catcher / 业务路由。
+    let service = salvo::Service::new(router)
+        .hoop(cors)
+        .catcher(crate::infra::catcher::build());
     Server::new(acceptor).serve(service).await;
     Ok(())
 }

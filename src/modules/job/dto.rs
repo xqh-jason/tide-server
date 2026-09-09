@@ -146,6 +146,16 @@ pub struct UpdateJobReq {
     pub remark: String,
 }
 
+/// 内置任务处理器响应体（下拉数据源）：`name` 为注册表键，`label` 为中文显示名。
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JobHandlerResp {
+    /// 处理器名（内置注册表键，= `sys_job.handler_name` 合法值）
+    pub name: String,
+    /// 中文显示名
+    pub label: String,
+}
+
 /// 更新任务状态请求（启用 / 禁用）。
 ///
 /// 值域校验见同模块 `validate.rs` 中 `validate_update_job_status`。

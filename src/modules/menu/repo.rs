@@ -309,7 +309,7 @@ mod tests {
         assert!(found_deleted.is_none(), "软删除菜单不应被 find_by_id 查到");
     }
 
-    /// 分页：keyword 命中 title/name/path，status/menu_type 精确过滤，排除软删。
+    /// 分页：keyword 命中 name，status/menu_type 精确过滤，排除软删。
     #[tokio::test]
     async fn find_page_filters_by_keyword_status_and_menu_type_excludes_deleted() {
         let db = test_txn().await;

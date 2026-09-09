@@ -46,6 +46,8 @@ pub struct UserResp {
     pub emp_no: String,
     /// 用户昵称（显示名）
     pub nickname: String,
+    /// 手机号，空字符串表示未设置
+    pub phone: String,
     /// 邮箱，空字符串表示未设置
     pub email: String,
     /// 状态：`1` 启用、`0` 禁用
@@ -76,6 +78,7 @@ impl From<sys_user::Model> for UserResp {
             username: m.username,
             emp_no: m.emp_no,
             nickname: m.nickname,
+            phone: m.phone,
             email: m.email,
             status: m.status,
             created_at: m.created_at,

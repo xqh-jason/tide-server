@@ -127,14 +127,14 @@ impl UserRefNames for MenuResp {
     }
 }
 
-/// 菜单列表请求：分页 + keyword（title/name/path 模糊）/ status / menu_type 过滤。
+/// 菜单列表请求：分页 + keyword（name 模糊）/ status / menu_type 过滤。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MenuListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
-    /// 模糊搜索关键字（匹配 title / name / path）；不传查全部
+    /// 模糊搜索关键字（仅对 name 做 LIKE）；不传查全部
     pub keyword: Option<String>,
     /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,

@@ -168,6 +168,11 @@ pub(crate) async fn delete_api_in_tx(txn: &DatabaseTransaction, id: u64) -> Resu
     Ok(())
 }
 
+/// 查询所有 API（排除软删除）。
+pub async fn get_all_apis(db: &impl ConnectionTrait) -> Result<Vec<sys_api::Model>, AppError> {
+    Ok(api_repo::find_all(db).await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

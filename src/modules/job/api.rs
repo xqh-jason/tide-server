@@ -7,7 +7,7 @@ use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
 use crate::modules::dictionary::service as dict_service;
 use crate::modules::job::dto::{
-    CreateJobReq, JobListReq, JobResp, UpdateJobReq, UpdateJobStatusReq,
+    CreateJobReq, JobHandlerResp, JobListReq, JobResp, UpdateJobReq, UpdateJobStatusReq,
 };
 use crate::modules::job::service as job_service;
 use crate::modules::job::validate as job_validate;
@@ -105,4 +105,20 @@ pub async fn run_job_once(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult
     let req = body.into_inner();
     job_service::run_job_once(&state.db, &state, req.id).await?;
     Ok(ApiResponse::ok(()))
+}
+
+/// 内置任务处理器列表（POST 无 body）：任务新增/编辑表单的下拉数据源。
+///
+/// 静态白名单，不查 DB；接口级授权由 ApiPermission 中间件按登记统一拦截，
+/// 本 handler 无需注入 AuthUser。
+#[endpoint]
+pub async fn list_handlers() -> ApiResult<Vec<JobHandlerResp>> {
+    let items = crate::task::handler_defs()
+        .iter()
+        .map(|d| JobHandlerResp {
+            name: d.name.to_string(),
+            label: d.label.to_string(),
+        })
+        .collect();
+    Ok(ApiResponse::ok(items))
 }

@@ -11,10 +11,66 @@ pub struct Config {
     pub database: Database,
     pub jwt: Jwt,
     pub upload: Upload,
+    /// 跨域访问控制（CORS）。缺省为拒绝所有跨源（allow_origins 为空）。
+    #[serde(default)]
+    pub cors: Cors,
 }
 
 fn default_env() -> String {
     "development".to_string()
+}
+
+/// CORS 白名单配置：只对 `allow_origins` 内的源返回跨域响应头，
+/// 其余源的响应不含 CORS 头，浏览器会拦截（同源请求与 curl 等工具不受影响）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct Cors {
+    /// 允许的跨源来源（精确匹配请求 `Origin` 头，如 `http://localhost:5173`）。
+    /// 空列表 = 拒绝所有跨源访问。
+    #[serde(default)]
+    pub allow_origins: Vec<String>,
+    /// 允许的 HTTP 方法（大小写不敏感匹配）。
+    #[serde(default = "default_allow_methods")]
+    pub allow_methods: Vec<String>,
+    /// 允许的请求头（预检 `Access-Control-Request-Headers` 白名单）。
+    #[serde(default = "default_allow_headers")]
+    pub allow_headers: Vec<String>,
+    /// 是否允许携带凭据（Cookie / 客户端证书）。开启时 `allow_origins` 不能用 `*`，
+    /// 本实现始终回显具体 origin，因此两者可安全共存。
+    #[serde(default)]
+    pub allow_credentials: bool,
+    /// 预检请求结果缓存秒数（`Access-Control-Max-Age`）。
+    #[serde(default = "default_max_age")]
+    pub max_age: u64,
+}
+
+impl Default for Cors {
+    fn default() -> Self {
+        Self {
+            allow_origins: vec![],
+            allow_methods: default_allow_methods(),
+            allow_headers: default_allow_headers(),
+            allow_credentials: false,
+            max_age: default_max_age(),
+        }
+    }
+}
+
+fn default_allow_methods() -> Vec<String> {
+    ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+
+fn default_allow_headers() -> Vec<String> {
+    ["Content-Type", "Authorization"]
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+
+fn default_max_age() -> u64 {
+    3600
 }
 
 #[derive(Debug, Clone, Deserialize)]

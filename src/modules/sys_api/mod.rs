@@ -22,4 +22,5 @@ pub fn routes() -> Router {
         .push(Router::with_path("update").post(api::update_api))
         .push(Router::with_path("get").post(api::get_api))
         .push(Router::with_path("delete").post(api::delete_api))
+        .push(Router::with_path("list-all").post(api::list_all_apis))
 }

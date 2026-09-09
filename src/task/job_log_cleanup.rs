@@ -10,6 +10,9 @@ use crate::modules::job_log::repo as job_log_repo;
 /// handler 名（= 文件名 = `sys_job.handler_name` 的合法值，三处保持一致）。
 pub const HANDLER_NAME: &str = "cleanup_job_logs";
 
+/// handler 中文显示名（前端下拉 label，与 [`HANDLER_NAME`] 成对提供）。
+pub const HANDLER_LABEL: &str = "清理调度日志";
+
 /// 任务入口。
 pub async fn run(state: &AppState) -> anyhow::Result<()> {
     let cutoff = chrono::Local::now().naive_local() - chrono::Duration::days(90);

@@ -10,6 +10,19 @@ url = "mysql://root:root@localhost:3307/salvo_vben?charset=utf8mb4&timezone=%2B0
 # 是否把每条 SQL 打到控制台；调 SQL 时临时改为 true
 log_sql = false
 
+[cors]
+# 允许的跨源来源（精确匹配请求 Origin 头）；空列表 = 拒绝所有跨源访问。
+# 前端 dev 端口 5173；生产部署到独立域名时在此追加。
+allow_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+# 允许的 HTTP 方法（缺省已含常用方法，可按需覆盖）
+allow_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+# 允许的请求头（缺省含 JSON 与鉴权头，可按需覆盖）
+allow_headers = ["Content-Type", "Authorization"]
+# 是否允许携带凭据（Cookie）。前端用 token 鉴权，默认关闭更安全。
+allow_credentials = false
+# 预检结果缓存秒数
+max_age = 3600
+
 [jwt]
 # 开发密钥；生产环境务必用 config.local.toml 或环境变量覆盖
 secret = "dev-secret-change-me"

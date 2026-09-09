@@ -89,3 +89,11 @@ pub async fn delete_api(depot: &mut Depot, req: JsonBody<IdReq>) -> ApiResult<()
     api_service::delete_api(&state.db, req.id).await?;
     Ok(ApiResponse::ok(()))
 }
+
+#[endpoint]
+pub async fn list_all_apis(depot: &mut Depot) -> ApiResult<Vec<ApiResp>> {
+    let state = AppState::from_depot(depot)?;
+    let apis = api_service::get_all_apis(&state.db).await?;
+    let resp = fill_user_names(&state.db, apis, ApiResp::from).await?;
+    Ok(ApiResponse::ok(resp))
+}

@@ -645,6 +645,7 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/job/delete", "POST", "任务删除", "定时任务"),
     api("/api/v1/job/update-status", "POST", "任务启停", "定时任务"),
     api("/api/v1/job/run-once", "POST", "任务立即执行", "定时任务"),
+    api("/api/v1/job/handlers", "POST", "任务处理器列表", "定时任务"),
     // 任务日志
     api(
         "/api/v1/job-log/list",
