@@ -823,6 +823,55 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         }
     }
 
+    // 4.2 数据字典：定时任务执行状态（type=jobLogStatus）。sys_job_log.status 展示/取值
+    //     来源（1 成功、0 失败），与 sys_job.status 的「启用/禁用」（通用 type=status）无关。
+    const SEED_DICT_TYPE_JOB_LOG_STATUS: &str = "jobLogStatus";
+    let job_log_status_dict = sys_dictionary::Entity::find()
+        .filter(sys_dictionary::Column::Type.eq(SEED_DICT_TYPE_JOB_LOG_STATUS))
+        .one(db)
+        .await?;
+    let job_log_status_dict_id = if let Some(d) = job_log_status_dict {
+        d.id
+    } else {
+        sys_dictionary::ActiveModel {
+            name: Set("任务执行状态".to_string()),
+            r#type: Set(SEED_DICT_TYPE_JOB_LOG_STATUS.to_string()),
+            status: Set(1),
+            remark: Set(
+                "定时任务执行状态，sys_job_log.status 展示的数据字典（1 成功、0 失败）".to_string(),
+            ),
+            created_by: Set(admin_id),
+            updated_by: Set(admin_id),
+            ..Default::default()
+        }
+        .insert(db)
+        .await?
+        .id
+    };
+    let job_log_status_items: &[(&str, &str, i32)] = &[("成功", "1", 1), ("失败", "0", 2)];
+    for (label, value, sort) in job_log_status_items {
+        let existing = sys_dictionary_detail::Entity::find()
+            .filter(sys_dictionary_detail::Column::DictionaryId.eq(job_log_status_dict_id))
+            .filter(sys_dictionary_detail::Column::Value.eq(*value))
+            .one(db)
+            .await?;
+        if existing.is_none() {
+            sys_dictionary_detail::ActiveModel {
+                dictionary_id: Set(job_log_status_dict_id),
+                label: Set(String::from(*label)),
+                value: Set(String::from(*value)),
+                extend: Set(String::new()),
+                sort: Set(*sort),
+                status: Set(1),
+                created_by: Set(admin_id),
+                updated_by: Set(admin_id),
+                ..Default::default()
+            }
+            .insert(db)
+            .await?;
+        }
+    }
+
     // 5. 示例定时任务：登录日志每日清理（幂等按 job_name；调度器在 init_scheduler 装载）
     const SEED_JOB_NAME: &str = "登录日志每日清理";
     let sample_job = sys_job::Entity::find()

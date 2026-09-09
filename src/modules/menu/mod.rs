@@ -11,6 +11,7 @@ pub mod api;
 pub mod dto;
 pub mod repo;
 pub mod service;
+mod validate;
 
 /// 菜单管理 CRUD 端点：`POST /api/v1/menu/{list,create,update,get,delete}`。
 pub fn routes() -> Router {

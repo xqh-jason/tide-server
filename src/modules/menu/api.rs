@@ -5,10 +5,13 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
+use crate::modules::dictionary::service as dict_service;
 use crate::modules::menu::dto::{
     CreateMenuReq, MenuListReq, MenuResp, UpdateMenuReq, VbenMenuItem,
 };
 use crate::modules::menu::service as menu_service;
+use crate::modules::menu::validate as menu_validate;
+use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
 use crate::utils::user_ref::fill_user_names;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
@@ -42,12 +45,17 @@ pub async fn list_menus(
     )))
 }
 
-/// 创建菜单（POST + JSON body）：name 全局唯一、component 格式校验，缺省字段用默认值。
+/// 创建菜单（POST + JSON body）：name 全局唯一、component 格式校验。
+/// 值域校验在拿到 `req` 后显式调用 `validate_create_menu`（见同模块 validate.rs）。
 #[endpoint]
 pub async fn create_menu(depot: &mut Depot, req: JsonBody<CreateMenuReq>) -> ApiResult<MenuResp> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    menu_validate::validate_create_menu(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let menu = menu_service::create_menu(&state.db, auth.user_id, &req).await?;
     let resp = fill_user_names(&state.db, vec![menu], MenuResp::from)
         .await?
@@ -61,6 +69,10 @@ pub async fn update_menu(depot: &mut Depot, req: JsonBody<UpdateMenuReq>) -> Api
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    menu_validate::validate_update_menu(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let menu = menu_service::update_menu(&state.db, auth.user_id, &req).await?;
     let resp = fill_user_names(&state.db, vec![menu], MenuResp::from)
         .await?

@@ -11,6 +11,7 @@ pub mod api;
 pub mod dto;
 pub mod repo;
 pub mod service;
+mod validate;
 
 /// API 权限点端点：`POST /api/v1/sys-api/{list,create,update,get,delete}`。
 pub fn routes() -> Router {

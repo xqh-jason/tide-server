@@ -1,4 +1,7 @@
 //! 定时任务 DTO（codegen 生成后裁剪）：entity 不直接暴露给接口，经 From 转换。
+//!
+//! 校验约定：请求体的值域校验**不写在 DTO 文件里**，见同模块 `validate.rs` 中
+//! 手写的 `validate_*` 函数（规则与错误文案按字段分组，字段在此保持纯声明）。
 
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
@@ -20,7 +23,7 @@ pub struct JobResp {
     pub cron_expr: String,
     /// 任务处理器名（内置注册表键）
     pub handler_name: String,
-    /// 状态：`1` 启用、`0` 停用
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
     /// 备注
     pub remark: String,
@@ -76,7 +79,7 @@ pub struct JobListReq {
     pub page: PageQuery,
     /// 任务名称模糊搜索；不传查全部
     pub job_name: Option<String>,
-    /// 状态精确过滤：`1` 启用、`0` 停用；不传查全部
+    /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,
     /// 创建人 ID 精确过滤（前端用户选择器回填 id）；不传查全部
     pub created_by: Option<u64>,
@@ -106,6 +109,8 @@ pub struct JobFilter {
 }
 
 /// 创建定时任务请求。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_create_job`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateJobReq {
@@ -115,13 +120,15 @@ pub struct CreateJobReq {
     pub cron_expr: String,
     /// 任务处理器名（内置注册表键）
     pub handler_name: String,
-    /// 状态：`1` 启用（默认）、`0` 停用
-    pub status: Option<i8>,
-    /// 备注，可空
-    pub remark: Option<String>,
+    /// 状态：`1` 启用、`0` 禁用
+    pub status: i8,
+    /// 备注，无备注传空串
+    pub remark: String,
 }
 
 /// 更新定时任务请求（编辑表单全量提交）。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_update_job`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateJobReq {
@@ -133,18 +140,20 @@ pub struct UpdateJobReq {
     pub cron_expr: String,
     /// 任务处理器名（内置注册表键）
     pub handler_name: String,
-    /// 状态：`1` 启用、`0` 停用
+    /// 状态：`1` 启用、`0` 禁用
     pub status: i8,
-    /// 备注，可空
-    pub remark: Option<String>,
+    /// 备注，无备注传空串
+    pub remark: String,
 }
 
-/// 更新任务状态请求（启用 / 停用）。
+/// 更新任务状态请求（启用 / 禁用）。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_update_job_status`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateJobStatusReq {
     /// 目标任务 id
     pub id: u64,
-    /// `1` 启用、`0` 停用
+    /// `1` 启用、`0` 禁用
     pub status: i8,
 }

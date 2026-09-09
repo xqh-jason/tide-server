@@ -7,6 +7,7 @@ pub mod dto;
 pub mod repo;
 pub mod scheduler;
 pub mod service;
+mod validate;
 
 /// 定时任务端点：`POST /api/v1/job/{list,create,update,get,delete,update-status,run-once}`。
 pub fn routes() -> Router {

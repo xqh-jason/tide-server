@@ -97,15 +97,20 @@ pub(crate) async fn create_role_in_tx(
     let model = sys_role::ActiveModel {
         role_name: Set(req.role_name.clone()),
         role_key: Set(req.role_key.clone()),
-        sort: Set(req.sort.unwrap_or(0)),
-        status: Set(req.status.unwrap_or(1)),
-        remark: Set(req.remark.clone().unwrap_or_default()),
+        sort: Set(req.sort),
+        status: Set(req.status),
+        remark: Set(req.remark.clone()),
         ..Default::default()
     };
-    let menu_ids = req.menu_ids.clone().unwrap_or_default();
-    let api_ids = req.api_ids.clone().unwrap_or_default();
 
-    let model = role_repo::create_role_in_tx(txn, model, menu_ids, api_ids, actor_id).await?;
+    let model = role_repo::create_role_in_tx(
+        txn,
+        model,
+        req.menu_ids.clone(),
+        req.api_ids.clone(),
+        actor_id,
+    )
+    .await?;
     Ok(model)
 }
 
@@ -309,11 +314,11 @@ mod tests {
         CreateRoleReq {
             role_name,
             role_key,
-            sort: Some(0),
-            status: Some(1),
-            remark: Some("service 层测试".to_string()),
-            menu_ids: None,
-            api_ids: None,
+            sort: 0,
+            status: 1,
+            remark: "service 层测试".to_string(),
+            menu_ids: vec![],
+            api_ids: vec![],
         }
     }
 
@@ -536,11 +541,11 @@ mod tests {
             &CreateRoleReq {
                 role_name: role_name.clone(),
                 role_key: key.clone(),
-                sort: Some(0),
-                status: Some(1),
-                remark: None,
-                menu_ids: Some(vec![menu_a.id, menu_b.id]),
-                api_ids: Some(vec![api_a.id, api_b.id]),
+                sort: 0,
+                status: 1,
+                remark: String::new(),
+                menu_ids: vec![menu_a.id, menu_b.id],
+                api_ids: vec![api_a.id, api_b.id],
             },
         )
         .await

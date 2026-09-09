@@ -14,6 +14,8 @@ use crate::modules::dictionary::dto::{
     UpdateDictionaryDetailReq, UpdateDictionaryReq,
 };
 use crate::modules::dictionary::service as dict_service;
+use crate::modules::dictionary::validate as dict_validate;
+use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
 use crate::utils::user_ref::fill_user_names;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
@@ -44,6 +46,10 @@ pub async fn create_dictionary(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    dict_validate::validate_create_dictionary(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let model = dict_service::create_dictionary(&state.db, auth.user_id, &req).await?;
     let resp = fill_user_names(&state.db, vec![model], DictionaryResp::from)
         .await?
@@ -60,6 +66,10 @@ pub async fn update_dictionary(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    dict_validate::validate_update_dictionary(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let model = dict_service::update_dictionary(&state.db, auth.user_id, &req).await?;
     let resp = fill_user_names(&state.db, vec![model], DictionaryResp::from)
         .await?
@@ -131,6 +141,11 @@ pub async fn create_dictionary_detail(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    dict_validate::validate_create_dictionary_detail(&req, &status_allowed)
+        .map_err(AppError::Biz)?;
+
     let model = dict_service::create_dictionary_detail(&state.db, auth.user_id, &req).await?;
     let resp = fill_user_names(&state.db, vec![model], DictionaryDetailResp::from)
         .await?
@@ -147,6 +162,11 @@ pub async fn update_dictionary_detail(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    dict_validate::validate_update_dictionary_detail(&req, &status_allowed)
+        .map_err(AppError::Biz)?;
+
     let model = dict_service::update_dictionary_detail(&state.db, auth.user_id, &req).await?;
     let resp = fill_user_names(&state.db, vec![model], DictionaryDetailResp::from)
         .await?

@@ -3,10 +3,13 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
+use crate::modules::dictionary::service as dict_service;
 use crate::modules::role::dto::{
     CreateRoleReq, RoleListReq, RoleResp, UpdateRoleReq, UpdateRoleStatusReq,
 };
 use crate::modules::role::service as role_service;
+use crate::modules::role::validate as role_validate;
+use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
 use crate::utils::user_ref::fill_user_names;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
@@ -35,12 +38,17 @@ pub async fn list_roles(
 }
 
 /// 创建角色（POST + JSON body）：role_key / role_name 查重（含软删占位），
-/// 并全量设置菜单 / API 关联。
+/// 并全量设置菜单 / API 关联。值域校验在拿到 `req` 后显式调用
+/// `validate_create_role`（见同模块 validate.rs）。
 #[endpoint]
 pub async fn create_role(depot: &mut Depot, body: JsonBody<CreateRoleReq>) -> ApiResult<RoleResp> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    role_validate::validate_create_role(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let role = role_service::create_role(&state.db, auth.user_id, &req).await?;
     let mut resp = fill_user_names(&state.db, vec![role], RoleResp::from)
         .await?
@@ -56,6 +64,10 @@ pub async fn update_role(depot: &mut Depot, body: JsonBody<UpdateRoleReq>) -> Ap
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    role_validate::validate_update_role(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let role = role_service::update_role(&state.db, auth.user_id, &req).await?;
     let mut resp = fill_user_names(&state.db, vec![role], RoleResp::from)
         .await?
@@ -97,6 +109,10 @@ pub async fn update_role_status(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    role_validate::validate_update_role_status(&req, &status_allowed).map_err(AppError::Biz)?;
+
     role_service::update_role_status(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(()))
 }

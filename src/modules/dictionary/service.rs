@@ -86,7 +86,7 @@ pub async fn create_dictionary(
             name: Set(req.name.clone()),
             r#type: Set(req.r#type.clone()),
             status: Set(req.status),
-            remark: Set(req.remark.clone().unwrap_or_default()),
+            remark: Set(req.remark.clone()),
             ..Default::default()
         },
         actor_id,
@@ -129,7 +129,7 @@ pub async fn update_dictionary(
             name: Set(req.name.clone()),
             r#type: Set(req.r#type.clone()),
             status: Set(req.status),
-            remark: Set(req.remark.clone().unwrap_or_default()),
+            remark: Set(req.remark.clone()),
             ..Default::default()
         },
         actor_id,
@@ -287,7 +287,7 @@ pub async fn create_dictionary_detail(
             dictionary_id: Set(req.dictionary_id),
             label: Set(req.label.clone()),
             value: Set(req.value.clone()),
-            extend: Set(req.extend.clone().unwrap_or_default()),
+            extend: Set(req.extend.clone()),
             sort: Set(req.sort),
             status: Set(req.status),
             ..Default::default()
@@ -335,7 +335,7 @@ pub async fn update_dictionary_detail(
             dictionary_id: Set(req.dictionary_id),
             label: Set(req.label.clone()),
             value: Set(req.value.clone()),
-            extend: Set(req.extend.clone().unwrap_or_default()),
+            extend: Set(req.extend.clone()),
             sort: Set(req.sort),
             status: Set(req.status),
             ..Default::default()
@@ -459,7 +459,7 @@ mod tests {
             name: unique("nm"),
             r#type,
             status: 1,
-            remark: None,
+            remark: String::new(),
         }
     }
 
@@ -469,7 +469,7 @@ mod tests {
             name: unique("nm"),
             r#type,
             status: 1,
-            remark: None,
+            remark: String::new(),
         }
     }
 
@@ -478,7 +478,7 @@ mod tests {
             dictionary_id,
             label: unique("lb"),
             value: value.to_string(),
-            extend: None,
+            extend: String::new(),
             sort: 0,
             status: 1,
         }

@@ -1,4 +1,7 @@
 //! 菜单域 DTO：`sys_menu → vben schema` 转换层（契约 §3.4 字段映射）+ 菜单管理 CRUD。
+//!
+//! 校验约定：请求体的值域校验**不写在 DTO 文件里**，见同模块 `validate.rs` 中
+//! 手写的 `validate_*` 函数（规则与错误文案按字段分组，字段在此保持纯声明）。
 
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
@@ -67,7 +70,7 @@ pub struct MenuResp {
     pub keep_alive: i8,
     /// 是否隐藏：`1` 隐藏、`0` 显示
     pub hidden: i8,
-    /// 菜单类型：`1` 目录/页面、`2` 外链、`3` 按钮
+    /// 菜单类型：`1` 目录、`2` 页面、`3` 按钮
     pub menu_type: i8,
     /// 按钮权限码（如 `system:user:create`）；非按钮为空字符串
     pub permission: String,
@@ -135,7 +138,7 @@ pub struct MenuListReq {
     pub keyword: Option<String>,
     /// 状态精确过滤：`1` 启用、`0` 禁用；不传查全部
     pub status: Option<i8>,
-    /// 菜单类型精确过滤：`1` 目录/页面、`2` 外链、`3` 按钮；不传查全部
+    /// 菜单类型精确过滤：`1` 目录、`2` 页面、`3` 按钮；不传查全部
     pub menu_type: Option<i8>,
     /// 创建人 ID 精确过滤（前端用户选择器回填 id）；不传查全部
     pub created_by: Option<u64>,
@@ -165,35 +168,36 @@ pub struct MenuFilter {
     pub updated_at_end: Option<chrono::NaiveDateTime>,
 }
 
-/// 创建菜单请求：可选字段有默认值（sort=0 / keep_alive=0 / hidden=0 / menu_type=1 / status=1）。
+/// 创建菜单请求：与编辑表单同形（同 `UpdateMenuReq` 减 `id`），全部字段必填。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_create_menu`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMenuReq {
-    /// 父菜单 id；缺省 0（顶级）
-    pub parent_id: Option<u64>,
+    /// 父菜单 id，`0` 表示顶级
+    pub parent_id: u64,
     /// 路由路径（如 `/system`）
     pub path: String,
     /// 路由名（全局唯一，含软删占位）
     pub name: String,
-    /// 组件路径；非按钮必须 `#/views/xxx.vue` 格式
-    #[serde(default)]
+    /// 组件路径；目录/按钮传空串，页面非空须 `#/views/xxx.vue` 格式
     pub component: String,
     /// 菜单标题（显示名）
     pub title: String,
-    /// 图标名，可空
-    pub icon: Option<String>,
-    /// 排序值；缺省 0
-    pub sort: Option<i32>,
-    /// 是否 keep-alive；缺省 0
-    pub keep_alive: Option<i8>,
-    /// 是否隐藏；缺省 0
-    pub hidden: Option<i8>,
-    /// 菜单类型：`1` 目录/页面（默认）、`2` 外链、`3` 按钮
-    pub menu_type: Option<i8>,
-    /// 按钮权限码；非按钮可空
-    pub permission: Option<String>,
-    /// 状态：`1` 启用（默认）、`0` 禁用
-    pub status: Option<i8>,
+    /// 图标名，无图标传空串
+    pub icon: String,
+    /// 排序值，越小越靠前；无特殊排序传 `0`
+    pub sort: i32,
+    /// 是否 keep-alive：`1` 是、`0` 否
+    pub keep_alive: i8,
+    /// 是否隐藏：`1` 隐藏、`0` 显示
+    pub hidden: i8,
+    /// 菜单类型：`1` 目录、`2` 页面、`3` 按钮
+    pub menu_type: i8,
+    /// 按钮权限码；非按钮传空串
+    pub permission: String,
+    /// 状态：`1` 启用、`0` 禁用
+    pub status: i8,
 }
 
 /// 更新菜单请求（编辑表单全量提交）：所有字段必填，语义同角色域全量更新。
@@ -220,7 +224,7 @@ pub struct UpdateMenuReq {
     pub keep_alive: i8,
     /// 是否隐藏：`1` 隐藏、`0` 显示
     pub hidden: i8,
-    /// 菜单类型：`1` 目录/页面、`2` 外链、`3` 按钮
+    /// 菜单类型：`1` 目录、`2` 页面、`3` 按钮
     pub menu_type: i8,
     /// 按钮权限码；非按钮为空字符串
     pub permission: String,

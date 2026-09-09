@@ -2,7 +2,10 @@ use salvo::prelude::*;
 use salvo::{Depot, oapi::endpoint};
 
 use crate::middleware::auth::AuthUser;
+use crate::modules::dictionary::service as dict_service;
 use crate::modules::sys_api::dto::{CreateApiReq, UpdateApiReq};
+use crate::modules::sys_api::validate as api_validate;
+use crate::utils::error::AppError;
 use crate::{
     infra::state::AppState,
     modules::sys_api::dto::{ApiListReq, ApiResp},
@@ -32,11 +35,16 @@ pub async fn list_apis(
 }
 
 /// 创建 API（POST + JSON body）：path + method 查重、角色授权关联落库。
+/// 值域校验在拿到 `req` 后显式调用 `validate_create_api`（见同模块 validate.rs）。
 #[endpoint]
 pub async fn create_api(depot: &mut Depot, req: JsonBody<CreateApiReq>) -> ApiResult<ApiResp> {
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    api_validate::validate_create_api(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let model = api_service::create_api(&state.db, auth.user_id, &req).await?;
     let resp = fill_user_names(&state.db, vec![model], ApiResp::from)
         .await?
@@ -50,6 +58,10 @@ pub async fn update_api(depot: &mut Depot, req: JsonBody<UpdateApiReq>) -> ApiRe
     let state = AppState::from_depot(depot)?;
     let req = req.into_inner();
     let auth = AuthUser::from_depot(depot)?;
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    api_validate::validate_update_api(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let model = api_service::update_api(&state.db, auth.user_id, &req).await?;
     let resp = fill_user_names(&state.db, vec![model], ApiResp::from)
         .await?

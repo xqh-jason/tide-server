@@ -72,7 +72,7 @@ pub async fn create_config(
             config_name: Set(req.config_name.clone()),
             config_key: Set(req.config_key.clone()),
             config_value: Set(req.config_value.clone()),
-            remark: Set(req.remark.clone().unwrap_or_default()),
+            remark: Set(req.remark.clone()),
             ..Default::default()
         },
         actor_id,
@@ -103,7 +103,7 @@ pub async fn update_config(
             config_name: Set(req.config_name.clone()),
             config_key: Set(req.config_key.clone()),
             config_value: Set(req.config_value.clone()),
-            remark: Set(req.remark.clone().unwrap_or_default()),
+            remark: Set(req.remark.clone()),
             ..Default::default()
         },
         actor_id,
@@ -215,7 +215,7 @@ mod tests {
             config_name: format!("参数{key}"),
             config_key: key.to_string(),
             config_value: "v".into(),
-            remark: None,
+            remark: String::new(),
         }
     }
 
@@ -258,7 +258,7 @@ mod tests {
             config_name: a.config_name.clone(),
             config_key: key2.clone(),
             config_value: "v2".into(),
-            remark: None,
+            remark: String::new(),
         };
         let foreign = update_config(&db, actor, &conflict).await;
         // key 保持自身，其余字段更新 → 成功且值生效
@@ -267,7 +267,7 @@ mod tests {
             config_name: "改名".into(),
             config_key: key1.clone(),
             config_value: "v3".into(),
-            remark: None,
+            remark: String::new(),
         };
         let own_ok = update_config(&db, actor, &own).await.unwrap();
 

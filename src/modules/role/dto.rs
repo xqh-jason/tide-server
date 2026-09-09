@@ -1,4 +1,7 @@
 //! 角色 DTO（传输对象）：entity 不直接暴露给接口，经 From 转换。
+//!
+//! 校验约定：请求体的值域校验**不写在 DTO 文件里**，见同模块 `validate.rs` 中
+//! 手写的 `validate_*` 函数（规则与错误文案按字段分组，字段在此保持纯声明）。
 
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
@@ -110,28 +113,33 @@ pub struct RoleFilter {
     pub updated_at_end: Option<chrono::NaiveDateTime>,
 }
 
-/// 创建角色请求：`menu_ids` / `api_ids` 为 `Some` 时全量替换关联，`None` 表示不设置。
+/// 创建角色请求：与编辑表单同形（同 `UpdateRoleReq` 减 `id`），全部字段必填；
+/// `menu_ids` / `api_ids` 全量替换关联，空数组表示不绑定。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_create_role`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateRoleReq {
     /// 角色名称（显示名，全局唯一）
     pub role_name: String,
-    /// 角色键（编码，全局唯一，含软删占位）
+    /// 角色键（编码，全局唯一，含软删占位；`super` 为系统保留字）
     pub role_key: String,
-    /// 排序值；缺省 0
-    pub sort: Option<i32>,
-    /// 状态：`1` 启用（默认）、`0` 禁用
-    pub status: Option<i8>,
-    /// 备注，可空
-    pub remark: Option<String>,
-    /// 绑定的菜单 ID 列表；`None` 不设置
-    pub menu_ids: Option<Vec<u64>>,
-    /// 绑定的 API 权限点 ID 列表；`None` 不设置
-    pub api_ids: Option<Vec<u64>>,
+    /// 排序值，越小越靠前；无特殊排序传 `0`
+    pub sort: i32,
+    /// 状态：`1` 启用、`0` 禁用
+    pub status: i8,
+    /// 备注，无备注传空串
+    pub remark: String,
+    /// 绑定的菜单 ID 列表（全量替换，空数组即清空）
+    pub menu_ids: Vec<u64>,
+    /// 绑定的 API 权限点 ID 列表（全量替换，空数组即清空）
+    pub api_ids: Vec<u64>,
 }
 
 /// 更新角色请求（编辑表单全量提交）：所有字段必填；
 /// `menu_ids` / `api_ids` 全量替换关联，传空数组即清空关联。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_update_role`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateRoleReq {

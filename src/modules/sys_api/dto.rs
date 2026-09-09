@@ -1,4 +1,7 @@
 //! API 权限点 DTO：`sys_api` CRUD 传输对象。
+//!
+//! 校验约定：请求体的值域校验**不写在 DTO 文件里**，见同模块 `validate.rs` 中
+//! 手写的 `validate_*` 函数（规则与错误文案按字段分组，字段在此保持纯声明）。
 
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
@@ -109,25 +112,30 @@ pub struct ApiFilter {
     pub updated_at_end: Option<chrono::NaiveDateTime>,
 }
 
-/// 创建 API 请求：`role_ids` 为空表示暂不授权给任何角色。
+/// 创建 API 请求：与编辑表单同形（同 `UpdateApiReq` 减 `id`），全部字段必填；
+/// `role_ids` 空数组表示暂不授权给任何角色。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_create_api`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateApiReq {
-    /// 请求路径（path + method 组合唯一，含软删占位）
+    /// 请求路径（如 `/api/v1/user/list`，以 `/` 开头；path + method 组合唯一，含软删占位）
     pub path: String,
-    /// HTTP 方法（GET / POST 等）
+    /// HTTP 方法（大写标准方法，如 GET / POST）
     pub method: String,
-    /// 描述，可空
-    pub description: Option<String>,
-    /// 分组名，可空
-    pub api_group: Option<String>,
-    /// 状态：`1` 启用（默认）、`0` 禁用
-    pub status: Option<i8>,
-    /// 授权角色 ID 列表，允许空
+    /// 描述，无描述传空串
+    pub description: String,
+    /// 分组名，无分组传空串
+    pub api_group: String,
+    /// 状态：`1` 启用、`0` 禁用
+    pub status: i8,
+    /// 授权角色 ID 列表，空数组即清空
     pub role_ids: Vec<u64>,
 }
 
 /// 更新 API 请求（编辑表单全量提交）：`role_ids` 全量替换角色授权（空数组即清空）。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_update_api`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateApiReq {

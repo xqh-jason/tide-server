@@ -1,4 +1,7 @@
 //! 数据字典 DTO：entity 不直接暴露给接口，经 From 转换。
+//!
+//! 校验约定：请求体的值域校验**不写在 DTO 文件里**，见同模块 `validate.rs` 中
+//! 手写的 `validate_*` 函数（规则与错误文案按字段分组，字段在此保持纯声明）。
 
 use std::collections::HashMap;
 
@@ -107,6 +110,8 @@ pub struct DictionaryFilter {
 }
 
 /// 创建字典类型请求。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_create_dictionary`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateDictionaryReq {
@@ -116,11 +121,13 @@ pub struct CreateDictionaryReq {
     pub r#type: String,
     /// 状态：`1` 启用、`0` 停用
     pub status: i8,
-    /// 备注，可空
-    pub remark: Option<String>,
+    /// 备注，无备注传空串
+    pub remark: String,
 }
 
 /// 更新字典类型请求（编辑表单全量提交）。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_update_dictionary`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateDictionaryReq {
@@ -132,8 +139,8 @@ pub struct UpdateDictionaryReq {
     pub r#type: String,
     /// 状态：`1` 启用、`0` 停用
     pub status: i8,
-    /// 备注，可空
-    pub remark: Option<String>,
+    /// 备注，无备注传空串
+    pub remark: String,
 }
 
 // —— get-by-type 下拉契约 ——
@@ -296,6 +303,8 @@ pub struct DictionaryDetailFilter {
 }
 
 /// 创建字典项请求。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_create_dictionary_detail`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateDictionaryDetailReq {
@@ -305,8 +314,8 @@ pub struct CreateDictionaryDetailReq {
     pub label: String,
     /// 选项值（同类型下活记录唯一）
     pub value: String,
-    /// 扩展字段（JSON 字符串），可空
-    pub extend: Option<String>,
+    /// 扩展字段（JSON 字符串），无扩展传空串
+    pub extend: String,
     /// 排序值，越小越靠前
     pub sort: i32,
     /// 状态：`1` 启用、`0` 停用
@@ -314,6 +323,8 @@ pub struct CreateDictionaryDetailReq {
 }
 
 /// 更新字典项请求（编辑表单全量提交）。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_update_dictionary_detail`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateDictionaryDetailReq {
@@ -325,8 +336,8 @@ pub struct UpdateDictionaryDetailReq {
     pub label: String,
     /// 选项值（同类型下活记录唯一，排除自身查重）
     pub value: String,
-    /// 扩展字段（JSON 字符串），可空
-    pub extend: Option<String>,
+    /// 扩展字段（JSON 字符串），无扩展传空串
+    pub extend: String,
     /// 排序值，越小越靠前
     pub sort: i32,
     /// 状态：`1` 启用、`0` 停用

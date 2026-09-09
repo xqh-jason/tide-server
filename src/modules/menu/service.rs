@@ -120,7 +120,8 @@ pub async fn page_menus(
     Ok(model)
 }
 
-/// 创建菜单：name 查重（含软删占位）→ component 格式校验 → 落库（审计字段由 repo 盖章）。
+/// 创建菜单：name 查重（含软删占位）→ 落库（审计字段由 repo 盖章）。
+/// component 格式等值域校验已前移到 handler 前的 `menu::validate`。
 pub async fn create_menu(
     db: &impl ConnectionTrait,
     actor_id: u64,
@@ -132,26 +133,22 @@ pub async fn create_menu(
         return Err(AppError::Biz(format!("菜单名称已存在：{}", menu.name)));
     }
 
-    let menu_type = req.menu_type.unwrap_or(1);
-    // 校验 component 路径
-    validate_component(&req.component, menu_type)?;
-
     // 创建菜单
     let menu = menu_repo::create_menu(
         db,
         sys_menu::ActiveModel {
-            parent_id: Set(req.parent_id.unwrap_or(0)),
+            parent_id: Set(req.parent_id),
             path: Set(req.path.clone()),
             name: Set(req.name.clone()),
             component: Set(req.component.clone()),
             title: Set(req.title.clone()),
-            icon: Set(req.icon.clone().unwrap_or_default()),
-            sort: Set(req.sort.unwrap_or(0)),
-            keep_alive: Set(req.keep_alive.unwrap_or(0)),
-            hidden: Set(req.hidden.unwrap_or(0)),
-            menu_type: Set(menu_type),
-            permission: Set(req.permission.clone().unwrap_or_default()),
-            status: Set(req.status.unwrap_or(1)),
+            icon: Set(req.icon.clone()),
+            sort: Set(req.sort),
+            keep_alive: Set(req.keep_alive),
+            hidden: Set(req.hidden),
+            menu_type: Set(req.menu_type),
+            permission: Set(req.permission.clone()),
+            status: Set(req.status),
             ..Default::default()
         },
         actor_id,
@@ -160,7 +157,7 @@ pub async fn create_menu(
     Ok(menu)
 }
 
-/// 更新菜单：判存在 → name 查重排除自身 → component 校验 → 全量覆盖（审计字段由 repo 盖章）。
+/// 更新菜单：判存在 → name 查重排除自身 → 全量覆盖（审计字段由 repo 盖章）。
 pub async fn update_menu(
     db: &impl ConnectionTrait,
     actor_id: u64,
@@ -179,10 +176,6 @@ pub async fn update_menu(
         return Err(AppError::Biz("菜单名称已存在".to_string()));
     }
 
-    let menu_type = req.menu_type;
-    // 校验 component 路径
-    validate_component(&req.component, menu_type)?;
-
     // 更新菜单
     let menu = menu_repo::update_menu(
         db,
@@ -197,7 +190,7 @@ pub async fn update_menu(
             sort: Set(req.sort),
             keep_alive: Set(req.keep_alive),
             hidden: Set(req.hidden),
-            menu_type: Set(menu_type),
+            menu_type: Set(req.menu_type),
             permission: Set(req.permission.clone()),
             status: Set(req.status),
             ..Default::default()
@@ -214,19 +207,6 @@ pub async fn get_menu(db: &impl ConnectionTrait, id: u64) -> Result<sys_menu::Mo
         return Err(AppError::Biz(format!("菜单不存在：{id}")));
     };
     Ok(menu)
-}
-
-/// 校验 vben component 路径：非按钮必须 `#/views/` 开头且 `.vue` 结尾。
-fn validate_component(component: &str, menu_type: i8) -> Result<(), AppError> {
-    if menu_type == 3 || component.is_empty() {
-        return Ok(());
-    }
-    if !component.starts_with("#/views/") || !component.ends_with(".vue") {
-        return Err(AppError::Biz(
-            "component 必须为 #/views/xxx.vue 格式".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 /// 对外入口：开事务后委托 `delete_menu_in_tx`，成功后提交。
@@ -287,18 +267,18 @@ mod tests {
 
     fn create_req(name: String, component: String) -> CreateMenuReq {
         CreateMenuReq {
-            parent_id: Some(0),
+            parent_id: 0,
             path: format!("/{name}"),
             name,
             component,
             title: unique("title"),
-            icon: None,
-            sort: Some(0),
-            keep_alive: None,
-            hidden: None,
-            menu_type: Some(1),
-            permission: None,
-            status: Some(1),
+            icon: String::new(),
+            sort: 0,
+            keep_alive: 0,
+            hidden: 0,
+            menu_type: 1,
+            permission: String::new(),
+            status: 1,
         }
     }
 
@@ -465,34 +445,6 @@ mod tests {
         assert!(
             matches!(result_live, Err(AppError::Biz(_))),
             "正常菜单占用的 name 应被拒绝，实际：{result_live:?}"
-        );
-    }
-
-    /// component 必须 `#/views/` 开头且 `.vue` 结尾（vben glob 命中约束）。
-    #[tokio::test]
-    async fn create_menu_rejects_invalid_component_format() {
-        let db = test_txn().await;
-
-        let missing_prefix = create_menu(
-            &db,
-            ACTOR_ID,
-            &create_req(unique("bad_prefix"), "views/foo.vue".to_string()),
-        )
-        .await;
-        let missing_suffix = create_menu(
-            &db,
-            ACTOR_ID,
-            &create_req(unique("bad_suffix"), "#/views/foo".to_string()),
-        )
-        .await;
-
-        assert!(
-            matches!(missing_prefix, Err(AppError::Biz(_))),
-            "component 缺少 #/views/ 前缀应被拒绝，实际：{missing_prefix:?}"
-        );
-        assert!(
-            matches!(missing_suffix, Err(AppError::Biz(_))),
-            "component 缺少 .vue 后缀应被拒绝，实际：{missing_suffix:?}"
         );
     }
 

@@ -10,6 +10,7 @@ pub mod api;
 pub mod dto;
 pub mod repo;
 pub mod service;
+mod validate;
 
 /// 字典类型端点：`POST /api/v1/dictionary/{list,create,update,get,delete,get-by-type}`。
 /// 顺序 = api.rs 函数顺序，特殊契约端点 `get-by-type` 排在 CRUD 之后。

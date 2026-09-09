@@ -5,10 +5,13 @@ use salvo::prelude::*;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
+use crate::modules::dictionary::service as dict_service;
 use crate::modules::job::dto::{
     CreateJobReq, JobListReq, JobResp, UpdateJobReq, UpdateJobStatusReq,
 };
 use crate::modules::job::service as job_service;
+use crate::modules::job::validate as job_validate;
+use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
 use crate::utils::user_ref::fill_user_names;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
@@ -36,6 +39,10 @@ pub async fn create_job(depot: &mut Depot, body: JsonBody<CreateJobReq>) -> ApiR
     let state = AppState::from_depot(depot)?;
     let auth = AuthUser::from_depot(depot)?;
     let req = body.into_inner();
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    job_validate::validate_create_job(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let model = job_service::create_job(&state.db, &state, &req, auth.user_id).await?;
     Ok(ApiResponse::ok(model.into()))
 }
@@ -46,6 +53,10 @@ pub async fn update_job(depot: &mut Depot, body: JsonBody<UpdateJobReq>) -> ApiR
     let state = AppState::from_depot(depot)?;
     let auth = AuthUser::from_depot(depot)?;
     let req = body.into_inner();
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    job_validate::validate_update_job(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let model = job_service::update_job(&state.db, &state, &req, auth.user_id).await?;
     Ok(ApiResponse::ok(model.into()))
 }
@@ -78,6 +89,10 @@ pub async fn update_job_status(
     let state = AppState::from_depot(depot)?;
     let auth = AuthUser::from_depot(depot)?;
     let req = body.into_inner();
+
+    let status_allowed = dict_service::enabled_int_values(&state.db, "status").await?;
+    job_validate::validate_update_job_status(&req, &status_allowed).map_err(AppError::Biz)?;
+
     let model =
         job_service::update_job_status(&state.db, &state, req.id, req.status, auth.user_id).await?;
     Ok(ApiResponse::ok(model.into()))

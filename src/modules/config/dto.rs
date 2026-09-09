@@ -1,5 +1,8 @@
 //! 系统配置 DTO：分「键值参数（Param）」与「网站设置（Site）」两组。
 //! entity 不直接暴露给接口，经 From 转换。
+//!
+//! 校验约定：请求体的值域校验**不写在 DTO 文件里**，见同模块 `validate.rs` 中
+//! 手写的 `validate_*` 函数（规则与错误文案按字段分组，字段在此保持纯声明）。
 
 use std::collections::HashMap;
 
@@ -105,6 +108,8 @@ pub struct ConfigFilter {
 }
 
 /// 创建参数请求。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_create_config`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateConfigReq {
@@ -114,11 +119,13 @@ pub struct CreateConfigReq {
     pub config_key: String,
     /// 参数值
     pub config_value: String,
-    /// 备注，可空
-    pub remark: Option<String>,
+    /// 备注，无备注传空串
+    pub remark: String,
 }
 
 /// 更新参数请求（编辑表单全量提交）。
+///
+/// 值域校验见同模块 `validate.rs` 中 `validate_update_config`。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConfigReq {
@@ -130,8 +137,8 @@ pub struct UpdateConfigReq {
     pub config_key: String,
     /// 参数值
     pub config_value: String,
-    /// 备注，可空
-    pub remark: Option<String>,
+    /// 备注，无备注传空串
+    pub remark: String,
 }
 
 // —— 网站设置 ——

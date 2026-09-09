@@ -13,6 +13,8 @@ use crate::modules::config::dto::{
     UpdateSiteConfigReq,
 };
 use crate::modules::config::service as config_service;
+use crate::modules::config::validate as config_validate;
+use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
 use crate::utils::user_ref::fill_user_names;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
@@ -43,6 +45,7 @@ pub async fn create_config(
     let state = AppState::from_depot(depot)?;
     let auth = AuthUser::from_depot(depot)?;
     let req = body.into_inner();
+    config_validate::validate_create_config(&req).map_err(AppError::Biz)?;
     let model = config_service::create_config(&state.db, auth.user_id, &req).await?;
     let mut resp = fill_user_names(&state.db, vec![model], ConfigResp::from).await?;
     Ok(ApiResponse::ok(resp.remove(0)))
@@ -57,6 +60,7 @@ pub async fn update_config(
     let state = AppState::from_depot(depot)?;
     let auth = AuthUser::from_depot(depot)?;
     let req = body.into_inner();
+    config_validate::validate_update_config(&req).map_err(AppError::Biz)?;
     let model = config_service::update_config(&state.db, auth.user_id, &req).await?;
     let mut resp = fill_user_names(&state.db, vec![model], ConfigResp::from).await?;
     Ok(ApiResponse::ok(resp.remove(0)))
@@ -101,6 +105,7 @@ pub async fn update_site_config(
     let state = AppState::from_depot(depot)?;
     let auth = AuthUser::from_depot(depot)?;
     let req = body.into_inner();
+    config_validate::validate_update_site_config(&req).map_err(AppError::Biz)?;
     let model = config_service::update_site_config(&state.db, auth.user_id, &req).await?;
     Ok(ApiResponse::ok(model.into()))
 }

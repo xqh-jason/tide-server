@@ -84,9 +84,9 @@ pub(crate) async fn create_api_in_tx(
     let model = sys_api::ActiveModel {
         path: Set(req.path.clone()),
         method: Set(req.method.clone()),
-        description: Set(req.description.clone().unwrap_or("".to_string())),
-        api_group: Set(req.api_group.clone().unwrap_or("".to_string())),
-        status: Set(req.status.unwrap_or(1)),
+        description: Set(req.description.clone()),
+        api_group: Set(req.api_group.clone()),
+        status: Set(req.status),
         ..Default::default()
     };
     let model = api_repo::create_api_in_tx(txn, model, req.role_ids.clone(), actor_id).await?;
@@ -207,9 +207,9 @@ mod tests {
         CreateApiReq {
             path,
             method,
-            description: Some(unique("desc")),
-            api_group: Some("service_test".to_string()),
-            status: Some(1),
+            description: unique("desc"),
+            api_group: "service_test".to_string(),
+            status: 1,
             role_ids,
         }
     }

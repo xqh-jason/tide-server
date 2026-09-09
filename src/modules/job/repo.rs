@@ -93,7 +93,7 @@ pub async fn soft_delete_job(db: &impl ConnectionTrait, id: u64) -> anyhow::Resu
     Ok(true)
 }
 
-/// 启用 / 停用：status 翻转 + 刷新 updated_by。
+/// 启用 / 禁用：status 翻转 + 刷新 updated_by。
 pub async fn update_job_status(
     db: &impl ConnectionTrait,
     id: u64,
@@ -213,7 +213,7 @@ mod tests {
         assert!(ids.contains(&enabled.id), "启用且未删的任务应被装载");
         assert!(
             !ids.contains(&_disabled.id),
-            "停用任务不应被装载，实际：{ids:?}"
+            "禁用任务不应被装载，实际：{ids:?}"
         );
         assert!(
             !ids.contains(&_deleted.id),

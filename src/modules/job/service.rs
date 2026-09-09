@@ -67,8 +67,8 @@ pub async fn create_job(
         job_name: Set(req.job_name.clone()),
         cron_expr: Set(req.cron_expr.clone()),
         handler_name: Set(req.handler_name.clone()),
-        status: Set(req.status.unwrap_or(1)),
-        remark: Set(req.remark.clone().unwrap_or_default()),
+        status: Set(req.status),
+        remark: Set(req.remark.clone()),
         ..Default::default()
     };
     let model = job_repo::create_job(db, model, actor_id).await?;
@@ -115,13 +115,13 @@ pub async fn update_job(
         cron_expr: Set(req.cron_expr.clone()),
         handler_name: Set(req.handler_name.clone()),
         status: Set(req.status),
-        remark: Set(req.remark.clone().unwrap_or_default()),
+        remark: Set(req.remark.clone()),
         ..Default::default()
     };
     let job_model = job_repo::update_job(db, model, actor_id).await?;
 
     // 先移除旧调度再按需重注册：uuid 由 job_id 派生不随字段变化，cron/handler
-    // 改了也必须先 remove 才能让新配置生效；停用则只移除。
+    // 改了也必须先 remove 才能让新配置生效；禁用则只移除。
     scheduler::unregister_job(&state.scheduler, req.id).await;
     if req.status == 1 {
         scheduler::register_job(
@@ -151,7 +151,7 @@ pub async fn delete_job(
     Ok(())
 }
 
-/// 启用 / 停用：状态翻转 → 调度器同步（停用 remove、启用 build + add）。
+/// 启用 / 禁用：状态翻转 → 调度器同步（禁用 remove、启用 build + add）。
 pub async fn update_job_status(
     db: &impl ConnectionTrait,
     state: &AppState,
@@ -164,7 +164,7 @@ pub async fn update_job_status(
     };
     job_repo::update_job_status(db, id, status, actor_id).await?;
 
-    // 停用移除调度；启用从 DB 取最新详情重注册（DB 是事实来源）
+    // 禁用移除调度；启用从 DB 取最新详情重注册（DB 是事实来源）
     let model = get_job(db, id).await?;
 
     if status == 0 {
@@ -239,8 +239,8 @@ mod tests {
             job_name: name,
             cron_expr: "0 0 3 * * *".to_string(),
             handler_name: crate::task::login_log_cleanup::HANDLER_NAME.to_string(),
-            status: Some(1),
-            remark: None,
+            status: 1,
+            remark: String::new(),
         }
     }
 
@@ -329,10 +329,10 @@ mod tests {
 
         update_job_status(&db, &state, model.id, 0, 1)
             .await
-            .expect("停用应成功");
+            .expect("禁用应成功");
         assert!(
             !is_registered(&state.scheduler, model.id).await,
-            "停用后应移除调度"
+            "禁用后应移除调度"
         );
 
         update_job_status(&db, &state, model.id, 1, 1)
