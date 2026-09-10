@@ -264,16 +264,27 @@ pub async fn get_role_api_ids(db: &impl ConnectionTrait, id: u64) -> Result<Vec<
     Ok(role_repo::find_api_ids_by_role_id(db, id).await?)
 }
 
-/// 全量角色（排除软删，含禁用）。
+/// 全量角色（排除软删，含禁用；**排除内置超管**）。
+///
+/// 超管角色由后端短路，不应出现在「可分配角色」列表中——属业务规则，
+/// 由 service 过滤；repo 只提供全量数据原语。
 pub async fn get_all_roles(db: &impl ConnectionTrait) -> Result<Vec<sys_role::Model>, AppError> {
-    Ok(role_repo::find_all(db).await?)
+    let roles = role_repo::find_all(db).await?;
+    Ok(roles
+        .into_iter()
+        .filter(|role| role.role_key != SUPER_ROLE_KEY)
+        .collect())
 }
 
-/// 全量启用角色（排除软删与禁用）。
+/// 全量启用角色（排除软删与禁用；**排除内置超管**，同 `get_all_roles`）。
 pub async fn get_all_enabled_roles(
     db: &impl ConnectionTrait,
 ) -> Result<Vec<sys_role::Model>, AppError> {
-    Ok(role_repo::find_all_enabled(db).await?)
+    let roles = role_repo::find_all_enabled(db).await?;
+    Ok(roles
+        .into_iter()
+        .filter(|role| role.role_key != SUPER_ROLE_KEY)
+        .collect())
 }
 
 #[cfg(test)]
@@ -736,5 +747,33 @@ mod tests {
             .unwrap()
             .expect("super 角色应仍然存在");
         assert!(still_alive.deleted_at.is_none(), "super 角色不应被软删除");
+    }
+
+    /// 可分配角色列表必须排除内置超管（该业务规则在 service 层，repo 只给全量）。
+    #[tokio::test]
+    async fn get_all_roles_and_enabled_exclude_super_role() {
+        let txn = test_txn().await;
+        let super_role = load_super_role(&txn).await;
+        let normal = seed_role(&txn, &unique("list_role"), &unique("list_key"), 1, None).await;
+
+        let all = get_all_roles(&txn).await.unwrap();
+        assert!(
+            all.iter().any(|role| role.id == normal.id),
+            "普通角色应出现在全量列表中"
+        );
+        assert!(
+            all.iter().all(|role| role.id != super_role.id),
+            "内置超管不应出现在可分配角色列表"
+        );
+
+        let enabled = get_all_enabled_roles(&txn).await.unwrap();
+        assert!(
+            enabled.iter().any(|role| role.id == normal.id),
+            "启用角色应出现在启用列表中"
+        );
+        assert!(
+            enabled.iter().all(|role| role.id != super_role.id),
+            "内置超管不应出现在启用角色列表"
+        );
     }
 }

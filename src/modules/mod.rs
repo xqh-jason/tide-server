@@ -50,6 +50,7 @@
 pub mod auth;
 pub mod captcha;
 pub mod config;
+pub mod dept;
 pub mod dictionary;
 pub mod file;
 pub mod job;

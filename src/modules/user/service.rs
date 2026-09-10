@@ -370,6 +370,8 @@ pub(crate) async fn delete_user_in_tx(
         return Err(AppError::Biz("系统内置管理员不允许删除".into()));
     }
 
+    // 存在性与 admin 保护已在上方校验；此处只执行数据变更（靶向不存在时的
+    // 命中结果由 repo 以 bool 返回，本入口无需重复判断）
     user_repo::soft_delete_user_in_tx(txn, user_id).await?;
     Ok(())
 }

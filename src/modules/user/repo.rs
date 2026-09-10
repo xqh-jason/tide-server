@@ -3,6 +3,7 @@ use crate::entity::{sys_role, sys_user, sys_user_role};
 use crate::modules::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
+use sea_orm::sea_query::Expr;
 use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
 
 /// 查询单个有效用户（排除软删除）。
@@ -146,14 +147,15 @@ pub(crate) async fn update_user_in_tx(
     user.updated_by = Set(actor_id);
     let user = user.update(txn).await?;
 
-    if !role_ids.is_empty() {
-        // 先删除旧角色关联
-        sys_user_role::Entity::delete_many()
-            .filter(sys_user_role::Column::UserId.eq(user.id))
-            .exec(txn)
-            .await?;
+    // 全量替换关联：先**无条件**清空旧关联（空数组即清空），再插入新关联。
+    // 与 role 域 update 口径一致；「是否清空」由 service 的业务语义决定，
+    // repo 不做该判断（回归：曾用 `if !role_ids.is_empty()` 包住清空，导致空数组无法清空）。
+    sys_user_role::Entity::delete_many()
+        .filter(sys_user_role::Column::UserId.eq(user.id))
+        .exec(txn)
+        .await?;
 
-        // 再插入新角色关联
+    if !role_ids.is_empty() {
         let user_role_ids = role_ids
             .into_iter()
             .map(|role_id| sys_user_role::ActiveModel {
@@ -183,24 +185,31 @@ pub async fn update_user(
 }
 
 /// 事务内实现：清空角色关联 + 软删主表（不 begin/commit，边界由调用方负责）。
+///
+/// 返回软删是否命中一行（`false` = 目标不存在或已软删）；「用户不存在」的判定
+/// 与报错由 service 层负责，repo 只做数据变更、不产出业务错误。
 pub(crate) async fn soft_delete_user_in_tx(
     txn: &DatabaseTransaction,
     id: u64,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     // 物理清空角色关联（关系表硬删除约定）
     sys_user_role::Entity::delete_many()
         .filter(sys_user_role::Column::UserId.eq(id))
         .exec(txn)
         .await?;
 
-    // 软删主表（不存在或已软删时静默跳过，不报错）
-    if let Some(user) = sys_user::Entity::find_by_id(id).one(txn).await? {
-        let mut user: sys_user::ActiveModel = user.into();
-        user.deleted_at = Set(Some(chrono::Local::now().naive_local()));
-        user.update(txn).await?;
-    }
+    // 软删主表：窄写 deleted_at（updated_at 由 DB 侧 ON UPDATE 刷新）
+    let result = sys_user::Entity::update_many()
+        .filter(sys_user::Column::Id.eq(id))
+        .filter(sys_user::Column::DeletedAt.is_null())
+        .col_expr(
+            sys_user::Column::DeletedAt,
+            Expr::value(Some(chrono::Local::now().naive_local())),
+        )
+        .exec(txn)
+        .await?;
 
-    Ok(())
+    Ok(result.rows_affected > 0)
 }
 
 /// 全量用户（**含软删**）：审计过滤的用户选择器数据源——历史记录的
@@ -684,6 +693,66 @@ mod tests {
     }
 
     #[tokio::test]
+    // 全量替换语义回归：update 传空 role_ids 必须清空既有角色关联。
+    // （曾因 repo 用 `if !role_ids.is_empty()` 包住清空逻辑，导致空数组无法清空关联。）
+    async fn update_user_with_empty_role_ids_clears_role_links() {
+        let txn = test_txn().await;
+        let role = sys_role::ActiveModel {
+            role_name: Set(unique_name("clear_role")),
+            role_key: Set(unique_name("clear_role_key")),
+            sort: Set(0),
+            status: Set(1),
+            remark: Set(String::new()),
+            ..Default::default()
+        }
+        .insert(&txn)
+        .await
+        .unwrap();
+
+        let created = create_user_in_tx(
+            &txn,
+            sys_user::ActiveModel {
+                username: Set(unique_name("clear_links")),
+                password: Set("x".to_string()),
+                nickname: Set("清空关联用户".to_string()),
+                ..Default::default()
+            },
+            vec![role.id],
+            ACTOR_ID,
+        )
+        .await
+        .unwrap();
+
+        let before = sys_user_role::Entity::find()
+            .filter(sys_user_role::Column::UserId.eq(created.id))
+            .all(&txn)
+            .await
+            .unwrap();
+        assert_eq!(before.len(), 1, "前置：应已建立一条角色关联");
+
+        // 全量替换传空数组 = 清空关联
+        update_user_in_tx(
+            &txn,
+            sys_user::ActiveModel {
+                id: Set(created.id),
+                nickname: Set("清空关联用户v2".to_string()),
+                ..Default::default()
+            },
+            vec![],
+            ACTOR_ID,
+        )
+        .await
+        .unwrap();
+
+        let after = sys_user_role::Entity::find()
+            .filter(sys_user_role::Column::UserId.eq(created.id))
+            .all(&txn)
+            .await
+            .unwrap();
+        assert!(after.is_empty(), "空 role_ids 应清空既有角色关联");
+    }
+
+    #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn soft_delete_user_clears_role_links_and_marks_deleted() {
@@ -723,7 +792,10 @@ mod tests {
             .unwrap();
         assert_eq!(links.len(), 1, "删除前应存在角色关联");
 
-        soft_delete_user_in_tx(&txn, created.id).await.unwrap();
+        assert!(
+            soft_delete_user_in_tx(&txn, created.id).await.unwrap(),
+            "软删应命中一行"
+        );
 
         assert!(
             find_by_id(&txn, created.id).await.unwrap().is_none(),

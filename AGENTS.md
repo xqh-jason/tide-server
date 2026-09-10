@@ -58,6 +58,35 @@ repo / service / task / middleware 的依赖方向与跨域访问规则：
 - task 是新任务的注册边界：任务跨域只调用各域 repo 原语或 service（视上一条规则），
   不直接操作其他域 Entity 的业务逻辑。
 
+### repo 层「只拼 SQL」边界（允许 / 禁止）
+
+判断标准：**这段代码若换个业务场景就要改写，它就不该在 repo**。
+
+允许留在 repo：
+
+- 过滤 / 排序 / 分页拼装（含 `if let Some(v) = filter.*` 动态条件）
+- 空集合短路（`if ids.is_empty() { return Ok(...) }`，避免空 `IN`）
+- 查询变体（`find_*` / `find_*_include_deleted`）与关联表重建 `*_in_tx`
+- 审计字段盖章（`created_by` / `updated_by`）、软删标记写入
+- 写操作返回「是否命中」（`rows_affected > 0` / `bool`），把存在性判断留给 service
+- 入参约定的 `debug_assert`（编程错误用断言，不用业务错误表达）
+
+禁止（须上移 service）：
+
+- 业务保留字 / 权限判断（如 `RoleKey.ne(SUPER_ROLE_KEY)` 排除超管）
+- 业务错误文案（`AppError::Biz` / `anyhow!("xx不存在")`）；repo 用 `Option` / `bool` 表达
+- 唯一性、重名、状态机等前置校验决策；「有子节点 / 有引用则拒删」等策略判定
+- 以业务语义决定是否执行某步（如「role_ids 为空则不清关联」）
+- 跨域调用其它域 repo / service
+
+反例（2026-09-10 修正，共 3 类）：
+
+1. `role/repo.rs::find_all` 过滤超管角色 → 移至 `role/service.rs`（业务保留字）
+2. `dept/repo.rs::move_subtree_in_tx` / `soft_delete_dept_in_tx` 产出「部门不存在」文案
+   → 改返回 `Option` / `rows_affected > 0`，文案归 service
+3. `user/repo.rs::update_user_in_tx` 用 `if !role_ids.is_empty()` 包住关联清空
+   → 无条件清空，「空数组即清空」由 service 语义决定（否则空数组无法清空关联）
+
 ## 人字段命名与名称拼装约定
 
 凡指向 `sys_user` 的引用字段（创建人、更新人、审批人、申请人等）统一遵循：

@@ -17,6 +17,9 @@ mod m20260908_000014_add_role_api_api_index;
 mod m20260908_000015_add_role_menu_menu_index;
 mod m20260908_000016_normalize_index_names;
 mod m20260909_000017_add_missing_column_table_comments;
+mod m20260909_000018_create_sys_dept;
+mod m20260909_000019_create_sys_user_dept;
+mod m20260909_000020_drop_sys_dept_leader_phone_email;
 
 pub struct Migrator;
 
@@ -41,6 +44,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260908_000015_add_role_menu_menu_index::Migration),
             Box::new(m20260908_000016_normalize_index_names::Migration),
             Box::new(m20260909_000017_add_missing_column_table_comments::Migration),
+            Box::new(m20260909_000018_create_sys_dept::Migration),
+            Box::new(m20260909_000019_create_sys_user_dept::Migration),
+            Box::new(m20260909_000020_drop_sys_dept_leader_phone_email::Migration),
         ]
     }
 }
