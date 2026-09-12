@@ -70,6 +70,8 @@ pub struct UserResp {
     pub role_ids: Vec<u64>,
     /// 部门列表
     pub depts: Vec<UserDeptResp>,
+    /// 职位列表
+    pub positions: Vec<UserPositionResp>,
 }
 
 /// `sys_user::Model` → `UserResp` 字段搬运。
@@ -91,6 +93,7 @@ impl From<sys_user::Model> for UserResp {
             updated_by_name: String::new(),
             role_ids: Vec::new(),
             depts: Vec::new(),
+            positions: Vec::new(),
         }
     }
 }
@@ -199,6 +202,9 @@ pub struct CreateUserReq {
     /// 角色 ID 列表，允许空（不绑角色）
     pub role_ids: Vec<u64>,
     pub depts: Vec<UserDeptReq>,
+    /// 职位 ID 列表，缺省/空数组 = 不挂（更新时 = 清空全部职位关联）
+    #[serde(default)]
+    pub position_ids: Vec<u64>,
 }
 
 /// 更新用户请求。值域校验见同模块 `validate.rs` 中 `impl Validate for UpdateUserReq`。
@@ -226,6 +232,9 @@ pub struct UpdateUserReq {
     /// 角色 ID 列表
     pub role_ids: Vec<u64>,
     pub depts: Vec<UserDeptReq>,
+    /// 职位 ID 列表（全量提交，排除自身语义不适用；空数组 = 清空全部职位关联）
+    #[serde(default)]
+    pub position_ids: Vec<u64>,
 }
 
 /// 更新用户状态
@@ -269,4 +278,15 @@ pub struct UserDeptResp {
     pub is_primary: i8,
     /// 是否该部门负责人：`1` 是 / `0` 否（可多个）
     pub is_leader: i8,
+}
+
+/// 用户-职位挂载项（响应侧）：随 `UserResp.positions` 返回，`positionName`
+/// 由后端批量拼装（职位无主/负责人维度，纯展示）。
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserPositionResp {
+    /// 职位 id
+    pub position_id: u64,
+    /// 职位名（后端批量拼装；职位已软删时为空串）
+    pub position_name: String,
 }

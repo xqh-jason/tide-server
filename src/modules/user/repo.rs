@@ -1,5 +1,5 @@
 use crate::entity::sys_user::Model;
-use crate::entity::{sys_role, sys_user, sys_user_dept, sys_user_role};
+use crate::entity::{sys_role, sys_user, sys_user_dept, sys_user_position, sys_user_role};
 use crate::modules::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
@@ -295,6 +295,61 @@ pub(crate) async fn replace_user_depts_in_tx(
     // 插入新部门关联
     if !links.is_empty() {
         sys_user_dept::Entity::insert_many(links).exec(txn).await?;
+    }
+
+    Ok(())
+}
+
+pub async fn find_position_links_by_user_id(
+    db: &impl ConnectionTrait,
+    user_id: u64,
+) -> anyhow::Result<Vec<sys_user_position::Model>> {
+    let models = sys_user_position::Entity::find()
+        .filter(sys_user_position::Column::UserId.eq(user_id))
+        .all(db)
+        .await?;
+    Ok(models)
+}
+
+pub async fn find_position_links_by_user_ids(
+    db: &impl ConnectionTrait,
+    user_ids: &[u64],
+) -> anyhow::Result<Vec<sys_user_position::Model>> {
+    let models = sys_user_position::Entity::find()
+        .filter(sys_user_position::Column::UserId.is_in(user_ids.iter().copied()))
+        .all(db)
+        .await?;
+    Ok(models)
+}
+
+/// 事务内全量替换用户的职位关联：先清旧行，再插入新行（空数组即清空）。
+///
+/// 无旧行时**跳过 DELETE**（空集合短路，同 `replace_user_depts_in_tx`）：
+/// MySQL RR 隔离级别下，未命中的 `DELETE ... WHERE user_id = ?` 会在主键索引上
+/// 加间隙锁，与并发事务的插入意向锁互斥，可致 1213 死锁。无行时删除本身也无意义。
+pub(crate) async fn replace_user_positions_in_tx(
+    txn: &DatabaseTransaction,
+    user_id: u64,
+    links: Vec<sys_user_position::ActiveModel>,
+) -> anyhow::Result<()> {
+    let existing = sys_user_position::Entity::find()
+        .filter(sys_user_position::Column::UserId.eq(user_id))
+        .count(txn)
+        .await?;
+
+    if existing > 0 {
+        // 物理清空职位关联（关系表硬删除约定）
+        sys_user_position::Entity::delete_many()
+            .filter(sys_user_position::Column::UserId.eq(user_id))
+            .exec(txn)
+            .await?;
+    }
+
+    // 插入新职位关联
+    if !links.is_empty() {
+        sys_user_position::Entity::insert_many(links)
+            .exec(txn)
+            .await?;
     }
 
     Ok(())
@@ -1165,6 +1220,122 @@ mod tests {
                 .len(),
             3,
             "一行主部门 + 两行非主部门"
+        );
+    }
+
+    /// 构造一条用户-职位关联（关系表无外键，position_id 用任意值即可）。
+    fn position_link(user_id: u64, position_id: u64) -> sys_user_position::ActiveModel {
+        sys_user_position::ActiveModel {
+            user_id: Set(user_id),
+            position_id: Set(position_id),
+        }
+    }
+
+    #[tokio::test]
+    // 全量替换语义：先清旧关联再插入，旧行不残留（兼任多职位可多行）。
+    async fn replace_user_positions_clears_old_links_and_inserts_new() {
+        let txn = test_txn().await;
+        let user_id = seed_user_for_depts(&txn).await;
+
+        replace_user_positions_in_tx(
+            &txn,
+            user_id,
+            vec![position_link(user_id, 11), position_link(user_id, 12)],
+        )
+        .await
+        .unwrap();
+        let after_first = find_position_links_by_user_id(&txn, user_id).await.unwrap();
+        assert_eq!(after_first.len(), 2);
+
+        replace_user_positions_in_tx(&txn, user_id, vec![position_link(user_id, 13)])
+            .await
+            .unwrap();
+        let after_second = find_position_links_by_user_id(&txn, user_id).await.unwrap();
+        assert_eq!(after_second.len(), 1, "旧关联应被清空");
+        assert_eq!(after_second[0].position_id, 13);
+    }
+
+    #[tokio::test]
+    // 空数组 = 清空全部职位关联。
+    async fn replace_user_positions_with_empty_links_clears_all() {
+        let txn = test_txn().await;
+        let user_id = seed_user_for_depts(&txn).await;
+        replace_user_positions_in_tx(
+            &txn,
+            user_id,
+            vec![position_link(user_id, 21), position_link(user_id, 22)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            find_position_links_by_user_id(&txn, user_id)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+
+        replace_user_positions_in_tx(&txn, user_id, vec![])
+            .await
+            .unwrap();
+        assert!(
+            find_position_links_by_user_id(&txn, user_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "空数组应清空关联"
+        );
+    }
+
+    #[tokio::test]
+    // 无旧行时跳过 DELETE（空集合短路）：防 RR 间隙锁死锁，也避免无意义删除。
+    async fn replace_user_positions_without_old_rows_skips_delete_and_inserts() {
+        let txn = test_txn().await;
+        let user_id = seed_user_for_depts(&txn).await;
+
+        // 全新用户直接插入：无旧行，不应触发 DELETE
+        replace_user_positions_in_tx(&txn, user_id, vec![position_link(user_id, 31)])
+            .await
+            .unwrap();
+
+        let links = find_position_links_by_user_id(&txn, user_id).await.unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].position_id, 31);
+    }
+
+    #[tokio::test]
+    // 批量查询：只返回指定用户的行；空入参短路返回空数组。
+    async fn find_position_links_by_user_ids_filters_by_user_and_short_circuits_empty() {
+        let txn = test_txn().await;
+        let user_a = seed_user_for_depts(&txn).await;
+        let user_b = seed_user_for_depts(&txn).await;
+        replace_user_positions_in_tx(
+            &txn,
+            user_a,
+            vec![position_link(user_a, 41), position_link(user_a, 42)],
+        )
+        .await
+        .unwrap();
+        replace_user_positions_in_tx(&txn, user_b, vec![position_link(user_b, 43)])
+            .await
+            .unwrap();
+
+        let found = find_position_links_by_user_ids(&txn, &[user_a, user_b])
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 3, "应命中 a、b 两用户共三条关联");
+        assert!(
+            found
+                .iter()
+                .all(|link| link.user_id == user_a || link.user_id == user_b)
+        );
+
+        assert!(
+            find_position_links_by_user_ids(&txn, &[])
+                .await
+                .unwrap()
+                .is_empty(),
+            "空入参应短路返回空数组"
         );
     }
 }

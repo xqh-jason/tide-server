@@ -128,5 +128,32 @@
 
 ## 9. 落地进度（按批次）
 
-### 批次 A（position 域 CRUD）— 待开始
-### 批次 B（user 挂职位多值）— 待开始
+### 批次 A（position 域 CRUD）— 完成（2026-09-12）
+
+- 迁移 `m20260909_000024_create_sys_position`（`uk_sys_position_code` 含软删占位）、
+  `m20260909_000025_create_sys_user_position`（复合主键 + position_id 反查索引，硬删）
+- entity `sys_position` / `sys_user_position`（后者手写，codegen 仅产主表）、
+  `utils/user_ref.rs` 补 `impl UserRefIds for sys_position::Model`
+- `modules/position/` 五件套 + validate：写原语 `*_in_tx`（`&DatabaseTransaction`，同 dept 域），
+  service 三行事务对外入口；列表按 sort、id 升序；删除有引用拒绝（「职位已被用户挂载，无法删除」）
+- seed：`SystemPosition` 菜单（sort 10）+ 3 按钮码 + 5 条 API；测试 `ensure_seed_creates_position_menu_and_buttons`
+- codegen 骨架按现行约定重写（生成物仅 entity 保留原样；keyword 多列模糊、审计过滤、
+  validate、引用检查、actor 盖章、事务入口均为手补）
+
+### 批次 B（user 挂职位多值）— 完成（2026-09-12）
+
+- 契约：`Create/UpdateUserReq.positionIds`（`#[serde(default)]`，缺省空数组）、
+  `UserResp.positions`（`UserPositionResp { positionId, positionName }`）
+- user repo：`find_position_links_by_user_id(s)`、`replace_user_positions_in_tx`
+  （无旧行跳过 DELETE，同 dept 版防 RR 间隙锁死锁）
+- user service：create/update 事务内走 `position_service::find_by_ids` 存在性校验
+  （差集报「职位不存在：{ids}」，软删拒绝、停用允许）+ 全量替换关联（update 空数组清空）；
+  `get_positions_by_user_id` 与 `fill_user_position_names` 批量拼装（软删职位给空串）
+- user validate：`positionIds` 含 0 /重复 / 超 20（`MAX_USER_POSITIONS = 20`）
+- 端点 `POST /api/v1/user/get-positions` + seed 登记（API 共 81 条）
+
+### 验证（2026-09-12）
+
+- `cargo fmt --check`、`cargo check` 无警告；`cargo test` 全量 411 passed
+- 冒烟：`cargo run` 后 `position/list`、`user/get-positions` 无 token 均返回未登录（挂载生效）；
+  库中确认两表、菜单 + 3 按钮码、6 条 API 落库，二次启动 seed 幂等（行数不变）

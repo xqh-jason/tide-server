@@ -143,6 +143,51 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemDept"),
         sort: 3,
     },
+    // 职位管理页面 + 按钮权限码（职务维度主数据；sort 靠后，不打扰既有菜单顺序）
+    MenuSeed {
+        name: "SystemPosition",
+        title: "职位管理",
+        path: "/system/position",
+        component: "#/views/system/position/index.vue",
+        icon: "lucide:briefcase",
+        menu_type: 2,
+        permission: "",
+        parent: Some("System"),
+        sort: 10,
+    },
+    MenuSeed {
+        name: "SystemPositionCreate",
+        title: "职位新增",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:position:create",
+        parent: Some("SystemPosition"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "SystemPositionUpdate",
+        title: "职位修改",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:position:update",
+        parent: Some("SystemPosition"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "SystemPositionDelete",
+        title: "职位删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:position:delete",
+        parent: Some("SystemPosition"),
+        sort: 3,
+    },
     // 角色管理页面 + 按钮权限码
     MenuSeed {
         name: "SystemRole",
@@ -524,6 +569,12 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/user/update-status", "POST", "用户启停", "用户管理"),
     api("/api/v1/user/delete", "POST", "用户删除", "用户管理"),
     api("/api/v1/user/get-depts", "POST", "用户部门列表", "用户管理"),
+    api(
+        "/api/v1/user/get-positions",
+        "POST",
+        "用户职位列表",
+        "用户管理",
+    ),
     api("/api/v1/user/list-all", "POST", "全量用户列表", "用户管理"),
     api(
         "/api/v1/user/list-all-includes-soft-deleted",
@@ -713,6 +764,12 @@ const API_SEEDS: &[ApiSeed] = &[
         "执行日志批量删除",
         "任务日志",
     ),
+    // 职位管理
+    api("/api/v1/position/list", "POST", "职位列表查询", "职位管理"),
+    api("/api/v1/position/create", "POST", "职位新增", "职位管理"),
+    api("/api/v1/position/update", "POST", "职位修改", "职位管理"),
+    api("/api/v1/position/get", "POST", "职位详情", "职位管理"),
+    api("/api/v1/position/delete", "POST", "职位删除", "职位管理"),
 ];
 
 /// 按 name 查菜单 id（不过滤软删，与 seed 的查重口径一致）。
@@ -1192,6 +1249,52 @@ mod tests {
             .expect("操作日志删除按钮权限码应存在");
         assert_eq!(button.menu_type, 3, "按钮应为菜单类型 3");
         assert_eq!(button.parent_id, menu.id, "按钮应挂在操作日志菜单下");
+    }
+
+    /// 职位管理菜单页面与三个按钮权限码应随种子就绪。
+    #[tokio::test]
+    async fn ensure_seed_creates_position_menu_and_buttons() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let menu = sys_menu::Entity::find()
+            .filter(sys_menu::Column::Name.eq("SystemPosition"))
+            .filter(sys_menu::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("职位管理菜单应存在");
+        assert_eq!(menu.menu_type, 2, "职位管理应为页面菜单");
+        assert_eq!(menu.title, "职位管理");
+        assert_eq!(menu.path, "/system/position");
+        let system = sys_menu::Entity::find()
+            .filter(sys_menu::Column::Name.eq("System"))
+            .filter(sys_menu::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("System 目录应存在");
+        assert_eq!(menu.parent_id, system.id, "职位管理应挂在 System 目录下");
+
+        let expected = [
+            "system:position:create",
+            "system:position:update",
+            "system:position:delete",
+        ];
+        for permission in expected {
+            let button = sys_menu::Entity::find()
+                .filter(sys_menu::Column::Permission.eq(permission))
+                .filter(sys_menu::Column::DeletedAt.is_null())
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("权限码 {permission} 应存在"));
+            assert_eq!(button.menu_type, 3, "{permission} 应为按钮类型 3");
+            assert_eq!(
+                button.parent_id, menu.id,
+                "{permission} 应挂在职位管理菜单下"
+            );
+        }
     }
 
     /// W5-2：登录日志菜单页面与删除按钮权限码应随种子就绪。

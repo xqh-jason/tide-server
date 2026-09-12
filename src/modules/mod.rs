@@ -59,6 +59,7 @@ pub mod login_log;
 pub mod menu;
 pub mod operation_log;
 pub mod permission;
+pub mod position;
 pub mod role;
 pub mod sys_api;
 pub mod system;
@@ -184,6 +185,12 @@ pub const DOMAINS: &[DomainMount] = &[
         path: "job-log",
         guard: MountGuard::Protected,
         routers: &[job_log::routes],
+    },
+    // 职位管理：POST /api/v1/position/{list,create,update,get,delete}
+    DomainMount {
+        path: "position",
+        guard: MountGuard::Protected,
+        routers: &[position::routes],
     },
     // 网站设置：GET /api/v1/site-config/get 公开 + POST update（子路由自挂中间件）
     DomainMount {

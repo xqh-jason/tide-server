@@ -71,6 +71,8 @@ fn check_nickname(nickname: &str, errors: &mut Vec<String>) {
 }
 
 const MAX_USER_DEPTS: usize = 50;
+/// 职位 ID：挂载上限 20（兼任场景；部门为 50）。
+const MAX_USER_POSITIONS: usize = 20;
 /// 部门 ID：`dept_id` 为 `u64`，负数在 serde 反序列化即被拒；此处拦 `0`（0 = 系统/未设置，非合法部门）。
 fn check_dept(depts: &[UserDeptReq], errors: &mut Vec<String>) {
     if depts.is_empty() {
@@ -111,6 +113,29 @@ fn check_dept(depts: &[UserDeptReq], errors: &mut Vec<String>) {
     }
 }
 
+/// 职位 ID 列表校验：拦 `0`、去重、上限 20（`position_id` 为 `u64`，
+/// 负数在 serde 反序列化即被拒）。空数组 = 不挂/清空，放行。
+fn check_position(position_ids: &[u64], errors: &mut Vec<String>) {
+    if position_ids.is_empty() {
+        return;
+    }
+
+    if position_ids.iter().any(|id| *id == 0) {
+        errors.push("职位 ID 不能为 0".to_string());
+    }
+
+    if position_ids.len() > MAX_USER_POSITIONS {
+        errors.push(format!("挂载职位数量不能超过 {} 个", MAX_USER_POSITIONS));
+    }
+
+    let mut id_list = position_ids.to_vec();
+    id_list.sort();
+    id_list.dedup();
+    if id_list.len() != position_ids.len() {
+        errors.push("职位 ID 不能重复".to_string());
+    }
+}
+
 /// 收集到的错误拼接为一条消息（按字段检查顺序，可读性优于只给首条）。
 fn join_errors(errors: Vec<String>) -> Result<(), String> {
     if errors.is_empty() {
@@ -134,6 +159,7 @@ pub fn validate_create_user(req: &CreateUserReq, status_allowed: &[i8]) -> Resul
     check_phone_email((&req.phone, &req.email), &mut errors);
     check_emp_no(&req.emp_no, &mut errors);
     check_dept(&req.depts, &mut errors);
+    check_position(&req.position_ids, &mut errors);
     check::check_status(req.status, status_allowed)
         .map_err(|e| errors.push(e))
         .ok();
@@ -157,6 +183,7 @@ pub fn validate_update_user(req: &UpdateUserReq, status_allowed: &[i8]) -> Resul
     // 工号：空串表示未设置；非空须 6 位 ASCII 数字
     check_emp_no(&req.emp_no, &mut errors);
     check_dept(&req.depts, &mut errors);
+    check_position(&req.position_ids, &mut errors);
     check_nickname(&req.nickname, &mut errors);
     check_phone_email((&req.phone, &req.email), &mut errors);
     check::check_status(req.status, status_allowed)
@@ -198,6 +225,7 @@ mod tests {
             status: 1,
             role_ids: vec![],
             depts: vec![],
+            position_ids: vec![],
         }
     }
 
@@ -213,6 +241,7 @@ mod tests {
             status: 1,
             role_ids: vec![],
             depts: vec![],
+            position_ids: vec![],
         }
     }
 
@@ -437,5 +466,47 @@ mod tests {
             validate_create_user(&req, &[0, 1]).is_ok(),
             "允许多个部门负责人"
         );
+    }
+
+    #[test]
+    fn create_position_id_zero_reports_message() {
+        let mut req = create_req();
+        req.position_ids = vec![3, 0];
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("职位 ID 不能为 0"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_duplicate_position_ids_reports_message() {
+        let mut req = create_req();
+        req.position_ids = vec![3, 3];
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("职位 ID 不能重复"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_too_many_positions_reports_message() {
+        let mut req = create_req();
+        req.position_ids = (1u64..=21).collect();
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("不能超过 20"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_empty_position_ids_passes() {
+        let mut req = create_req();
+        req.position_ids = vec![];
+        assert!(
+            validate_create_user(&req, &[0, 1]).is_ok(),
+            "空数组 = 不挂/清空，应放行"
+        );
+    }
+
+    #[test]
+    fn update_too_many_positions_reports_message() {
+        let mut req = update_req();
+        req.position_ids = (1u64..=21).collect();
+        let err = validate_update_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("不能超过 20"), "实际: {err}");
     }
 }

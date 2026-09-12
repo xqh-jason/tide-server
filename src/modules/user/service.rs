@@ -4,16 +4,17 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 
 use crate::entity::sys_user;
-use crate::entity::{sys_role, sys_user_dept};
+use crate::entity::{sys_role, sys_user_dept, sys_user_position};
 use crate::modules::dept::service as dept_service;
 use crate::modules::permission::repo as permission_repo;
 use crate::modules::permission::{
     ADMIN_USERNAME, SUPER_ROLE_KEY, SYSTEM_USER_CREATE, SYSTEM_USER_UPDATE,
     service as permission_service,
 };
+use crate::modules::position::service as position_service;
 use crate::modules::role::service as role_service;
 use crate::modules::user::dto::{
-    CreateUserReq, UpdateUserReq, UserDeptResp, UserFilter, UserListReq, UserResp,
+    CreateUserReq, UpdateUserReq, UserDeptResp, UserFilter, UserListReq, UserPositionResp, UserResp,
 };
 use crate::modules::user::repo as user_repo;
 use crate::utils::PageData;
@@ -257,6 +258,40 @@ pub(crate) async fn create_user_in_tx(
         .await?;
     }
 
+    // 挂载职位（多值兼任；存在性校验走 position 域 service，软删视为不存在、停用允许）
+    if !req.position_ids.is_empty() {
+        let positions = position_service::find_by_ids(txn, &req.position_ids).await?;
+        let found_position_ids = positions.iter().map(|p| p.id).collect::<Vec<_>>();
+        let messing_position_ids = req
+            .position_ids
+            .iter()
+            .filter(|id| !found_position_ids.contains(id))
+            .collect::<Vec<_>>();
+        if !messing_position_ids.is_empty() {
+            return Err(AppError::Biz(format!(
+                "职位不存在：{}",
+                messing_position_ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+
+        user_repo::replace_user_positions_in_tx(
+            txn,
+            model.id,
+            req.position_ids
+                .into_iter()
+                .map(|position_id| sys_user_position::ActiveModel {
+                    user_id: Set(model.id),
+                    position_id: Set(position_id),
+                })
+                .collect(),
+        )
+        .await?;
+    }
+
     Ok(model)
 }
 
@@ -390,6 +425,27 @@ pub(crate) async fn update_user_in_tx(
         }
     }
 
+    // 挂载职位校验（与 create 对称）：软删视为不存在、停用允许。
+    if !req.position_ids.is_empty() {
+        let positions = position_service::find_by_ids(txn, &req.position_ids).await?;
+        let found_position_ids = positions.iter().map(|p| p.id).collect::<Vec<_>>();
+        let messing_position_ids = req
+            .position_ids
+            .iter()
+            .filter(|id| !found_position_ids.contains(id))
+            .collect::<Vec<_>>();
+        if !messing_position_ids.is_empty() {
+            return Err(AppError::Biz(format!(
+                "职位不存在：{}",
+                messing_position_ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+
     // 密码为空代表不更新密码（沿用库中原有密文）。
     let password = if req.password.is_empty() {
         user.password
@@ -426,6 +482,20 @@ pub(crate) async fn update_user_in_tx(
                 dept_id: Set(dept.dept_id),
                 is_primary: Set(dept.is_primary),
                 is_leader: Set(dept.is_leader),
+            })
+            .collect(),
+    )
+    .await?;
+
+    // 更新职位：全量替换，空数组 = 清空全部职位关联
+    user_repo::replace_user_positions_in_tx(
+        &txn,
+        req.id,
+        req.position_ids
+            .into_iter()
+            .map(|position_id| sys_user_position::ActiveModel {
+                user_id: Set(req.id),
+                position_id: Set(position_id),
             })
             .collect(),
     )
@@ -566,14 +636,73 @@ pub async fn fill_user_dept_names(
     Ok(())
 }
 
+/// 某用户挂载的职位列表（含职位名）：用户详情 / 表单回显用。
+pub async fn get_positions_by_user_id(
+    txn: &impl ConnectionTrait,
+    user_id: u64,
+) -> Result<Vec<UserPositionResp>, AppError> {
+    let links = user_repo::find_position_links_by_user_id(txn, user_id).await?;
+    let position_ids = links.iter().map(|l| l.position_id).collect::<Vec<_>>();
+    let positions = position_service::find_by_ids(txn, &position_ids).await?;
+    let position_map = positions
+        .into_iter()
+        .map(|p| (p.id, p.position_name))
+        .collect::<HashMap<_, _>>();
+
+    Ok(links
+        .into_iter()
+        .map(|l| UserPositionResp {
+            position_id: l.position_id,
+            position_name: position_map
+                .get(&l.position_id)
+                .cloned()
+                .unwrap_or_default(),
+        })
+        .collect::<Vec<_>>())
+}
+
+/// 批量填充用户列表的职位列表（`UserResp.positions`，一次 `IN` 查关联 + 一次查职位名）。
+pub async fn fill_user_position_names(
+    db: &impl ConnectionTrait,
+    users: &mut [UserResp],
+) -> Result<(), AppError> {
+    let user_ids = users.iter().map(|u| u.id).collect::<Vec<_>>();
+    let links = user_repo::find_position_links_by_user_ids(db, &user_ids).await?;
+    let position_ids = links.iter().map(|l| l.position_id).collect::<Vec<_>>();
+    let positions = position_service::find_by_ids(db, &position_ids).await?;
+    let position_map = positions
+        .into_iter()
+        .map(|p| (p.id, p.position_name))
+        .collect::<HashMap<_, _>>();
+
+    for user in users {
+        user.positions = links
+            .iter()
+            .filter(|l| l.user_id == user.id)
+            .map(|l| UserPositionResp {
+                position_id: l.position_id,
+                position_name: position_map
+                    .get(&l.position_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            })
+            .collect::<Vec<_>>();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_dept, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+    use crate::entity::{
+        sys_dept, sys_menu, sys_position, sys_role, sys_role_menu, sys_user, sys_user_position,
+        sys_user_role,
+    };
     use crate::modules::dept::repo as dept_repo;
     use crate::modules::permission::{
         ADMIN_USERNAME, SUPER_ROLE_KEY, SYSTEM_USER_CREATE, SYSTEM_USER_UPDATE,
     };
+    use crate::modules::position::repo as position_repo;
     use crate::modules::user::dto::UserDeptReq;
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -610,6 +739,7 @@ mod tests {
             status: 1,
             role_ids,
             depts: vec![],
+            position_ids: vec![],
         }
     }
 
@@ -625,6 +755,7 @@ mod tests {
             status: 1,
             role_ids,
             depts: vec![],
+            position_ids: vec![],
         }
     }
 
@@ -1846,6 +1977,228 @@ mod tests {
         assert_eq!(
             users[0].depts[0].dept_name, "",
             "查不到部门名应给空串，不应 panic"
+        );
+    }
+
+    // —— 职位挂载（多值兼任）——
+
+    /// 造一个职位，返回 `(id, position_name)`。
+    /// 测试内直接用 position 域 repo 原语（跨域调用仅限测试数据准备）。
+    async fn seed_position(txn: &DatabaseTransaction, prefix: &str) -> (u64, String) {
+        let name = unique_name(prefix);
+        let model = position_repo::create_position_in_tx(
+            txn,
+            sys_position::ActiveModel {
+                position_code: Set(unique_name("pos_code")),
+                position_name: Set(name.clone()),
+                ..Default::default()
+            },
+            1,
+        )
+        .await
+        .unwrap();
+        (model.id, name)
+    }
+
+    async fn soft_delete_position(txn: &DatabaseTransaction, id: u64) {
+        position_repo::soft_delete_position_in_tx(txn, id, 1)
+            .await
+            .unwrap();
+    }
+
+    async fn disable_position(txn: &DatabaseTransaction, id: u64) {
+        position_repo::update_position_in_tx(
+            txn,
+            sys_position::ActiveModel {
+                id: Set(id),
+                status: Set(0),
+                ..Default::default()
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn position_links(
+        txn: &impl ConnectionTrait,
+        user_id: u64,
+    ) -> Vec<sys_user_position::Model> {
+        user_repo::find_position_links_by_user_id(txn, user_id)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_user_rejects_missing_position() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+
+        let mut req = request(unique_name("miss_pos_user"), vec![]);
+        req.position_ids = vec![9_999_999_999];
+        let result = create_user_in_tx(&txn, actor_id, req).await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("职位不存在")),
+            "挂载不存在的职位应被拒绝: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_user_rejects_soft_deleted_position() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (position_id, _) = seed_position(&txn, "soft_create_pos").await;
+        soft_delete_position(&txn, position_id).await;
+
+        let mut req = request(unique_name("soft_pos_user"), vec![]);
+        req.position_ids = vec![position_id];
+        let result = create_user_in_tx(&txn, actor_id, req).await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("职位不存在")),
+            "挂载已软删职位应被拒绝（软删视为不存在）: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_user_allows_disabled_position() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (position_id, _) = seed_position(&txn, "disabled_pos").await;
+        disable_position(&txn, position_id).await;
+
+        let mut req = request(unique_name("disabled_pos_user"), vec![]);
+        req.position_ids = vec![position_id];
+        let created = create_user_in_tx(&txn, actor_id, req)
+            .await
+            .expect("停用职位允许挂载");
+
+        assert_eq!(
+            position_links(&txn, created.id).await.len(),
+            1,
+            "停用职位的挂载关系应落库"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_user_persists_position_links() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (pos_a, _) = seed_position(&txn, "persist_pos_a").await;
+        let (pos_b, _) = seed_position(&txn, "persist_pos_b").await;
+
+        let mut req = request(unique_name("persist_pos_user"), vec![]);
+        req.position_ids = vec![pos_a, pos_b];
+        let created = create_user_in_tx(&txn, actor_id, req).await.unwrap();
+
+        let links = position_links(&txn, created.id).await;
+        assert_eq!(links.len(), 2, "两条职位关联都应落库（兼任多职位）");
+        let mut link_ids = links.iter().map(|l| l.position_id).collect::<Vec<_>>();
+        link_ids.sort_unstable();
+        let mut expected = vec![pos_a, pos_b];
+        expected.sort_unstable();
+        assert_eq!(link_ids, expected);
+    }
+
+    #[tokio::test]
+    async fn update_user_rejects_missing_position() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let target = seed_target_user(&txn, unique_name("upd_miss_pos_target")).await;
+
+        let mut req = update_request(target.id, target.username.clone(), vec![]);
+        req.position_ids = vec![9_999_999_999];
+        let result = update_user_in_tx(&txn, actor_id, req).await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("职位不存在")),
+            "更新时挂载不存在的职位应被拒绝: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_user_replaces_position_links() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (old_pos, _) = seed_position(&txn, "upd_old_pos").await;
+        let (new_pos, _) = seed_position(&txn, "upd_new_pos").await;
+
+        let mut create_req = request(unique_name("upd_pos_user"), vec![]);
+        create_req.position_ids = vec![old_pos];
+        let created = create_user_in_tx(&txn, actor_id, create_req).await.unwrap();
+        assert_eq!(position_links(&txn, created.id).await.len(), 1);
+
+        let mut req = update_request(created.id, created.username.clone(), vec![]);
+        req.position_ids = vec![new_pos];
+        update_user_in_tx(&txn, actor_id, req).await.unwrap();
+
+        let links = position_links(&txn, created.id).await;
+        assert_eq!(links.len(), 1, "旧关联应被整体替换");
+        assert_eq!(links[0].position_id, new_pos, "不应残留旧职位关联");
+    }
+
+    #[tokio::test]
+    async fn update_user_with_empty_positions_clears_links() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (pos_a, _) = seed_position(&txn, "clear_pos_a").await;
+        let (pos_b, _) = seed_position(&txn, "clear_pos_b").await;
+
+        let mut create_req = request(unique_name("clear_pos_user"), vec![]);
+        create_req.position_ids = vec![pos_a, pos_b];
+        let created = create_user_in_tx(&txn, actor_id, create_req).await.unwrap();
+        assert_eq!(position_links(&txn, created.id).await.len(), 2);
+
+        // 全量替换：空数组 = 清空
+        let req = update_request(created.id, created.username.clone(), vec![]);
+        update_user_in_tx(&txn, actor_id, req).await.unwrap();
+
+        assert!(
+            position_links(&txn, created.id).await.is_empty(),
+            "空 positionIds 应清空全部职位关联"
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_user_position_names_fills_names_in_batch() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (position_id, position_name) = seed_position(&txn, "fill_pos").await;
+
+        let mut create_req = request(unique_name("fill_pos_user"), vec![]);
+        create_req.position_ids = vec![position_id];
+        let created = create_user_in_tx(&txn, actor_id, create_req).await.unwrap();
+
+        let mut users = vec![UserResp::from(created)];
+        fill_user_position_names(&txn, &mut users).await.unwrap();
+
+        assert_eq!(users[0].positions.len(), 1);
+        assert_eq!(users[0].positions[0].position_id, position_id);
+        assert_eq!(
+            users[0].positions[0].position_name, position_name,
+            "职位名应被批量拼装"
+        );
+    }
+
+    #[tokio::test]
+    // 历史数据容错：关联仍在但职位已软删时，名称拼装应给空串而不是 panic。
+    async fn fill_user_position_names_tolerates_soft_deleted_position() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (position_id, _) = seed_position(&txn, "fill_soft_pos").await;
+
+        let mut create_req = request(unique_name("fill_soft_pos_user"), vec![]);
+        create_req.position_ids = vec![position_id];
+        let created = create_user_in_tx(&txn, actor_id, create_req).await.unwrap();
+
+        // 绕过 service 的占用检查，直接软删职位，模拟历史数据
+        soft_delete_position(&txn, position_id).await;
+
+        let mut users = vec![UserResp::from(created)];
+        fill_user_position_names(&txn, &mut users).await.unwrap();
+
+        assert_eq!(users[0].positions.len(), 1, "关联行仍在，只是职位名缺失");
+        assert_eq!(
+            users[0].positions[0].position_name, "",
+            "查不到职位名应给空串，不应 panic"
         );
     }
 }

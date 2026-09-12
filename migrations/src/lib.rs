@@ -23,6 +23,8 @@ mod m20260909_000020_drop_sys_dept_leader_phone_email;
 mod m20260909_000021_add_user_dept_primary_unique;
 mod m20260909_000022_add_sys_menu_name_unique;
 mod m20260909_000023_widen_sys_dept_path;
+mod m20260909_000024_create_sys_position;
+mod m20260909_000025_create_sys_user_position;
 
 pub struct Migrator;
 
@@ -53,6 +55,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260909_000021_add_user_dept_primary_unique::Migration),
             Box::new(m20260909_000022_add_sys_menu_name_unique::Migration),
             Box::new(m20260909_000023_widen_sys_dept_path::Migration),
+            Box::new(m20260909_000024_create_sys_position::Migration),
+            Box::new(m20260909_000025_create_sys_user_position::Migration),
         ]
     }
 }

@@ -25,6 +25,7 @@ pub async fn list_users(
     let data = user_service::page_users(&state.db, &req).await?;
     let mut items = fill_user_names(&state.db, data.items, UserResp::from).await?;
     user_service::fill_user_dept_names(&state.db, &mut items).await?;
+    user_service::fill_user_position_names(&state.db, &mut items).await?;
     Ok(ApiResponse::ok(PageResult::new(
         data.total,
         data.total_pages,
@@ -87,6 +88,7 @@ pub async fn create_user(depot: &mut Depot, body: JsonBody<CreateUserReq>) -> Ap
         .remove(0);
     let mut vec_resp = vec![resp];
     user_service::fill_user_dept_names(&state.db, &mut vec_resp).await?;
+    user_service::fill_user_position_names(&state.db, &mut vec_resp).await?;
     Ok(ApiResponse::ok(vec_resp.remove(0)))
 }
 
@@ -102,6 +104,7 @@ pub async fn get_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<Use
     resp.role_ids = user_service::get_role_ids_by_user_id(&state.db, resp.id).await?;
     let mut vec_resp = vec![resp];
     user_service::fill_user_dept_names(&state.db, &mut vec_resp).await?;
+    user_service::fill_user_position_names(&state.db, &mut vec_resp).await?;
     Ok(ApiResponse::ok(vec_resp.remove(0)))
 }
 
@@ -122,6 +125,7 @@ pub async fn update_user(depot: &mut Depot, body: JsonBody<UpdateUserReq>) -> Ap
         .remove(0);
     let mut vec_resp = vec![resp];
     user_service::fill_user_dept_names(&state.db, &mut vec_resp).await?;
+    user_service::fill_user_position_names(&state.db, &mut vec_resp).await?;
     Ok(ApiResponse::ok(vec_resp.remove(0)))
 }
 
@@ -161,6 +165,7 @@ pub async fn list_all_users(depot: &mut Depot) -> ApiResult<Vec<UserResp>> {
     let users = user_service::list_all_users(&state.db).await?;
     let mut vec_resp = users.into_iter().map(UserResp::from).collect::<Vec<_>>();
     user_service::fill_user_dept_names(&state.db, &mut vec_resp).await?;
+    user_service::fill_user_position_names(&state.db, &mut vec_resp).await?;
     Ok(ApiResponse::ok(vec_resp))
 }
 
@@ -185,4 +190,16 @@ pub async fn get_depts_by_user_id(
     let req = body.into_inner();
     let depts = user_service::get_depts_by_user_id(&state.db, req.id).await?;
     Ok(ApiResponse::ok(depts))
+}
+
+/// 某用户挂载的职位列表（含职位名）：用户详情 / 表单回显用（与 `get-depts` 对称）。
+#[endpoint]
+pub async fn get_positions_by_user_id(
+    depot: &mut Depot,
+    body: JsonBody<IdReq>,
+) -> ApiResult<Vec<UserPositionResp>> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let positions = user_service::get_positions_by_user_id(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(positions))
 }
