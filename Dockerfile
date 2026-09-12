@@ -1,5 +1,5 @@
 # W7-1 后端多阶段构建：builder（rustc 全量编译）→ runtime（bookworm-slim 瘦身）
-# 产物：salvo-vben-admin（API 服务）+ migration（数据库迁移 CLI，entrypoint 先跑）
+# 产物：tide-server（API 服务）+ migration（数据库迁移 CLI，entrypoint 先跑）
 # 版本锁定：rust:1.96-slim 与本地工具链（rustc 1.96.1）一致，避免依赖 MSRV 漂移
 
 # ---- builder：编译期工具链 ----
@@ -14,7 +14,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
 # 根 crate 与 migrations 是两个独立包（非 workspace）：分两次构建
-RUN cargo build --release -p salvo-vben-admin --locked
+RUN cargo build --release -p tide-server --locked
 WORKDIR /app/migrations
 RUN cargo build --release --locked
 
@@ -27,10 +27,10 @@ RUN apt-get update \
     && echo "Asia/Shanghai" > /etc/timezone
 
 WORKDIR /app
-ENV SVB_ENV=production \
+ENV TIDE_ENV=production \
     TZ=Asia/Shanghai
 
-COPY --from=builder /app/target/release/salvo-vben-admin ./
+COPY --from=builder /app/target/release/tide-server ./
 COPY --from=builder /app/migrations/target/release/migration ./
 COPY config.toml ./config.toml
 COPY docker/entrypoint.sh ./entrypoint.sh

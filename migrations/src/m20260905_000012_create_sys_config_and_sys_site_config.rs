@@ -283,7 +283,7 @@ impl MigrationTrait for Migration {
                 "INSERT IGNORE INTO `sys_site_config` \
                    (id, name, logo, ico, watermark_text, watermark_enable, watermark_type, \
                     watermark_pic, mode, side_mode, color) \
-                 VALUES (1, 'salvo-vben-admin', '', '', '', 0, 'text', '', 'white', 'dark', '#409EFF')",
+                 VALUES (1, 'tide-server', '', '', '', 0, 'text', '', 'white', 'dark', '#409EFF')",
             )
             .await?;
         Ok(())

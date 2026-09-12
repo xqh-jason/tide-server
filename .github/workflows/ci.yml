@@ -10,7 +10,7 @@ env:
   RUSTFLAGS: "-D warnings"
   # 测试与迁移统一连 CI 的 MySQL service container（任务 2 的环境变量覆盖，免改 config.toml）。
   # 用 127.0.0.1 而非 localhost：排除 IPv6 解析歧义（::1 端口映射在部分运行器上不可靠）。
-  SVB_DATABASE__URL: "mysql://root:root@127.0.0.1:3306/salvo_vben?charset=utf8mb4&timezone=%2B08:00"
+  TIDE_DATABASE__URL: "mysql://root:root@127.0.0.1:3306/tide_server?charset=utf8mb4&timezone=%2B08:00"
 
 jobs:
   lint:
@@ -50,7 +50,7 @@ jobs:
         image: mysql:8
         env:
           MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: salvo_vben
+          MYSQL_DATABASE: tide_server
         ports:
           - "3306:3306"
         options: >-
@@ -79,7 +79,7 @@ jobs:
       - name: 应用迁移建表
         run: |
           # migrations 为独立 crate；config.toml 默认 3307 已被 env 覆盖到 3306
-          cd migrations && DATABASE_URL="$SVB_DATABASE__URL" cargo run -- up && cd ..
+          cd migrations && DATABASE_URL="$TIDE_DATABASE__URL" cargo run -- up && cd ..
 
       # 2026-09-12 排障记录：一次运行中迁移阶段（13:02）经 localhost:3306 连接正常，
       # 2 分钟后测试阶段全部 DB 连接被静默丢弃——236 个连库测试各自恰好 30s

@@ -2,9 +2,9 @@ use serde::Deserialize;
 
 /// 应用配置，从根目录 config.toml 加载。
 ///
-/// 支持环境变量覆盖（容器化部署用，W7-1）：`SVB_` 前缀 + `__` 作层级分隔符，
-/// 例如 `SVB_DATABASE__URL` → `database.url`、`SVB_JWT__SECRET` → `jwt.secret`、
-/// `SVB_ENV` → `env`；列表类取值用逗号分隔（`SVB_CORS__ALLOW_ORIGINS=a,b`）。
+/// 支持环境变量覆盖（容器化部署用，W7-1）：`TIDE_` 前缀 + `__` 作层级分隔符，
+/// 例如 `TIDE_DATABASE__URL` → `database.url`、`TIDE_JWT__SECRET` → `jwt.secret`、
+/// `TIDE_ENV` → `env`；列表类取值用逗号分隔（`TIDE_CORS__ALLOW_ORIGINS=a,b`）。
 /// 环境变量优先级高于 config.toml，未设置的字段仍取配置文件默认值。
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -13,7 +13,7 @@ pub struct Config {
     #[serde(default = "default_env")]
     pub env: String,
     /// 启动种子开关（W7-1 部署补充）：生产环境默认关闭；首次部署置
-    /// `seed.enabled = true`（或 `SVB_SEED__ENABLED=true`）一次性创建初始
+    /// `seed.enabled = true`（或 `TIDE_SEED__ENABLED=true`）一次性创建初始
     /// admin / super 角色 / 基础 RBAC，完成后应关闭并立即改密。
     /// `development` 环境恒执行，不受此开关影响。
     #[serde(default)]
@@ -143,8 +143,8 @@ impl Config {
         let cfg: Config = config::Config::builder()
             .add_source(config::File::with_name("config"))
             .add_source(
-                config::Environment::with_prefix("SVB")
-                    // 前缀用单下划线收尾（SVB_），嵌套层用 __ 分隔（SVB_DATABASE__URL）
+                config::Environment::with_prefix("TIDE")
+                    // 前缀用单下划线收尾（TIDE_），嵌套层用 __ 分隔（TIDE_DATABASE__URL）
                     .prefix_separator("_")
                     .separator("__")
                     // 逗号分隔列表仅对白名单字段生效，其余环境变量保持字符串/自动类型
@@ -176,7 +176,7 @@ mod tests {
     use std::sync::{Mutex, MutexGuard};
 
     /// 进程环境变量是全局共享资源：本模块两个改 env 的测试互斥执行，
-    /// 避免并行线程间相互踩踏（其他模块不设 SVB_* 变量，无跨模块竞态）。
+    /// 避免并行线程间相互踩踏（其他模块不设 TIDE_* 变量，无跨模块竞态）。
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn lock_env() -> MutexGuard<'static, ()> {
@@ -185,17 +185,17 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// SVB_ 环境变量覆盖 config.toml（单函数串行，避免 std::env 的进程级竞态；
+    /// TIDE_ 环境变量覆盖 config.toml（单函数串行，避免 std::env 的进程级竞态；
     /// 清理时保证不残留，防止污染同进程其他模块经 Config::load 连库的测试）。
     #[test]
     fn env_overrides_override_file_fields() {
         let _guard = lock_env();
         // 兜底：若先前断言失败残留了变量，先清一遍再写
         for key in [
-            "SVB_DATABASE__URL",
-            "SVB_JWT__SECRET",
-            "SVB_ENV",
-            "SVB_CORS__ALLOW_ORIGINS",
+            "TIDE_DATABASE__URL",
+            "TIDE_JWT__SECRET",
+            "TIDE_ENV",
+            "TIDE_CORS__ALLOW_ORIGINS",
         ] {
             unsafe { std::env::remove_var(key) };
         }
@@ -205,11 +205,11 @@ mod tests {
         let default_url = base.database.url.clone();
 
         unsafe {
-            std::env::set_var("SVB_DATABASE__URL", &default_url);
-            std::env::set_var("SVB_JWT__SECRET", "env-secret-test");
-            std::env::set_var("SVB_ENV", "production");
+            std::env::set_var("TIDE_DATABASE__URL", &default_url);
+            std::env::set_var("TIDE_JWT__SECRET", "env-secret-test");
+            std::env::set_var("TIDE_ENV", "production");
             std::env::set_var(
-                "SVB_CORS__ALLOW_ORIGINS",
+                "TIDE_CORS__ALLOW_ORIGINS",
                 "http://a.example,http://b.example",
             );
         }
@@ -221,10 +221,10 @@ mod tests {
         assert_eq!(cfg.env, "production", "env 档位被环境变量覆盖");
 
         for key in [
-            "SVB_DATABASE__URL",
-            "SVB_JWT__SECRET",
-            "SVB_ENV",
-            "SVB_CORS__ALLOW_ORIGINS",
+            "TIDE_DATABASE__URL",
+            "TIDE_JWT__SECRET",
+            "TIDE_ENV",
+            "TIDE_CORS__ALLOW_ORIGINS",
         ] {
             unsafe { std::env::remove_var(key) };
         }
@@ -243,9 +243,9 @@ mod tests {
     #[test]
     fn env_numeric_ttl_parses_to_integer() {
         let _guard = lock_env();
-        unsafe { std::env::set_var("SVB_JWT__TTL_SECONDS", "123") };
+        unsafe { std::env::set_var("TIDE_JWT__TTL_SECONDS", "123") };
         let cfg = Config::load().unwrap();
-        unsafe { std::env::remove_var("SVB_JWT__TTL_SECONDS") };
+        unsafe { std::env::remove_var("TIDE_JWT__TTL_SECONDS") };
         assert_eq!(cfg.jwt.ttl_seconds, 123, "环境变量数字应解析为整数");
     }
 }

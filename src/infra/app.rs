@@ -13,7 +13,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     opt.sqlx_logging(config.database.log_sql);
     let db = sea_orm::Database::connect(opt).await?;
     // 种子数据初始化（幂等）：admin / super / 默认菜单与 RBAC 关联。
-    // development 环境恒执行；生产仅当显式开启 seed.enabled（SVB_SEED__ENABLED=true）
+    // development 环境恒执行；生产仅当显式开启 seed.enabled（TIDE_SEED__ENABLED=true）
     // 时执行——供首次部署一次性 bootstrap 初始账号，完成后应立即关闭并改密。
     // 不置位时跳过，避免每次启动把 admin 密码重置为弱口令导致系统失守。
     if config.env == "development" || config.seed.enabled {
@@ -43,7 +43,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     // OpenAPI 契约交付：JSON 文档 + Swagger UI 页面（W1 目标）。
     // 只有 #[endpoint] 定义的接口会被 merge_router 收录。
-    let doc = OpenApi::new("salvo-vben-admin API", "0.1.0").merge_router(&router);
+    let doc = OpenApi::new("tide-server API", "0.1.0").merge_router(&router);
     let router = router
         .unshift(doc.into_router("/api-doc/openapi.json"))
         .unshift(SwaggerUi::new("/api-doc/openapi.json").into_router("/swagger-ui"));

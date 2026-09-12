@@ -412,7 +412,7 @@ mod tests {
         // 恢复种子行的展示名，避免污染默认站点设置
         let model = find_site_config(&db).await.unwrap().unwrap();
         let mut am: sys_site_config::ActiveModel = model.into();
-        am.name = Set("salvo-vben-admin".to_string());
+        am.name = Set("tide-server".to_string());
         update_site_config(&db, am, 0).await.unwrap();
 
         assert_eq!(updated.name, "迁移验证临时名");

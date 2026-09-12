@@ -20,7 +20,7 @@
 - `cargo check`：类型检查
 - `cargo test`：全量测试（需本地 MySQL：`docker compose up -d`）
 - 迁移：在 `migrations/` 目录执行
-  `DATABASE_URL='mysql://root:root@localhost:3307/salvo_vben' cargo run -- up`
+  `DATABASE_URL='mysql://root:root@localhost:3307/tide_server' cargo run -- up`
 - 启动：`cargo run`（监听 0.0.0.0:8080；注意根目录的 `cargo run -- up` 会启动服务器而非迁移）
 
 ### 验证方式约定（2026-09-10）

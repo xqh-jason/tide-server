@@ -3240,31 +3240,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "salvo-vben-admin"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "captcha",
- "chrono",
- "config",
- "dashmap",
- "futures-util",
- "jsonwebtoken",
- "salvo",
- "sea-orm",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "thiserror",
- "tokio",
- "tokio-cron-scheduler",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "salvo_core"
 version = "0.95.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4110,6 +4085,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "tide-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "captcha",
+ "chrono",
+ "config",
+ "dashmap",
+ "futures-util",
+ "jsonwebtoken",
+ "salvo",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "thiserror",
+ "tokio",
+ "tokio-cron-scheduler",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

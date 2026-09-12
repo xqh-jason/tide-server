@@ -1,6 +1,6 @@
-# salvo-vben-admin
+# tide-server
 
-基于 **Rust + Salvo + SeaORM** 的 RBAC 后台管理系统后端，复刻 [gin-vue-admin](https://github.com/flipped-aurora/gin-vue-admin)，前端使用 [vue-vben-admin](https://github.com/vbenjs/vue-vben-admin)（独立仓库 `salvo-vben-web`，应用为 `web-ele`）。
+基于 **Rust + Salvo + SeaORM** 的 RBAC 后台管理系统后端，复刻 [gin-vue-admin](https://github.com/flipped-aurora/gin-vue-admin)，前端使用 [vue-vben-admin](https://github.com/vbenjs/vue-vben-admin)（独立仓库 `tide-admin`，应用为 `web-ele`）。
 
 ## 技术栈
 
@@ -9,7 +9,7 @@
 | Web 框架 | Salvo 0.95（oapi OpenAPI 契约） |
 | ORM / 迁移 | SeaORM 1.x / sea-orm-migration（独立 crate `migration`） |
 | 认证 | JWT（jsonwebtoken）+ 自研 RBAC（接口/菜单/按钮三级权限码同源） |
-| 配置 | config-rs（`config.toml` + `SVB_` 环境变量覆盖） |
+| 配置 | config-rs（`config.toml` + `TIDE_` 环境变量覆盖） |
 | 数据库 | MySQL 8（utf8mb4） |
 | 部署 | Docker 多阶段构建 + docker-compose + GitHub Actions |
 
@@ -47,21 +47,21 @@ docker compose up -d mysql
 
 # 2. 建表（在 migrations 目录）
 cd migrations
-DATABASE_URL='mysql://root:root@localhost:3307/salvo_vben' cargo run -- up
+DATABASE_URL='mysql://root:root@localhost:3307/tide_server' cargo run -- up
 cd ..
 
 # 3. 启动后端（监听 0.0.0.0:8080，development 环境自动执行幂等种子）
 cargo run
 
-# 4. 前端（salvo-vben-web 仓库）
-cd ../salvo-vben-web
+# 4. 前端（tide-admin 仓库）
+cd ../tide-admin
 pnpm install
 pnpm dev --filter=@vben/web-ele     # dev 代理 /api → http://127.0.0.1:8080
 ```
 
 ## 一键部署（docker compose）
 
-前后端仓库需同级存放：`salvo-vben-admin/` 与 `salvo-vben-web/`。
+前后端仓库需同级存放：`tide-server/` 与 `tide-admin/`。
 
 ```bash
 cp .env.example .env      # 按需修改密码与 JWT secret
@@ -77,25 +77,25 @@ docker compose up -d --build
 生产模式默认不执行种子（避免弱口令重置）。首次部署需显式开启一次：
 
 ```bash
-SVB_SEED_ENABLED=true docker compose up -d --build backend   # 建初始 admin / super 角色
+TIDE_SEED_ENABLED=true docker compose up -d --build backend   # 建初始 admin / super 角色
 docker compose up -d backend                                  # 改回默认后重启（不再重置密码）
 ```
 
 随后**立即登录并修改 admin 密码**（初始凭据 `admin / admin123`，与开发环境约定一致）。
 
-### 环境变量（`SVB_` 前缀 + `__` 层级分隔）
+### 环境变量（`TIDE_` 前缀 + `__` 层级分隔）
 
 生产部署可直接用环境变量覆盖 `config.toml`（优先级更高），无需改配置文件：
 
 | 环境变量 | 对应配置 | 说明 |
 |---|---|---|
-| `SVB_ENV` | `env` | `development` / `production`（生产不重置 admin 弱口令） |
-| `SVB_SEED__ENABLED` | `seed.enabled` | 生产环境显式开启启动种子（首次部署 bootstrap 用） |
-| `SVB_DATABASE__URL` | `database.url` | 连接串，务必带 `charset=utf8mb4&timezone=%2B08:00` |
-| `SVB_JWT__SECRET` | `jwt.secret` | JWT 签名密钥，生产替换为强随机串 |
-| `SVB_JWT__TTL_SECONDS` | `jwt.ttl_seconds` | 过期秒数（自动识别数字类型） |
-| `SVB_CORS__ALLOW_ORIGINS` | `cors.allow_origins` | 跨域白名单，逗号分隔（如 `a.com,b.com`） |
-| `SVB_UPLOAD__DIR` | `upload.dir` | 上传落盘目录 |
+| `TIDE_ENV` | `env` | `development` / `production`（生产不重置 admin 弱口令） |
+| `TIDE_SEED__ENABLED` | `seed.enabled` | 生产环境显式开启启动种子（首次部署 bootstrap 用） |
+| `TIDE_DATABASE__URL` | `database.url` | 连接串，务必带 `charset=utf8mb4&timezone=%2B08:00` |
+| `TIDE_JWT__SECRET` | `jwt.secret` | JWT 签名密钥，生产替换为强随机串 |
+| `TIDE_JWT__TTL_SECONDS` | `jwt.ttl_seconds` | 过期秒数（自动识别数字类型） |
+| `TIDE_CORS__ALLOW_ORIGINS` | `cors.allow_origins` | 跨域白名单，逗号分隔（如 `a.com,b.com`） |
+| `TIDE_UPLOAD__DIR` | `upload.dir` | 上传落盘目录 |
 
 列表类字段统一逗号分隔；同源反代部署下无需配置 CORS。
 
