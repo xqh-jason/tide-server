@@ -8,8 +8,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
-  # 测试与迁移统一连 CI 的 MySQL service container（任务 2 的环境变量覆盖，免改 config.toml）
-  SVB_DATABASE__URL: "mysql://root:root@localhost:3306/salvo_vben?charset=utf8mb4&timezone=%2B08:00"
+  # 测试与迁移统一连 CI 的 MySQL service container（任务 2 的环境变量覆盖，免改 config.toml）。
+  # 用 127.0.0.1 而非 localhost：排除 IPv6 解析歧义（::1 端口映射在部分运行器上不可靠）。
+  SVB_DATABASE__URL: "mysql://root:root@127.0.0.1:3306/salvo_vben?charset=utf8mb4&timezone=%2B08:00"
 
 jobs:
   lint:
@@ -42,6 +43,8 @@ jobs:
   test:
     name: 真库集成测试
     runs-on: ubuntu-latest
+    # 兜底：正常全程约 10 分钟；防运行器故障时长时间空转
+    timeout-minutes: 30
     services:
       mysql:
         image: mysql:8
@@ -68,8 +71,42 @@ jobs:
         with:
           workspaces: . -> target
 
-      - name: 跑全量测试
+      # 先编译测试二进制（无需数据库），把「编译」与「连库执行」分离，
+      # 让探活紧贴测试执行点：运行器端口映射若失效可在此快速失败
+      - name: 编译测试二进制
+        run: cargo test --no-run
+
+      - name: 应用迁移建表
         run: |
-          # 先建表（migrations 为独立 crate；config.toml 默认 3307 已被 env 覆盖到 3306）
+          # migrations 为独立 crate；config.toml 默认 3307 已被 env 覆盖到 3306
           cd migrations && DATABASE_URL="$SVB_DATABASE__URL" cargo run -- up && cd ..
-          cargo test
+
+      # 2026-09-12 排障记录：一次运行中迁移阶段（13:02）经 localhost:3306 连接正常，
+      # 2 分钟后测试阶段全部 DB 连接被静默丢弃——236 个连库测试各自恰好 30s
+      # PoolTimedOut（合计空耗约 1 小时），容器侧 mysqld 日志全程干净（无崩溃无连接异常），
+      # 判定为运行器 docker 端口映射中途失效的环境故障。
+      # 此步从宿主机探测已发布端口：映射失效时 1 分钟内带诊断信息快速失败，
+      # 重跑 job（新容器新映射）即可恢复，而不是空耗 1 小时。
+      - name: 探活 MySQL（宿主机 → 容器端口映射）
+        run: |
+          probe() {
+            if command -v mysqladmin >/dev/null 2>&1; then
+              mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --connect-timeout=3 >/dev/null 2>&1
+            else
+              timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/3306' 2>/dev/null
+            fi
+          }
+          for i in $(seq 1 15); do
+            if probe; then
+              echo "MySQL 端口映射正常（第 ${i} 次探测通过）"
+              exit 0
+            fi
+            echo "第 ${i} 次探测失败，2s 后重试..."
+            sleep 2
+          done
+          echo "::error::宿主机无法连通 127.0.0.1:3306（端口映射失效或容器异常）——测试必然全量 PoolTimedOut，请重跑 job"
+          docker ps -a
+          exit 1
+
+      - name: 跑全量测试
+        run: cargo test
