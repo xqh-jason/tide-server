@@ -715,6 +715,15 @@ const API_SEEDS: &[ApiSeed] = &[
     ),
 ];
 
+/// 按 name 查菜单 id（不过滤软删，与 seed 的查重口径一致）。
+async fn find_menu_id_by_name(db: &DatabaseConnection, name: &str) -> anyhow::Result<Option<u64>> {
+    let menu = sys_menu::Entity::find()
+        .filter(sys_menu::Column::Name.eq(name))
+        .one(db)
+        .await?;
+    Ok(menu.map(|menu| menu.id))
+}
+
 /// 启动初始化：确保开发种子数据存在（幂等，可重复调用）。
 pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     let lock = SEED_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
@@ -790,7 +799,9 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         .await?;
     }
 
-    // 4. 默认菜单：按 name 逐个补种，并记录 name → id 映射（按钮的 parent 引用）
+    // 4. 默认菜单：按 name 逐个补种，并记录 name → id 映射（按钮的 parent 引用）。
+    //    并发安全：`uk_sys_menu_name` 唯一索引兜底，插入冲突时回查既有行（另一进程
+    //    已插同批种子），避免「先查后插」在多进程下重复插入（2026-09-11 实际踩到）。
     let mut menu_ids_by_name: std::collections::HashMap<&str, u64> = Default::default();
     for seed in MENU_SEEDS {
         let existing = sys_menu::Entity::find()
@@ -800,8 +811,15 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         let menu_id = if let Some(menu) = existing {
             menu.id
         } else {
-            let parent_id = seed.parent.map(|p| menu_ids_by_name[p]).unwrap_or(0);
-            sys_menu::ActiveModel {
+            // 父 id：优先本批已解析的映射；父由并发进程插入时回查数据库兜底
+            let parent_id = match seed.parent {
+                Some(parent_name) => match menu_ids_by_name.get(parent_name) {
+                    Some(id) => *id,
+                    None => find_menu_id_by_name(db, parent_name).await?.unwrap_or(0),
+                },
+                None => 0,
+            };
+            let insert_result = sys_menu::ActiveModel {
                 parent_id: Set(parent_id),
                 path: Set(seed.path.to_string()),
                 name: Set(seed.name.to_string()),
@@ -820,8 +838,14 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
                 ..Default::default()
             }
             .insert(db)
-            .await?
-            .id
+            .await;
+            match insert_result {
+                Ok(menu) => menu.id,
+                // 唯一索引冲突（同一 name 刚被并发进程插入）：回查既有 id，不中断 seed
+                Err(_) => find_menu_id_by_name(db, seed.name)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("菜单种子插入失败且回查不到：{}", seed.name))?,
+            }
         };
         menu_ids_by_name.insert(seed.name, menu_id);
     }
@@ -1413,5 +1437,49 @@ mod tests {
         let mut restored: sys_api::ActiveModel = still_deleted[0].clone().into();
         restored.deleted_at = Set(None);
         restored.update(&db).await.unwrap();
+    }
+
+    /// `sys_menu.name` 唯一索引兜底（并发 seed 防重）：同名第二行应被数据库拒绝。
+    #[tokio::test]
+    async fn menu_name_unique_index_rejects_duplicate_names() {
+        let db = test_db().await;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let name = format!("UniqueMenuTest_{unique}");
+
+        let first = sys_menu::ActiveModel {
+            parent_id: Set(0),
+            title: Set("唯一索引测试".to_string()),
+            name: Set(name.clone()),
+            menu_type: Set(2),
+            permission: Set(String::new()),
+            status: Set(1),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await;
+        assert!(first.is_ok(), "首个菜单应插入成功: {first:?}");
+        let first_id = first.unwrap().id;
+
+        let second = sys_menu::ActiveModel {
+            parent_id: Set(0),
+            title: Set("唯一索引测试重复".to_string()),
+            name: Set(name),
+            menu_type: Set(2),
+            permission: Set(String::new()),
+            status: Set(1),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await;
+        assert!(second.is_err(), "同名菜单应被唯一索引拒绝: {second:?}");
+
+        // 直连真库、非事务：手工清理
+        sys_menu::Entity::delete_by_id(first_id)
+            .exec(&db)
+            .await
+            .unwrap();
     }
 }
