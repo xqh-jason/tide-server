@@ -120,7 +120,7 @@ fn check_position(position_ids: &[u64], errors: &mut Vec<String>) {
         return;
     }
 
-    if position_ids.iter().any(|id| *id == 0) {
+    if position_ids.contains(&0) {
         errors.push("职位 ID 不能为 0".to_string());
     }
 

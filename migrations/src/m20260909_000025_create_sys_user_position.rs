@@ -36,7 +36,11 @@ impl MigrationTrait for Migration {
                             .big_unsigned()
                             .not_null(),
                     )
-                    .primary_key(Index::create().col(SysUserPosition::UserId).col(SysUserPosition::PositionId))
+                    .primary_key(
+                        Index::create()
+                            .col(SysUserPosition::UserId)
+                            .col(SysUserPosition::PositionId),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -61,7 +65,9 @@ impl MigrationTrait for Migration {
             .await?;
         manager
             .get_connection()
-            .execute_unprepared("ALTER TABLE `sys_user_position` COMMENT '用户-职位关联（多对多，硬删）'")
+            .execute_unprepared(
+                "ALTER TABLE `sys_user_position` COMMENT '用户-职位关联（多对多，硬删）'",
+            )
             .await?;
         Ok(())
     }

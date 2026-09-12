@@ -1,0 +1,6 @@
+# 工具链锁定：本地与 CI（.github/workflows/ci.yml 的 dtolnay/rust-toolchain@1.96.0）
+# 保持同版本，避免 rustfmt/clippy 行为随补丁版漂移（1.96.0 与 1.96.1 的格式化结果已实际分叉）。
+[toolchain]
+channel = "1.96.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

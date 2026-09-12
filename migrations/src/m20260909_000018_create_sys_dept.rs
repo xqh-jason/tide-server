@@ -61,11 +61,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(""),
                     )
-                    .col(
-                        ColumnDef::new(SysDept::DeptName)
-                            .string_len(64)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(SysDept::DeptName).string_len(64).not_null())
                     .col(
                         ColumnDef::new(SysDept::Sort)
                             .integer()
@@ -171,7 +167,9 @@ impl MigrationTrait for Migration {
             .await?;
         manager
             .get_connection()
-            .execute_unprepared("ALTER TABLE `sys_dept` COMMENT '部门（组织树，数据权限直控挂载点）'")
+            .execute_unprepared(
+                "ALTER TABLE `sys_dept` COMMENT '部门（组织树，数据权限直控挂载点）'",
+            )
             .await?;
         Ok(())
     }

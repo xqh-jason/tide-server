@@ -17,9 +17,7 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .get_connection()
-            .execute_unprepared(
-                "ALTER TABLE `sys_menu` ADD UNIQUE KEY `uk_sys_menu_name` (`name`)",
-            )
+            .execute_unprepared("ALTER TABLE `sys_menu` ADD UNIQUE KEY `uk_sys_menu_name` (`name`)")
             .await?;
         Ok(())
     }

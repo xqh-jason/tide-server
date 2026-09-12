@@ -473,7 +473,7 @@ pub(crate) async fn update_user_in_tx(
 
     // 更新部门
     user_repo::replace_user_depts_in_tx(
-        &txn,
+        txn,
         req.id,
         req.depts
             .into_iter()
@@ -489,7 +489,7 @@ pub(crate) async fn update_user_in_tx(
 
     // 更新职位：全量替换，空数组 = 清空全部职位关联
     user_repo::replace_user_positions_in_tx(
-        &txn,
+        txn,
         req.id,
         req.position_ids
             .into_iter()

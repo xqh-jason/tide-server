@@ -81,7 +81,9 @@ impl MigrationTrait for Migration {
             .await?;
         manager
             .get_connection()
-            .execute_unprepared("ALTER TABLE `sys_user_dept` COMMENT '用户-部门关联（多对多，硬删）'")
+            .execute_unprepared(
+                "ALTER TABLE `sys_user_dept` COMMENT '用户-部门关联（多对多，硬删）'",
+            )
             .await?;
         Ok(())
     }

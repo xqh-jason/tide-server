@@ -103,10 +103,9 @@ pub async fn update_dept_in_tx(
     // 同父同名查重（排除自身）
     if let Some(existing) =
         dept_repo::find_by_parent_and_name(txn, req.parent_id, &req.dept_name).await?
+        && existing.id != req.id
     {
-        if existing.id != req.id {
-            return Err(AppError::Biz("同层级下部门名称已存在".to_string()));
-        }
+        return Err(AppError::Biz("同层级下部门名称已存在".to_string()));
     }
 
     // 字段更新（窄写：只 Set 业务字段；parent_id / dept_path 由移动原语处理）
@@ -407,7 +406,7 @@ mod tests {
     }
 
     /// 在树里按 id 深度优先找节点。
-    fn find_node<'a>(nodes: &'a [DeptResp], id: u64) -> Option<&'a DeptResp> {
+    fn find_node(nodes: &[DeptResp], id: u64) -> Option<&DeptResp> {
         for node in nodes {
             if node.id == id {
                 return Some(node);
