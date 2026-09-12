@@ -68,6 +68,8 @@ pub struct UserResp {
     pub updated_by_name: String,
     /// 角色 ID 列表（`sys_role.id`）
     pub role_ids: Vec<u64>,
+    /// 部门列表
+    pub depts: Vec<UserDeptResp>,
 }
 
 /// `sys_user::Model` → `UserResp` 字段搬运。
@@ -88,6 +90,7 @@ impl From<sys_user::Model> for UserResp {
             created_by_name: String::new(),
             updated_by_name: String::new(),
             role_ids: Vec::new(),
+            depts: Vec::new(),
         }
     }
 }
@@ -195,6 +198,7 @@ pub struct CreateUserReq {
     pub status: i8,
     /// 角色 ID 列表，允许空（不绑角色）
     pub role_ids: Vec<u64>,
+    pub depts: Vec<UserDeptReq>,
 }
 
 /// 更新用户请求。值域校验见同模块 `validate.rs` 中 `impl Validate for UpdateUserReq`。
@@ -221,6 +225,7 @@ pub struct UpdateUserReq {
     pub status: i8,
     /// 角色 ID 列表
     pub role_ids: Vec<u64>,
+    pub depts: Vec<UserDeptReq>,
 }
 
 /// 更新用户状态
@@ -234,4 +239,34 @@ pub struct UpdateUserStatusReq {
     pub id: u64,
     /// 目标状态：`1` 启用、`0` 禁用
     pub status: i8,
+}
+
+/// 用户-部门挂载项（请求侧）：一行 = 一个部门的一次任职。
+///
+/// 三个维度各管一件事：挂载行数 = 任职部门数（可多个）；`is_primary` = 主要组织归属
+/// （**全局至多一个**，`depts` 非空时须恰好一个，用于展示/默认值，不参与数据权限）；
+/// `is_leader` = 该部门负责人（可多个，数据权限直控凭据）。
+#[derive(Debug, Deserialize, ToSchema, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UserDeptReq {
+    /// 部门 id（须 > 0 且存在未软删；停用部门允许挂载）
+    pub dept_id: u64,
+    /// 是否主部门：`1` 是 / `0` 否（`depts` 非空时恰好一个 `1`）
+    pub is_primary: i8,
+    /// 是否该部门负责人：`1` 是 / `0` 否（可多个）
+    pub is_leader: i8,
+}
+
+/// 用户-部门挂载项（响应侧）：随 `UserResp.depts` 返回，`deptName` 由后端批量拼装。
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserDeptResp {
+    /// 部门 id
+    pub dept_id: u64,
+    /// 部门名（后端批量拼装；部门已软删时为空串）
+    pub dept_name: String,
+    /// 是否主部门：`1` 是 / `0` 否（至多一个 `1`）
+    pub is_primary: i8,
+    /// 是否该部门负责人：`1` 是 / `0` 否（可多个）
+    pub is_leader: i8,
 }

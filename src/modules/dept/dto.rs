@@ -10,6 +10,16 @@ use std::collections::HashMap;
 use crate::entity::sys_dept;
 use crate::utils::user_ref::UserRefNames;
 
+/// 部门负责人展示项（来源 `sys_user_dept.is_leader = 1`，允许多个）。
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeptLeader {
+    /// 负责人用户 id（`sys_user.id`）
+    pub user_id: u64,
+    /// 负责人显示名（`sys_user.username`；查不到给空串）
+    pub user_name: String,
+}
+
 /// 部门响应体（树节点：`children` 递归，为空时序列化省略）。
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +54,9 @@ pub struct DeptResp {
     pub created_by_name: String,
     /// 更新人显示名（`sys_user.username`）
     pub updated_by_name: String,
+    /// 部门负责人列表（`is_leader = 1`；为空时序列化省略）
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub leaders: Vec<DeptLeader>,
     /// 子部门；为空时序列化省略该字段
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<DeptResp>,
@@ -67,6 +80,7 @@ impl From<sys_dept::Model> for DeptResp {
             updated_by: m.updated_by,
             created_by_name: String::new(),
             updated_by_name: String::new(),
+            leaders: Vec::new(),
             children: Vec::new(),
         }
     }

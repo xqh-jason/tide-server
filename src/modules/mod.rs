@@ -167,6 +167,12 @@ pub const DOMAINS: &[DomainMount] = &[
         guard: MountGuard::Protected,
         routers: &[config::routes],
     },
+    // 部门管理：POST /api/v1/dept/{list,create,update,get,delete}
+    DomainMount {
+        path: "dept",
+        guard: MountGuard::Protected,
+        routers: &[dept::routes],
+    },
     // 定时任务：POST /api/v1/job/{list,create,update,get,delete,update-status,run-once}
     DomainMount {
         path: "job",

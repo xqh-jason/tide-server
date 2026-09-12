@@ -1,5 +1,6 @@
 # Rust / Cargo 编译产物（根目录 + 子工程）
-**/target
+# target* 同时覆盖 cargo 并发时生成的临时目录（如 targetkn1wPx）
+**/target*
 *.rs.bk
 
 # 环境与本地配置（含密钥，不入库）

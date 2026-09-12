@@ -8,7 +8,7 @@
 //! `dictionary::service::enabled_int_values`），由调用方预取后作为
 //! `status_allowed` 传入，通用判断见 `utils::check::check_status`。
 
-use crate::modules::user::dto::{CreateUserReq, UpdateUserReq, UpdateUserStatusReq};
+use crate::modules::user::dto::{CreateUserReq, UpdateUserReq, UpdateUserStatusReq, UserDeptReq};
 use crate::utils::check;
 
 /// 手机号是否合法：11 位大陆手机号。
@@ -70,6 +70,47 @@ fn check_nickname(nickname: &str, errors: &mut Vec<String>) {
     }
 }
 
+const MAX_USER_DEPTS: usize = 50;
+/// 部门 ID：`dept_id` 为 `u64`，负数在 serde 反序列化即被拒；此处拦 `0`（0 = 系统/未设置，非合法部门）。
+fn check_dept(depts: &[UserDeptReq], errors: &mut Vec<String>) {
+    if depts.is_empty() {
+        return;
+    }
+
+    if depts.iter().any(|d| d.dept_id == 0) {
+        errors.push("部门 ID 不能为 0".to_string());
+    }
+
+    let is_primary_list = depts.iter().map(|d| d.is_primary).collect::<Vec<_>>();
+    let is_primary_valid = is_primary_list.iter().all(|d| *d == 1 || *d == 0);
+    if !is_primary_valid {
+        errors.push("isPrimary 值必须为 1 或 0".to_string());
+    }
+
+    if depts.iter().filter(|d| d.is_primary == 1).count() != 1 {
+        errors.push("挂载部门时必须有且仅有一个主部门".to_string());
+    }
+
+    let is_leader_list = depts.iter().map(|d| d.is_leader).collect::<Vec<_>>();
+    let is_leader_valid = is_leader_list.iter().all(|d| *d == 1 || *d == 0);
+    if !is_leader_valid {
+        errors.push("isLeader 值必须为 1 或 0".to_string());
+    }
+
+    if depts.len() > MAX_USER_DEPTS {
+        errors.push(format!("挂载部门数量不能超过 {} 个", MAX_USER_DEPTS));
+    }
+
+    let mut dept_id_list = depts.iter().map(|d| d.dept_id).collect::<Vec<_>>();
+    let original_dept_id_count = dept_id_list.len();
+    dept_id_list.sort();
+    dept_id_list.dedup();
+    let unique_dept_id_count = dept_id_list.len();
+    if original_dept_id_count != unique_dept_id_count {
+        errors.push("部门 ID 不能重复".to_string());
+    }
+}
+
 /// 收集到的错误拼接为一条消息（按字段检查顺序，可读性优于只给首条）。
 fn join_errors(errors: Vec<String>) -> Result<(), String> {
     if errors.is_empty() {
@@ -87,10 +128,12 @@ pub fn validate_create_user(req: &CreateUserReq, status_allowed: &[i8]) -> Resul
     if !(6..=32).contains(&req.password.chars().count()) {
         errors.push("密码长度须在 6-32 个字符之间".to_string());
     }
+
     check_username(&req.username, &mut errors);
     check_nickname(&req.nickname, &mut errors);
     check_phone_email((&req.phone, &req.email), &mut errors);
     check_emp_no(&req.emp_no, &mut errors);
+    check_dept(&req.depts, &mut errors);
     check::check_status(req.status, status_allowed)
         .map_err(|e| errors.push(e))
         .ok();
@@ -113,6 +156,7 @@ pub fn validate_update_user(req: &UpdateUserReq, status_allowed: &[i8]) -> Resul
     }
     // 工号：空串表示未设置；非空须 6 位 ASCII 数字
     check_emp_no(&req.emp_no, &mut errors);
+    check_dept(&req.depts, &mut errors);
     check_nickname(&req.nickname, &mut errors);
     check_phone_email((&req.phone, &req.email), &mut errors);
     check::check_status(req.status, status_allowed)
@@ -153,6 +197,7 @@ mod tests {
             email: "user@example.com".to_string(),
             status: 1,
             role_ids: vec![],
+            depts: vec![],
         }
     }
 
@@ -167,6 +212,7 @@ mod tests {
             email: "user@example.com".to_string(),
             status: 1,
             role_ids: vec![],
+            depts: vec![],
         }
     }
 
@@ -261,5 +307,135 @@ mod tests {
         req.password = "123".to_string();
         let err = validate_update_user(&req, &[0, 1]).unwrap_err();
         assert!(err.contains("密码长度须在 6-32 个字符之间"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_dept_id_zero_reports_message() {
+        let mut req = create_req();
+        req.depts = vec![UserDeptReq {
+            dept_id: 0,
+            is_primary: 1,
+            is_leader: 0,
+        }];
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("部门 ID 不能为 0"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_valid_dept_passes() {
+        let mut req = create_req();
+        req.depts = vec![UserDeptReq {
+            dept_id: 5,
+            is_primary: 1,
+            is_leader: 0,
+        }];
+        assert!(
+            validate_create_user(&req, &[0, 1]).is_ok(),
+            "合法部门 ID 不应报错"
+        );
+    }
+
+    #[test]
+    fn create_duplicate_dept_ids_reports_message() {
+        let mut req = create_req();
+        req.depts = vec![
+            UserDeptReq {
+                dept_id: 5,
+                is_primary: 1,
+                is_leader: 0,
+            },
+            UserDeptReq {
+                dept_id: 5,
+                is_primary: 0,
+                is_leader: 1,
+            },
+        ];
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("部门 ID 不能重复"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_two_primary_depts_reports_message() {
+        let mut req = create_req();
+        req.depts = vec![
+            UserDeptReq {
+                dept_id: 5,
+                is_primary: 1,
+                is_leader: 0,
+            },
+            UserDeptReq {
+                dept_id: 6,
+                is_primary: 1,
+                is_leader: 0,
+            },
+        ];
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("必须有且仅有一个主部门"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_depts_without_primary_reports_message() {
+        let mut req = create_req();
+        req.depts = vec![
+            UserDeptReq {
+                dept_id: 5,
+                is_primary: 0,
+                is_leader: 0,
+            },
+            UserDeptReq {
+                dept_id: 6,
+                is_primary: 0,
+                is_leader: 1,
+            },
+        ];
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("必须有且仅有一个主部门"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_too_many_depts_reports_message() {
+        let mut req = create_req();
+        req.depts = (1u64..=51)
+            .map(|i| UserDeptReq {
+                dept_id: i,
+                is_primary: if i == 1 { 1 } else { 0 },
+                is_leader: 0,
+            })
+            .collect();
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("不能超过 50"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_invalid_primary_value_reports_message() {
+        let mut req = create_req();
+        req.depts = vec![UserDeptReq {
+            dept_id: 5,
+            is_primary: 2,
+            is_leader: 0,
+        }];
+        let err = validate_create_user(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("必须为 1 或 0"), "实际: {err}");
+    }
+
+    #[test]
+    fn create_multiple_leaders_passes() {
+        let mut req = create_req();
+        req.depts = vec![
+            UserDeptReq {
+                dept_id: 5,
+                is_primary: 1,
+                is_leader: 1,
+            },
+            UserDeptReq {
+                dept_id: 6,
+                is_primary: 0,
+                is_leader: 1,
+            },
+        ];
+        assert!(
+            validate_create_user(&req, &[0, 1]).is_ok(),
+            "允许多个部门负责人"
+        );
     }
 }

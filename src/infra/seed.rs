@@ -98,6 +98,51 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemUser"),
         sort: 3,
     },
+    // 部门管理页面 + 按钮权限码（组织架构树；sort 靠后，不打扰既有菜单顺序）
+    MenuSeed {
+        name: "SystemDept",
+        title: "部门管理",
+        path: "/system/dept",
+        component: "#/views/system/dept/index.vue",
+        icon: "lucide:network",
+        menu_type: 2,
+        permission: "",
+        parent: Some("System"),
+        sort: 9,
+    },
+    MenuSeed {
+        name: "SystemDeptCreate",
+        title: "部门新增",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:dept:create",
+        parent: Some("SystemDept"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "SystemDeptUpdate",
+        title: "部门修改",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:dept:update",
+        parent: Some("SystemDept"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "SystemDeptDelete",
+        title: "部门删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:dept:delete",
+        parent: Some("SystemDept"),
+        sort: 3,
+    },
     // 角色管理页面 + 按钮权限码
     MenuSeed {
         name: "SystemRole",
@@ -460,7 +505,7 @@ const fn api(
     }
 }
 
-/// 全部管理端点登记（68 条）。刻意排除：
+/// 全部管理端点登记（74 条）。刻意排除：
 /// - 公开接口：/health、/captcha/generate、/auth/{login,logout}、GET /site-config/get；
 /// - 登录后每个用户必调的契约端点：POST /user/{info,access-codes,menus}
 ///   （登记即 fail-closed，会把所有非超管用户挡在登录态之外）。
@@ -478,6 +523,7 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/user/get", "POST", "用户详情", "用户管理"),
     api("/api/v1/user/update-status", "POST", "用户启停", "用户管理"),
     api("/api/v1/user/delete", "POST", "用户删除", "用户管理"),
+    api("/api/v1/user/get-depts", "POST", "用户部门列表", "用户管理"),
     api("/api/v1/user/list-all", "POST", "全量用户列表", "用户管理"),
     api(
         "/api/v1/user/list-all-includes-soft-deleted",
@@ -505,6 +551,12 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/menu/update", "POST", "菜单修改", "菜单管理"),
     api("/api/v1/menu/get", "POST", "菜单详情", "菜单管理"),
     api("/api/v1/menu/delete", "POST", "菜单删除", "菜单管理"),
+    // 部门管理
+    api("/api/v1/dept/list", "POST", "部门树列表查询", "部门管理"),
+    api("/api/v1/dept/create", "POST", "部门新增", "部门管理"),
+    api("/api/v1/dept/update", "POST", "部门修改", "部门管理"),
+    api("/api/v1/dept/get", "POST", "部门详情", "部门管理"),
+    api("/api/v1/dept/delete", "POST", "部门删除", "部门管理"),
     // 数据字典（类型 + 字典项）
     api(
         "/api/v1/dictionary/list",

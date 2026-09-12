@@ -20,6 +20,7 @@ mod m20260909_000017_add_missing_column_table_comments;
 mod m20260909_000018_create_sys_dept;
 mod m20260909_000019_create_sys_user_dept;
 mod m20260909_000020_drop_sys_dept_leader_phone_email;
+mod m20260909_000021_add_user_dept_primary_unique;
 
 pub struct Migrator;
 
@@ -47,6 +48,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260909_000018_create_sys_dept::Migration),
             Box::new(m20260909_000019_create_sys_user_dept::Migration),
             Box::new(m20260909_000020_drop_sys_dept_leader_phone_email::Migration),
+            Box::new(m20260909_000021_add_user_dept_primary_unique::Migration),
         ]
     }
 }

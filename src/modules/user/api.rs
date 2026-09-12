@@ -23,7 +23,8 @@ pub async fn list_users(
     let req = body.into_inner();
 
     let data = user_service::page_users(&state.db, &req).await?;
-    let items = fill_user_names(&state.db, data.items, UserResp::from).await?;
+    let mut items = fill_user_names(&state.db, data.items, UserResp::from).await?;
+    user_service::fill_user_dept_names(&state.db, &mut items).await?;
     Ok(ApiResponse::ok(PageResult::new(
         data.total,
         data.total_pages,
@@ -56,6 +57,7 @@ pub async fn info(depot: &mut Depot) -> ApiResult<UserInfoResp> {
     // 填自身档案里的创建人/更新人显示名（能查到的只有操作自己的场景）
     let names = find_user_name_map_by_ids(&state.db, vec![resp.user_info.created_by]).await?;
     resp.user_info.set_user_ref_names(&names);
+
     Ok(ApiResponse::ok(resp))
 }
 
@@ -83,7 +85,9 @@ pub async fn create_user(depot: &mut Depot, body: JsonBody<CreateUserReq>) -> Ap
     let resp = fill_user_names(&state.db, vec![resp], UserResp::from)
         .await?
         .remove(0);
-    Ok(ApiResponse::ok(resp))
+    let mut vec_resp = vec![resp];
+    user_service::fill_user_dept_names(&state.db, &mut vec_resp).await?;
+    Ok(ApiResponse::ok(vec_resp.remove(0)))
 }
 
 /// 获取用户详情（POST + JSON body：`{ "id": ... }`）。
@@ -96,7 +100,9 @@ pub async fn get_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<Use
         .await?
         .remove(0);
     resp.role_ids = user_service::get_role_ids_by_user_id(&state.db, resp.id).await?;
-    Ok(ApiResponse::ok(resp))
+    let mut vec_resp = vec![resp];
+    user_service::fill_user_dept_names(&state.db, &mut vec_resp).await?;
+    Ok(ApiResponse::ok(vec_resp.remove(0)))
 }
 
 /// 更新用户（POST + JSON body）。发起人需拥有 `system:user:update` 权限；
@@ -114,7 +120,9 @@ pub async fn update_user(depot: &mut Depot, body: JsonBody<UpdateUserReq>) -> Ap
     let resp = fill_user_names(&state.db, vec![resp], UserResp::from)
         .await?
         .remove(0);
-    Ok(ApiResponse::ok(resp))
+    let mut vec_resp = vec![resp];
+    user_service::fill_user_dept_names(&state.db, &mut vec_resp).await?;
+    Ok(ApiResponse::ok(vec_resp.remove(0)))
 }
 
 /// 更新用户状态（POST + JSON body：`{ "id": ..., "status": ... }`）；
@@ -151,9 +159,9 @@ pub async fn delete_user(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<
 pub async fn list_all_users(depot: &mut Depot) -> ApiResult<Vec<UserResp>> {
     let state = AppState::from_depot(depot)?;
     let users = user_service::list_all_users(&state.db).await?;
-    Ok(ApiResponse::ok(
-        users.into_iter().map(UserResp::from).collect(),
-    ))
+    let mut vec_resp = users.into_iter().map(UserResp::from).collect::<Vec<_>>();
+    user_service::fill_user_dept_names(&state.db, &mut vec_resp).await?;
+    Ok(ApiResponse::ok(vec_resp))
 }
 
 /// 全量用户（含软删）：审计过滤的用户选择器数据源，仅暴露 id/username/deleted 简要字段。
@@ -166,4 +174,15 @@ pub async fn list_all_users_includes_soft_deleted(
     Ok(ApiResponse::ok(
         users.into_iter().map(UserBriefResp::from).collect(),
     ))
+}
+
+#[endpoint]
+pub async fn get_depts_by_user_id(
+    depot: &mut Depot,
+    body: JsonBody<IdReq>,
+) -> ApiResult<Vec<UserDeptResp>> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let depts = user_service::get_depts_by_user_id(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(depts))
 }

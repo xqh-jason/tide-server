@@ -3,13 +3,22 @@
 //! `*_in_tx` 不管理事务边界：由 api 入口 begin/commit，测试用外层事务包裹。
 //! 树组装在内存完成（一次全量查询 + HashMap 递归），不做 N+1 查询。
 
+use std::collections::HashMap;
+
 use sea_orm::ActiveValue::Set;
-use sea_orm::{ConnectionTrait, DatabaseTransaction};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 
 use crate::entity::sys_dept;
-use crate::modules::dept::dto::{CreateDeptReq, DeptResp, UpdateDeptReq};
+use crate::modules::dept::dto::{CreateDeptReq, DeptLeader, DeptResp, UpdateDeptReq};
 use crate::modules::dept::repo as dept_repo;
 use crate::utils::error::AppError;
+use crate::utils::user_ref::{UserRefNames, find_user_name_map_by_ids};
+
+/// 根部门的父 path 占位（`parent_id = 0` 场景）。
+const ROOT_PARENT_PATH: &str = "/0/";
+
+/// 树组装最大深度：超出即截断（防异常脏数据成环导致无限递归 / 栈溢出，仿 menu 域）。
+const MAX_DEPT_TREE_DEPTH: usize = 64;
 
 /// 事务内创建部门：父存在性 + 同父同名校验后委托 repo 落库（含 path 回写）。
 ///
@@ -17,32 +26,42 @@ use crate::utils::error::AppError;
 /// - `parent_id = 0` 为根部门，path 占位 `/0/`；
 /// - 父部门不存在或已软删 → `AppError::Biz`；
 /// - 同父下部门名重复（含软删占位）→ `AppError::Biz`；
-/// - `parent_path` 由本层组装/校验（新父 `dept_path`，根传 `/0/`），保证以 `/` 结尾。
+/// - `parent_path` 由本层组装（新父 `dept_path`，根传占位 `/0/`），天然以 `/` 结尾。
 pub async fn create_dept_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
     req: &CreateDeptReq,
 ) -> Result<sys_dept::Model, AppError> {
-    let dept = dept_repo::find_by_name_include_deleted(txn, &req.dept_name).await?;
-    if dept.is_none() {
-        return Err(AppError::Biz("部门名已存在".to_string()));
-    }
-
-    let Some(parent_dept) = dept_repo::find_by_id(txn, req.parent_id).await? else {
-        return Err(AppError::Biz("父部门不存在".to_string()));
+    // 父部门校验：parent_id = 0 为根部门（无父），否则须存在且未软删
+    let parent_path = if req.parent_id == 0 {
+        ROOT_PARENT_PATH.to_string()
+    } else {
+        let Some(parent) = dept_repo::find_by_id(txn, req.parent_id).await? else {
+            return Err(AppError::Biz("上级部门不存在或已删除".to_string()));
+        };
+        parent.dept_path
     };
+
+    // 同父同名查重（同父唯一；软删占位由唯一键兜底，这里给友好错误）
+    if dept_repo::find_by_parent_and_name(txn, req.parent_id, &req.dept_name)
+        .await?
+        .is_some()
+    {
+        return Err(AppError::Biz("同层级下部门名称已存在".to_string()));
+    }
 
     let model = dept_repo::create_dept_in_tx(
         txn,
         sys_dept::ActiveModel {
-            dept_name: Set(req.dept_name.clone()),
             parent_id: Set(req.parent_id),
+            dept_name: Set(req.dept_name.clone()),
             sort: Set(req.sort),
             status: Set(req.status),
             allow_peer_read: Set(req.allow_peer_read),
+            remark: Set(req.remark.clone()),
             ..Default::default()
         },
-        &parent_dept.dept_path,
+        &parent_path,
         actor_id,
     )
     .await?;
@@ -56,21 +75,92 @@ pub async fn create_dept_in_tx(
 /// - 新父不存在或已软删 → `AppError::Biz`；
 /// - 新父为自身或其下级（`new_parent.dept_path` 以自身 `dept_path` 为前缀）→ `AppError::Biz`；
 /// - 同父同名（排除自身）→ `AppError::Biz`；
-/// - 组装移动入参前校验 `new_parent_path` 以 `/` 结尾（新父 `dept_path` 天然满足，
-///   根部门传占位 `/0/`）——该入参约定由本层保证，repo 不做判断。
+/// - 传给 repo 的 `new_parent_path` 取新父 `dept_path`（根部门传占位 `/0/`），
+///   天然以 `/` 结尾——入参约定由本层保证，repo 不做判断。
 pub async fn update_dept_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
     req: &UpdateDeptReq,
 ) -> Result<sys_dept::Model, AppError> {
-    todo!(
-        "service 实现：目标/新父校验 + 防环 + 同名查重 + new_parent_path 约定校验 → repo 字段更新或 move_subtree_in_tx"
+    let Some(dept) = dept_repo::find_by_id(txn, req.id).await? else {
+        return Err(AppError::Biz("部门不存在".to_string()));
+    };
+
+    // 新父校验：parent_id = 0 为根；否则须存在未软删，且不得为自身或自身下级（防环）
+    let new_parent_path = if req.parent_id == 0 {
+        ROOT_PARENT_PATH.to_string()
+    } else {
+        let Some(parent) = dept_repo::find_by_id(txn, req.parent_id).await? else {
+            return Err(AppError::Biz("上级部门不存在或已删除".to_string()));
+        };
+        // 防环：自身 path 是新父 path 的前缀 ⇒ 新父为自身或自身下级
+        if parent.dept_path.starts_with(&dept.dept_path) {
+            return Err(AppError::Biz("上级部门不能是自身或其下级部门".to_string()));
+        }
+        parent.dept_path
+    };
+
+    // 同父同名查重（排除自身）
+    if let Some(existing) =
+        dept_repo::find_by_parent_and_name(txn, req.parent_id, &req.dept_name).await?
+    {
+        if existing.id != req.id {
+            return Err(AppError::Biz("同层级下部门名称已存在".to_string()));
+        }
+    }
+
+    // 字段更新（窄写：只 Set 业务字段；parent_id / dept_path 由移动原语处理）
+    let mut updated = dept_repo::update_dept_in_tx(
+        txn,
+        sys_dept::ActiveModel {
+            id: Set(req.id),
+            dept_name: Set(req.dept_name.clone()),
+            sort: Set(req.sort),
+            status: Set(req.status),
+            allow_peer_read: Set(req.allow_peer_read),
+            remark: Set(req.remark.clone()),
+            ..Default::default()
+        },
+        actor_id,
     )
+    .await?;
+
+    // 父变更 = 移动子树：委托 repo 按新父链重算整棵子树 path
+    if req.parent_id != dept.parent_id {
+        let moved =
+            dept_repo::move_subtree_in_tx(txn, req.id, req.parent_id, &new_parent_path, actor_id)
+                .await?;
+        updated = moved.ok_or_else(|| AppError::Biz("部门不存在".to_string()))?;
+    }
+
+    Ok(updated)
 }
 
 /// 事务内删除部门：有活子部门或有用户挂载引用时拒绝，否则软删。
-pub async fn delete_dept_in_tx(txn: &DatabaseTransaction, dept_id: u64) -> Result<(), AppError> {
-    todo!("service 实现：子部门检查 + count_user_refs_by_dept_id 占用检查 → soft_delete_dept_in_tx")
+pub async fn delete_dept_in_tx(
+    txn: &DatabaseTransaction,
+    dept_id: u64,
+    actor_id: u64,
+) -> Result<(), AppError> {
+    if dept_repo::find_by_id(txn, dept_id).await?.is_none() {
+        return Err(AppError::Biz("部门不存在".to_string()));
+    }
+
+    // 存在活子部门 → 拒绝（避免产生游离子树）
+    if !dept_repo::find_children(txn, dept_id).await?.is_empty() {
+        return Err(AppError::Biz("存在下级部门，无法删除".to_string()));
+    }
+
+    // 存在用户挂载引用 → 拒绝（保持组织归属完整性）
+    if dept_repo::count_user_refs_by_dept_id(txn, dept_id).await? > 0 {
+        return Err(AppError::Biz("部门下存在用户，无法删除".to_string()));
+    }
+
+    // 软删：命中 0 行说明并发下目标已被删除
+    if !dept_repo::soft_delete_dept_in_tx(txn, dept_id, actor_id).await? {
+        return Err(AppError::Biz("部门不存在".to_string()));
+    }
+    Ok(())
 }
 
 /// 按 id 查部门详情（软删视为不存在）。
@@ -78,12 +168,166 @@ pub async fn get_dept(
     db: &impl ConnectionTrait,
     dept_id: u64,
 ) -> Result<sys_dept::Model, AppError> {
-    todo!("service 实现：dept_repo::find_by_id，None → AppError::Biz(\"部门不存在\")")
+    let Some(dept) = dept_repo::find_by_id(db, dept_id).await? else {
+        return Err(AppError::Biz("部门不存在".to_string()));
+    };
+    Ok(dept)
+}
+
+/// 批量按 id 查有效部门（排除软删；停用部门仍返回），供跨域引用校验
+/// （如 user 挂载部门存在性）与批量名称拼装。空入参返回空数组。
+pub async fn find_by_ids(
+    db: &impl ConnectionTrait,
+    ids: &[u64],
+) -> Result<Vec<sys_dept::Model>, AppError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(dept_repo::find_by_ids(db, ids).await?)
 }
 
 /// 部门树列表：全量有效部门（含停用）按 `parent_id` 递归组装，返回根节点集合。
 pub async fn list_dept_tree(db: &impl ConnectionTrait) -> Result<Vec<DeptResp>, AppError> {
-    todo!("service 实现：dept_repo::find_all_active → HashMap 分组递归组装 children")
+    let all = dept_repo::find_all_active(db).await?;
+
+    // 平铺 → 按 parent_id 分组（一次查询，无 N+1），再由根递归组装 children
+    let mut by_parent: HashMap<u64, Vec<DeptResp>> = HashMap::new();
+    for model in all {
+        let resp = DeptResp::from(model);
+        by_parent.entry(resp.parent_id).or_default().push(resp);
+    }
+
+    /// 递归组装：同层按 `sort`、`id` 升序；超过深度上限即截断（防脏数据成环）。
+    fn build(
+        parent_id: u64,
+        depth: usize,
+        by_parent: &mut HashMap<u64, Vec<DeptResp>>,
+    ) -> Vec<DeptResp> {
+        if depth > MAX_DEPT_TREE_DEPTH {
+            return Vec::new();
+        }
+        let mut nodes = by_parent.remove(&parent_id).unwrap_or_default();
+        nodes.sort_by(|a, b| a.sort.cmp(&b.sort).then(a.id.cmp(&b.id)));
+        for node in &mut nodes {
+            node.children = build(node.id, depth + 1, by_parent);
+        }
+        nodes
+    }
+
+    Ok(build(0, 1, &mut by_parent))
+}
+
+/// 对外入口：开事务后委托 `create_dept_in_tx`，成功后提交。
+pub async fn create_dept(
+    db: &DatabaseConnection,
+    actor_id: u64,
+    req: &CreateDeptReq,
+) -> Result<sys_dept::Model, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = create_dept_in_tx(&txn, actor_id, req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 对外入口：开事务后委托 `update_dept_in_tx`，成功后提交。
+pub async fn update_dept(
+    db: &DatabaseConnection,
+    actor_id: u64,
+    req: &UpdateDeptReq,
+) -> Result<sys_dept::Model, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = update_dept_in_tx(&txn, actor_id, req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 对外入口：开事务后委托 `delete_dept_in_tx`，成功后提交。
+pub async fn delete_dept(
+    db: &DatabaseConnection,
+    actor_id: u64,
+    dept_id: u64,
+) -> Result<(), AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = delete_dept_in_tx(&txn, dept_id, actor_id).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 批量填充部门树的审计人显示名（`created_by_name` / `updated_by_name`）。
+///
+/// 树无法走扁平的 `fill_user_names` 管道：这里递归收集全部人字段 id →
+/// 一次批量查显示名 → 递归按 `UserRefNames` 协议应用（整体只查一次库）。
+pub async fn fill_dept_audit_names(
+    db: &impl ConnectionTrait,
+    nodes: &mut [DeptResp],
+) -> Result<(), AppError> {
+    /// 递归收集审计人 id。
+    fn collect(nodes: &[DeptResp], ids: &mut Vec<u64>) {
+        for node in nodes {
+            ids.push(node.created_by);
+            ids.push(node.updated_by);
+            collect(&node.children, ids);
+        }
+    }
+    /// 递归应用名称映射。
+    fn apply(nodes: &mut [DeptResp], names: &HashMap<u64, String>) {
+        for node in nodes.iter_mut() {
+            node.set_user_ref_names(names);
+            apply(&mut node.children, names);
+        }
+    }
+
+    let mut ids = Vec::new();
+    collect(nodes, &mut ids);
+    let names = find_user_name_map_by_ids(db, ids).await?;
+    apply(nodes, &names);
+    Ok(())
+}
+
+/// 批量填充部门树的负责人列表（`sys_user_dept.is_leader = 1`，一对一部门可多人）。
+///
+/// 一次查询覆盖整棵树：递归收集部门 id → 批量查关联与用户名 → 递归应用。
+pub async fn fill_dept_leaders(
+    db: &impl ConnectionTrait,
+    nodes: &mut [DeptResp],
+) -> Result<(), AppError> {
+    /// 递归收集部门 id。
+    fn collect_ids(nodes: &[DeptResp], ids: &mut Vec<u64>) {
+        for node in nodes {
+            ids.push(node.id);
+            collect_ids(&node.children, ids);
+        }
+    }
+    /// 递归应用负责人分组。
+    fn apply(nodes: &mut [DeptResp], by_dept: &mut HashMap<u64, Vec<DeptLeader>>) {
+        for node in nodes.iter_mut() {
+            if let Some(leaders) = by_dept.remove(&node.id) {
+                node.leaders = leaders;
+            }
+            apply(&mut node.children, by_dept);
+        }
+    }
+
+    let mut dept_ids = Vec::new();
+    collect_ids(nodes, &mut dept_ids);
+    let rows = dept_repo::find_leaders_by_dept_ids(db, &dept_ids).await?;
+
+    let mut by_dept: HashMap<u64, Vec<DeptLeader>> = HashMap::new();
+    for (dept_id, user_id, user_name) in rows {
+        by_dept
+            .entry(dept_id)
+            .or_default()
+            .push(DeptLeader { user_id, user_name });
+    }
+    apply(nodes, &mut by_dept);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -340,7 +584,7 @@ mod tests {
         let root = seed_dept(&txn, 0, &unique("del_root")).await;
         let _child = seed_dept(&txn, root.id, &unique("del_child")).await;
 
-        let res = delete_dept_in_tx(&txn, root.id).await;
+        let res = delete_dept_in_tx(&txn, root.id, ACTOR_ID).await;
         assert!(
             matches!(res, Err(AppError::Biz(ref m)) if m.contains("下级部门")),
             "存在活子部门应拒绝删除: {res:?}"
@@ -360,7 +604,7 @@ mod tests {
         let root = seed_dept(&txn, 0, &unique("ref_root")).await;
         seed_user_dept_ref(&txn, root.id).await;
 
-        let res = delete_dept_in_tx(&txn, root.id).await;
+        let res = delete_dept_in_tx(&txn, root.id, ACTOR_ID).await;
         assert!(
             matches!(res, Err(AppError::Biz(ref m)) if m.contains("用户")),
             "存在用户挂载应拒绝删除: {res:?}"
@@ -380,7 +624,7 @@ mod tests {
         let root = seed_dept(&txn, 0, &unique("leaf_root")).await;
         let leaf = seed_dept(&txn, root.id, &unique("leaf")).await;
 
-        delete_dept_in_tx(&txn, leaf.id).await.unwrap();
+        delete_dept_in_tx(&txn, leaf.id, ACTOR_ID).await.unwrap();
 
         assert!(
             dept_repo::find_by_id(&txn, leaf.id)

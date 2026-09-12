@@ -1,5 +1,5 @@
 use crate::entity::sys_user::Model;
-use crate::entity::{sys_role, sys_user, sys_user_role};
+use crate::entity::{sys_role, sys_user, sys_user_dept, sys_user_role};
 use crate::modules::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
@@ -245,6 +245,59 @@ pub async fn find_role_ids_by_user_id(
         .into_iter()
         .map(|model| model.role_id)
         .collect::<Vec<_>>())
+}
+
+pub async fn find_dept_links_by_user_id(
+    db: &impl ConnectionTrait,
+    user_id: u64,
+) -> anyhow::Result<Vec<sys_user_dept::Model>> {
+    let models = sys_user_dept::Entity::find()
+        .filter(sys_user_dept::Column::UserId.eq(user_id))
+        .all(db)
+        .await?;
+    Ok(models)
+}
+
+pub async fn find_dept_links_by_user_ids(
+    db: &impl ConnectionTrait,
+    user_ids: &[u64],
+) -> anyhow::Result<Vec<sys_user_dept::Model>> {
+    let models = sys_user_dept::Entity::find()
+        .filter(sys_user_dept::Column::UserId.is_in(user_ids.iter().copied()))
+        .all(db)
+        .await?;
+    Ok(models)
+}
+
+/// 事务内全量替换用户的部门关联：先清旧行，再插入新行（空数组即清空）。
+///
+/// 无旧行时**跳过 DELETE**（空集合短路）：MySQL RR 隔离级别下，未命中的
+/// `DELETE ... WHERE user_id = ?` 会在主键索引上加间隙锁，与并发事务的插入意向锁
+/// 互斥，可致 1213 死锁（测试并发场景已复现）。无行时删除本身也无意义。
+pub(crate) async fn replace_user_depts_in_tx(
+    txn: &DatabaseTransaction,
+    user_id: u64,
+    links: Vec<sys_user_dept::ActiveModel>,
+) -> anyhow::Result<()> {
+    let existing = sys_user_dept::Entity::find()
+        .filter(sys_user_dept::Column::UserId.eq(user_id))
+        .count(txn)
+        .await?;
+
+    if existing > 0 {
+        // 物理清空部门关联（关系表硬删除约定）
+        sys_user_dept::Entity::delete_many()
+            .filter(sys_user_dept::Column::UserId.eq(user_id))
+            .exec(txn)
+            .await?;
+    }
+
+    // 插入新部门关联
+    if !links.is_empty() {
+        sys_user_dept::Entity::insert_many(links).exec(txn).await?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -960,5 +1013,158 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated_before.total, 1);
+    }
+
+    /// 直接插入一个用户（部门关联测试不关心角色/权限），返回 id。
+    async fn seed_user_for_depts(db: &impl ConnectionTrait) -> u64 {
+        sys_user::ActiveModel {
+            username: Set(unique_name("dept_link_user")),
+            password: Set("x".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    /// 构造一条用户-部门关联（关系表无外键，dept_id 用任意值即可）。
+    fn dept_link(
+        user_id: u64,
+        dept_id: u64,
+        is_primary: i8,
+        is_leader: i8,
+    ) -> sys_user_dept::ActiveModel {
+        sys_user_dept::ActiveModel {
+            user_id: Set(user_id),
+            dept_id: Set(dept_id),
+            is_primary: Set(is_primary),
+            is_leader: Set(is_leader),
+        }
+    }
+
+    #[tokio::test]
+    // 全量替换语义：先清旧关联再插入，旧行不残留。
+    async fn replace_user_depts_clears_old_links_and_inserts_new() {
+        let txn = test_txn().await;
+        let user_id = seed_user_for_depts(&txn).await;
+
+        replace_user_depts_in_tx(
+            &txn,
+            user_id,
+            vec![dept_link(user_id, 11, 1, 0), dept_link(user_id, 12, 0, 1)],
+        )
+        .await
+        .unwrap();
+        let after_first = find_dept_links_by_user_id(&txn, user_id).await.unwrap();
+        assert_eq!(after_first.len(), 2);
+
+        replace_user_depts_in_tx(&txn, user_id, vec![dept_link(user_id, 13, 1, 0)])
+            .await
+            .unwrap();
+        let after_second = find_dept_links_by_user_id(&txn, user_id).await.unwrap();
+        assert_eq!(after_second.len(), 1, "旧关联应被清空");
+        assert_eq!(after_second[0].dept_id, 13);
+        assert_eq!(after_second[0].is_primary, 1);
+    }
+
+    #[tokio::test]
+    // 空数组 = 清空全部关联。
+    async fn replace_user_depts_with_empty_links_clears_all() {
+        let txn = test_txn().await;
+        let user_id = seed_user_for_depts(&txn).await;
+        replace_user_depts_in_tx(
+            &txn,
+            user_id,
+            vec![dept_link(user_id, 21, 1, 0), dept_link(user_id, 22, 0, 0)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            find_dept_links_by_user_id(&txn, user_id)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+
+        replace_user_depts_in_tx(&txn, user_id, vec![])
+            .await
+            .unwrap();
+        assert!(
+            find_dept_links_by_user_id(&txn, user_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "空数组应清空关联"
+        );
+    }
+
+    #[tokio::test]
+    // 批量查询：只返回指定用户的行；空入参短路返回空数组。
+    async fn find_dept_links_by_user_ids_filters_by_user_and_short_circuits_empty() {
+        let txn = test_txn().await;
+        let user_a = seed_user_for_depts(&txn).await;
+        let user_b = seed_user_for_depts(&txn).await;
+        let user_c = seed_user_for_depts(&txn).await;
+        replace_user_depts_in_tx(&txn, user_a, vec![dept_link(user_a, 31, 1, 0)])
+            .await
+            .unwrap();
+        replace_user_depts_in_tx(
+            &txn,
+            user_b,
+            vec![dept_link(user_b, 32, 1, 0), dept_link(user_b, 33, 0, 0)],
+        )
+        .await
+        .unwrap();
+        replace_user_depts_in_tx(&txn, user_c, vec![dept_link(user_c, 34, 1, 0)])
+            .await
+            .unwrap();
+
+        let found = find_dept_links_by_user_ids(&txn, &[user_a, user_b])
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 3, "应只命中 a、b 两用户的关联");
+        assert!(
+            found
+                .iter()
+                .all(|link| link.user_id == user_a || link.user_id == user_b)
+        );
+
+        assert!(
+            find_dept_links_by_user_ids(&txn, &[])
+                .await
+                .unwrap()
+                .is_empty(),
+            "空入参应短路返回空数组"
+        );
+    }
+
+    #[tokio::test]
+    // DB 约束兜底：同一用户至多一条 is_primary = 1（生成列 + 唯一索引），
+    // 防绕过 validate 的写入路径（脚本 / 并发 / 未来新增写入方）产生多主部门。
+    async fn user_dept_primary_unique_is_enforced_by_database() {
+        let txn = test_txn().await;
+        let user_id = seed_user_for_depts(&txn).await;
+
+        dept_link(user_id, 41, 1, 0).insert(&txn).await.unwrap();
+
+        let second_primary = dept_link(user_id, 42, 1, 0).insert(&txn).await;
+        assert!(
+            second_primary.is_err(),
+            "第二行 is_primary=1 应被唯一约束拒绝: {second_primary:?}"
+        );
+
+        // 非主部门不受影响：同用户可写多行 is_primary=0
+        dept_link(user_id, 43, 0, 0).insert(&txn).await.unwrap();
+        dept_link(user_id, 44, 0, 0).insert(&txn).await.unwrap();
+        assert_eq!(
+            find_dept_links_by_user_id(&txn, user_id)
+                .await
+                .unwrap()
+                .len(),
+            3,
+            "一行主部门 + 两行非主部门"
+        );
     }
 }

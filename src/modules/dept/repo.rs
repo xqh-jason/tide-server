@@ -16,7 +16,7 @@ use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::Expr;
 use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryOrder};
 
-use crate::entity::{sys_dept, sys_user_dept};
+use crate::entity::{sys_dept, sys_user, sys_user_dept};
 
 /// 事务内创建部门：审计盖章 + 插入 + 回写 `dept_path`。
 ///
@@ -199,15 +199,22 @@ pub async fn find_by_id(
     Ok(model)
 }
 
-pub async fn find_by_id_include_deleted(
+/// 批量按 id 查有效部门（排除软删；停用部门仍返回）。空入参短路，不产生空 `IN`。
+///
+/// 供跨域引用校验（如 user 挂载部门的存在性）与批量名称拼装使用。
+pub async fn find_by_ids(
     db: &impl ConnectionTrait,
-    id: u64,
-) -> anyhow::Result<Option<sys_dept::Model>> {
-    let model = sys_dept::Entity::find()
-        .filter(sys_dept::Column::Id.eq(id))
-        .one(db)
+    ids: &[u64],
+) -> anyhow::Result<Vec<sys_dept::Model>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let models = sys_dept::Entity::find()
+        .filter(sys_dept::Column::Id.is_in(ids.iter().copied()))
+        .filter(sys_dept::Column::DeletedAt.is_null())
+        .all(db)
         .await?;
-    Ok(model)
+    Ok(models)
 }
 
 /// 按父部门 + 部门名查有效部门（活数据查重用）。
@@ -220,29 +227,6 @@ pub async fn find_by_parent_and_name(
         .filter(sys_dept::Column::ParentId.eq(parent_id))
         .filter(sys_dept::Column::DeptName.eq(dept_name))
         .filter(sys_dept::Column::DeletedAt.is_null())
-        .one(db)
-        .await?;
-    Ok(model)
-}
-
-pub async fn find_by_name(
-    db: &impl ConnectionTrait,
-    dept_name: &str,
-) -> anyhow::Result<Option<sys_dept::Model>> {
-    let model = sys_dept::Entity::find()
-        .filter(sys_dept::Column::DeptName.eq(dept_name))
-        .filter(sys_dept::Column::DeletedAt.is_null())
-        .one(db)
-        .await?;
-    Ok(model)
-}
-
-pub async fn find_by_name_include_deleted(
-    db: &impl ConnectionTrait,
-    dept_name: &str,
-) -> anyhow::Result<Option<sys_dept::Model>> {
-    let model = sys_dept::Entity::find()
-        .filter(sys_dept::Column::DeptName.eq(dept_name))
         .one(db)
         .await?;
     Ok(model)
@@ -284,6 +268,46 @@ pub async fn count_user_refs_by_dept_id(
         .count(db)
         .await?;
     Ok(count)
+}
+
+/// 按部门 id 集合查负责人（`is_leader = 1`）及其显示名，返回
+/// `(dept_id, user_id, username)`。
+///
+/// 用户不过滤软删：负责人展示面向历史引用，与 `utils::user_ref` 的名称解析口径一致。
+/// 空入参短路，不产生空 `IN`。
+pub async fn find_leaders_by_dept_ids(
+    db: &impl ConnectionTrait,
+    dept_ids: &[u64],
+) -> anyhow::Result<Vec<(u64, u64, String)>> {
+    if dept_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let links = sys_user_dept::Entity::find()
+        .filter(sys_user_dept::Column::DeptId.is_in(dept_ids.iter().copied()))
+        .filter(sys_user_dept::Column::IsLeader.eq(1))
+        .all(db)
+        .await?;
+    if links.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let user_ids: Vec<u64> = links.iter().map(|link| link.user_id).collect();
+    let users = sys_user::Entity::find()
+        .filter(sys_user::Column::Id.is_in(user_ids))
+        .all(db)
+        .await?;
+    let name_map: HashMap<u64, String> = users
+        .into_iter()
+        .map(|user| (user.id, user.username))
+        .collect();
+
+    Ok(links
+        .into_iter()
+        .map(|link| {
+            let name = name_map.get(&link.user_id).cloned().unwrap_or_default();
+            (link.dept_id, link.user_id, name)
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -495,6 +519,30 @@ mod tests {
             "停用部门仍应被 find_by_id 查到"
         );
         assert!(found_deleted.is_none(), "软删部门不应被 find_by_id 查到");
+    }
+
+    #[tokio::test]
+    // 批量查询：只返回传入 id 中有效（未软删）的部门；空入参短路返回空数组。
+    async fn find_by_ids_returns_only_active_matching_depts() {
+        let txn = test_txn().await;
+        let live_a = seed_root(&txn, &unique("by_ids_a")).await;
+        let live_b = seed_root(&txn, &unique("by_ids_b")).await;
+        let gone = seed_root(&txn, &unique("by_ids_gone")).await;
+        soft_delete_dept_in_tx(&txn, gone.id, ACTOR_ID)
+            .await
+            .unwrap();
+
+        let found = find_by_ids(&txn, &[live_a.id, live_b.id, gone.id])
+            .await
+            .unwrap();
+        let ids: Vec<u64> = found.iter().map(|d| d.id).collect();
+        assert_eq!(found.len(), 2, "软删部门不应出现在批量结果");
+        assert!(ids.contains(&live_a.id) && ids.contains(&live_b.id));
+
+        assert!(
+            find_by_ids(&txn, &[]).await.unwrap().is_empty(),
+            "空入参应短路返回空数组"
+        );
     }
 
     #[tokio::test]

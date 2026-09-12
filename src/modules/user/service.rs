@@ -1,15 +1,20 @@
+use std::collections::HashMap;
+
 use sea_orm::ActiveValue::Set;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 
-use crate::entity::sys_role;
 use crate::entity::sys_user;
+use crate::entity::{sys_role, sys_user_dept};
+use crate::modules::dept::service as dept_service;
 use crate::modules::permission::repo as permission_repo;
 use crate::modules::permission::{
     ADMIN_USERNAME, SUPER_ROLE_KEY, SYSTEM_USER_CREATE, SYSTEM_USER_UPDATE,
     service as permission_service,
 };
 use crate::modules::role::service as role_service;
-use crate::modules::user::dto::{CreateUserReq, UpdateUserReq, UserFilter, UserListReq};
+use crate::modules::user::dto::{
+    CreateUserReq, UpdateUserReq, UserDeptResp, UserFilter, UserListReq, UserResp,
+};
 use crate::modules::user::repo as user_repo;
 use crate::utils::PageData;
 use crate::utils::crypt;
@@ -209,6 +214,49 @@ pub(crate) async fn create_user_in_tx(
     )
     .await?;
 
+    // 挂载部门
+    if !req.depts.is_empty() {
+        let dept_ids = req
+            .depts
+            .iter()
+            .map(|dept| dept.dept_id)
+            .collect::<Vec<_>>();
+        let depts = dept_service::find_by_ids(txn, &dept_ids).await?;
+        // 检查部门是否都存在
+        let found_dept_ids = depts.iter().map(|d| d.id).collect::<Vec<_>>();
+        let messing_dept_ids = req
+            .depts
+            .iter()
+            .filter(|dept| !found_dept_ids.contains(&dept.dept_id))
+            .map(|dept| dept.dept_id)
+            .collect::<Vec<_>>();
+        if !messing_dept_ids.is_empty() {
+            return Err(AppError::Biz(format!(
+                "部门不存在：{}",
+                messing_dept_ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+
+        user_repo::replace_user_depts_in_tx(
+            txn,
+            model.id,
+            req.depts
+                .into_iter()
+                .map(|dept| sys_user_dept::ActiveModel {
+                    user_id: Set(model.id),
+                    dept_id: Set(dept.dept_id),
+                    is_primary: Set(dept.is_primary),
+                    is_leader: Set(dept.is_leader),
+                })
+                .collect(),
+        )
+        .await?;
+    }
+
     Ok(model)
 }
 
@@ -235,6 +283,7 @@ pub async fn update_user_with_links(
 ) -> Result<sys_user::Model, AppError> {
     let txn = db.begin().await.map_err(anyhow::Error::from)?;
     let result = update_user_in_tx(&txn, actor_id, req).await;
+
     if result.is_ok() {
         txn.commit().await.map_err(anyhow::Error::from)?;
     }
@@ -314,6 +363,33 @@ pub(crate) async fn update_user_in_tx(
         ensure_no_super_assignment(txn, actor_id, &roles).await?;
     }
 
+    // 挂载部门校验（与 create 对称）：须为有效部门，软删视为不存在，停用允许。
+    if !req.depts.is_empty() {
+        let dept_ids = req
+            .depts
+            .iter()
+            .map(|dept| dept.dept_id)
+            .collect::<Vec<_>>();
+        let depts = dept_service::find_by_ids(txn, &dept_ids).await?;
+        let found_dept_ids = depts.iter().map(|d| d.id).collect::<Vec<_>>();
+        let messing_dept_ids = req
+            .depts
+            .iter()
+            .filter(|dept| !found_dept_ids.contains(&dept.dept_id))
+            .map(|dept| dept.dept_id)
+            .collect::<Vec<_>>();
+        if !messing_dept_ids.is_empty() {
+            return Err(AppError::Biz(format!(
+                "部门不存在：{}",
+                messing_dept_ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+
     // 密码为空代表不更新密码（沿用库中原有密文）。
     let password = if req.password.is_empty() {
         user.password
@@ -336,6 +412,22 @@ pub(crate) async fn update_user_in_tx(
         },
         req.role_ids,
         actor_id,
+    )
+    .await?;
+
+    // 更新部门
+    user_repo::replace_user_depts_in_tx(
+        &txn,
+        req.id,
+        req.depts
+            .into_iter()
+            .map(|dept| sys_user_dept::ActiveModel {
+                user_id: Set(req.id),
+                dept_id: Set(dept.dept_id),
+                is_primary: Set(dept.is_primary),
+                is_leader: Set(dept.is_leader),
+            })
+            .collect(),
     )
     .await?;
 
@@ -420,13 +512,69 @@ pub async fn get_role_ids_by_user_id(
     Ok(role_ids)
 }
 
+pub async fn get_depts_by_user_id(
+    txn: &impl ConnectionTrait,
+    user_id: u64,
+) -> Result<Vec<UserDeptResp>, AppError> {
+    let user_depts = user_repo::find_dept_links_by_user_id(txn, user_id).await?;
+    let dept_ids = user_depts.iter().map(|d| d.dept_id).collect::<Vec<_>>();
+    let depts = dept_service::find_by_ids(txn, &dept_ids).await?;
+
+    let dept_map = depts
+        .into_iter()
+        .map(|d| (d.id, d.dept_name))
+        .collect::<HashMap<_, _>>();
+
+    let depts = user_depts
+        .into_iter()
+        .map(|d| UserDeptResp {
+            dept_id: d.dept_id,
+            dept_name: dept_map.get(&d.dept_id).cloned().unwrap_or_default(),
+            is_primary: d.is_primary,
+            is_leader: d.is_leader,
+        })
+        .collect::<Vec<_>>();
+
+    Ok(depts)
+}
+
+pub async fn fill_user_dept_names(
+    db: &impl ConnectionTrait,
+    users: &mut [UserResp],
+) -> Result<(), AppError> {
+    let user_ids = users.iter().map(|u| u.id).collect::<Vec<_>>();
+    let user_depts = user_repo::find_dept_links_by_user_ids(db, &user_ids).await?;
+    let dept_ids = user_depts.iter().map(|d| d.dept_id).collect::<Vec<_>>();
+    let depts = dept_service::find_by_ids(db, &dept_ids).await?;
+    let dept_map = depts
+        .into_iter()
+        .map(|d| (d.id, d.dept_name))
+        .collect::<HashMap<_, _>>();
+
+    for user in users {
+        user.depts = user_depts
+            .iter()
+            .filter(|d| d.user_id == user.id)
+            .map(|d| UserDeptResp {
+                dept_id: d.dept_id,
+                dept_name: dept_map.get(&d.dept_id).cloned().unwrap_or_default(),
+                is_primary: d.is_primary,
+                is_leader: d.is_leader,
+            })
+            .collect::<Vec<_>>();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+    use crate::entity::{sys_dept, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+    use crate::modules::dept::repo as dept_repo;
     use crate::modules::permission::{
         ADMIN_USERNAME, SUPER_ROLE_KEY, SYSTEM_USER_CREATE, SYSTEM_USER_UPDATE,
     };
+    use crate::modules::user::dto::UserDeptReq;
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -461,6 +609,7 @@ mod tests {
             email: "created@example.com".to_string(),
             status: 1,
             role_ids,
+            depts: vec![],
         }
     }
 
@@ -475,6 +624,7 @@ mod tests {
             email: "updated@example.com".to_string(),
             status: 1,
             role_ids,
+            depts: vec![],
         }
     }
 
@@ -1442,5 +1592,260 @@ mod tests {
         )
         .await;
         assert!(result.is_ok(), "super 操作者分配超管角色应成功: {result:?}");
+    }
+
+    // —— 多部门挂载（批次 4）——
+
+    /// 造一个根部门，返回 `(id, dept_name)`。
+    /// 测试内直接用 dept 域 repo 原语（跨域调用仅限测试数据准备）。
+    async fn seed_dept(txn: &DatabaseTransaction, prefix: &str) -> (u64, String) {
+        let name = unique_name(prefix);
+        let model = dept_repo::create_dept_in_tx(
+            txn,
+            sys_dept::ActiveModel {
+                dept_name: Set(name.clone()),
+                parent_id: Set(0),
+                ..Default::default()
+            },
+            "/0/",
+            1,
+        )
+        .await
+        .unwrap();
+        (model.id, name)
+    }
+
+    async fn soft_delete_dept(txn: &DatabaseTransaction, id: u64) {
+        dept_repo::soft_delete_dept_in_tx(txn, id, 1).await.unwrap();
+    }
+
+    async fn disable_dept(txn: &DatabaseTransaction, id: u64) {
+        dept_repo::update_dept_in_tx(
+            txn,
+            sys_dept::ActiveModel {
+                id: Set(id),
+                status: Set(0),
+                ..Default::default()
+            },
+            1,
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn dept_links(txn: &impl ConnectionTrait, user_id: u64) -> Vec<sys_user_dept::Model> {
+        user_repo::find_dept_links_by_user_id(txn, user_id)
+            .await
+            .unwrap()
+    }
+
+    fn dept_item(dept_id: u64, is_primary: i8, is_leader: i8) -> UserDeptReq {
+        UserDeptReq {
+            dept_id,
+            is_primary,
+            is_leader,
+        }
+    }
+
+    /// 造一个拥有 super 角色（全权限）的 actor，返回其 id。
+    async fn seed_super_actor(txn: &impl ConnectionTrait) -> u64 {
+        let actor = seed_actor(txn, None).await;
+        let super_fixture = load_super_role(txn).await;
+        bind_user_role(txn, actor.id, super_fixture.role.id).await;
+        actor.id
+    }
+
+    #[tokio::test]
+    async fn create_user_rejects_missing_dept() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+
+        let mut req = request(unique_name("miss_dept_user"), vec![]);
+        req.depts = vec![dept_item(9_999_999_999, 1, 0)];
+        let result = create_user_in_tx(&txn, actor_id, req).await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("部门")),
+            "挂载不存在的部门应被拒绝: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_user_rejects_soft_deleted_dept() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (dept_id, _) = seed_dept(&txn, "soft_create_dept").await;
+        soft_delete_dept(&txn, dept_id).await;
+
+        let mut req = request(unique_name("soft_dept_user"), vec![]);
+        req.depts = vec![dept_item(dept_id, 1, 0)];
+        let result = create_user_in_tx(&txn, actor_id, req).await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("部门")),
+            "挂载已软删部门应被拒绝: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_user_allows_disabled_dept() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (dept_id, _) = seed_dept(&txn, "disabled_dept").await;
+        disable_dept(&txn, dept_id).await;
+
+        let mut req = request(unique_name("disabled_dept_user"), vec![]);
+        req.depts = vec![dept_item(dept_id, 1, 0)];
+        let created = create_user_in_tx(&txn, actor_id, req)
+            .await
+            .expect("停用部门允许挂载");
+
+        assert_eq!(
+            dept_links(&txn, created.id).await.len(),
+            1,
+            "停用部门的挂载关系应落库"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_user_persists_dept_links_with_primary_and_leader() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (dept_a, _) = seed_dept(&txn, "persist_dept_a").await;
+        let (dept_b, _) = seed_dept(&txn, "persist_dept_b").await;
+
+        let mut req = request(unique_name("persist_dept_user"), vec![]);
+        req.depts = vec![dept_item(dept_a, 1, 1), dept_item(dept_b, 0, 0)];
+        let created = create_user_in_tx(&txn, actor_id, req).await.unwrap();
+
+        let links = dept_links(&txn, created.id).await;
+        assert_eq!(links.len(), 2, "两条部门关联都应落库");
+        let primary = links.iter().find(|l| l.dept_id == dept_a).unwrap();
+        assert_eq!(primary.is_primary, 1);
+        assert_eq!(primary.is_leader, 1);
+        let secondary = links.iter().find(|l| l.dept_id == dept_b).unwrap();
+        assert_eq!(secondary.is_primary, 0);
+        assert_eq!(secondary.is_leader, 0);
+    }
+
+    #[tokio::test]
+    async fn update_user_rejects_missing_dept() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let target = seed_target_user(&txn, unique_name("upd_miss_dept_target")).await;
+
+        let mut req = update_request(target.id, target.username.clone(), vec![]);
+        req.depts = vec![dept_item(9_999_999_999, 1, 0)];
+        let result = update_user_in_tx(&txn, actor_id, req).await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("部门")),
+            "更新时挂载不存在的部门应被拒绝: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_user_rejects_soft_deleted_dept() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let target = seed_target_user(&txn, unique_name("upd_soft_dept_target")).await;
+        let (dept_id, _) = seed_dept(&txn, "upd_soft_dept").await;
+        soft_delete_dept(&txn, dept_id).await;
+
+        let mut req = update_request(target.id, target.username.clone(), vec![]);
+        req.depts = vec![dept_item(dept_id, 1, 0)];
+        let result = update_user_in_tx(&txn, actor_id, req).await;
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("部门")),
+            "更新时挂载已软删部门应被拒绝: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_user_replaces_dept_links() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (old_dept, _) = seed_dept(&txn, "upd_old_dept").await;
+        let (new_dept_a, _) = seed_dept(&txn, "upd_new_dept_a").await;
+        let (new_dept_b, _) = seed_dept(&txn, "upd_new_dept_b").await;
+
+        let mut create_req = request(unique_name("upd_dept_user"), vec![]);
+        create_req.depts = vec![dept_item(old_dept, 1, 0)];
+        let created = create_user_in_tx(&txn, actor_id, create_req).await.unwrap();
+        assert_eq!(dept_links(&txn, created.id).await.len(), 1);
+
+        let mut req = update_request(created.id, created.username.clone(), vec![]);
+        req.depts = vec![dept_item(new_dept_a, 1, 0), dept_item(new_dept_b, 0, 1)];
+        update_user_in_tx(&txn, actor_id, req).await.unwrap();
+
+        let links = dept_links(&txn, created.id).await;
+        assert_eq!(links.len(), 2, "旧关联应被整体替换");
+        assert!(
+            links
+                .iter()
+                .all(|l| l.dept_id == new_dept_a || l.dept_id == new_dept_b),
+            "不应残留旧部门关联"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_user_with_empty_depts_clears_links() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (dept_a, _) = seed_dept(&txn, "clear_dept_a").await;
+        let (dept_b, _) = seed_dept(&txn, "clear_dept_b").await;
+
+        let mut create_req = request(unique_name("clear_dept_user"), vec![]);
+        create_req.depts = vec![dept_item(dept_a, 1, 0), dept_item(dept_b, 0, 0)];
+        let created = create_user_in_tx(&txn, actor_id, create_req).await.unwrap();
+        assert_eq!(dept_links(&txn, created.id).await.len(), 2);
+
+        // 全量替换：空数组 = 清空
+        let req = update_request(created.id, created.username.clone(), vec![]);
+        update_user_in_tx(&txn, actor_id, req).await.unwrap();
+
+        assert!(
+            dept_links(&txn, created.id).await.is_empty(),
+            "空 depts 应清空全部部门关联"
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_user_dept_names_fills_names_in_batch() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (dept_id, dept_name) = seed_dept(&txn, "fill_dept").await;
+
+        let mut create_req = request(unique_name("fill_dept_user"), vec![]);
+        create_req.depts = vec![dept_item(dept_id, 1, 0)];
+        let created = create_user_in_tx(&txn, actor_id, create_req).await.unwrap();
+
+        let mut users = vec![UserResp::from(created)];
+        fill_user_dept_names(&txn, &mut users).await.unwrap();
+
+        assert_eq!(users[0].depts.len(), 1);
+        assert_eq!(users[0].depts[0].dept_id, dept_id);
+        assert_eq!(users[0].depts[0].dept_name, dept_name, "部门名应被批量拼装");
+    }
+
+    #[tokio::test]
+    // 历史数据容错：关联仍在但部门已软删时，名称拼装应给空串而不是 panic。
+    async fn fill_user_dept_names_tolerates_soft_deleted_dept() {
+        let txn = test_txn().await;
+        let actor_id = seed_super_actor(&txn).await;
+        let (dept_id, _) = seed_dept(&txn, "fill_soft_dept").await;
+
+        let mut create_req = request(unique_name("fill_soft_user"), vec![]);
+        create_req.depts = vec![dept_item(dept_id, 1, 0)];
+        let created = create_user_in_tx(&txn, actor_id, create_req).await.unwrap();
+
+        // 绕过 service 的占用检查，直接软删部门，模拟历史数据
+        soft_delete_dept(&txn, dept_id).await;
+
+        let mut users = vec![UserResp::from(created)];
+        fill_user_dept_names(&txn, &mut users).await.unwrap();
+
+        assert_eq!(users[0].depts.len(), 1, "关联行仍在，只是部门名缺失");
+        assert_eq!(
+            users[0].depts[0].dept_name, "",
+            "查不到部门名应给空串，不应 panic"
+        );
     }
 }
