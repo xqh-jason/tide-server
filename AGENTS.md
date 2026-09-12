@@ -23,6 +23,16 @@
   `DATABASE_URL='mysql://root:root@localhost:3307/salvo_vben' cargo run -- up`
 - 启动：`cargo run`（监听 0.0.0.0:8080；注意根目录的 `cargo run -- up` 会启动服务器而非迁移）
 
+### 验证方式约定（2026-09-10）
+
+- 常规验证用 `cargo test`（增量编译 + 直连本地 MySQL）或 `cargo run` 起服务走接口 /
+  页面，两者都是允许的日常手段。
+- **避免不必要的全量打包编译**：不要主动跑 `cargo build` / `cargo build --release` /
+  `cargo build --workspace` 之类——它们会产生大量 target 产物，既慢又占空间。仅
+  部署 / 产物验证（Dockerfile、CI）时才执行。
+- 只做编译检查时优先 `cargo check`（不产出二进制）；格式校验用 `cargo fmt --check`。
+- 迁移命令在 `migrations/` 目录执行（见上）。
+
 ## 编码风格与命名
 
 - 注释用简体中文，中英文之间留空格；标识符用英文命名

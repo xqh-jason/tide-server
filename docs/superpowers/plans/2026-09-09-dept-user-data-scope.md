@@ -16,7 +16,7 @@
 | 同级互看 | `sys_dept.allow_peer_read`，默认 0 | 普通成员同部门默认互不可见，部门级独立放开 |
 | 数据权限载体 | 用户部门直控 | 不引入「角色携带数据范围」；超管与接口级权限码不受行级范围影响 |
 | 部门树结构 | `parent_id` + `dept_path` | 路径前缀为数据权限子树判断预留 |
-| 运行时过滤 | 本轮纳入用户列表 | 部门直控闭环首落 `user/list` |
+| 运行时过滤 | ~~本轮纳入用户列表~~ → **已取消**（2026-09-12） | 用户管理是系统管理功能（管理员 / HR 需维护全量），只受权限码 `system:user:*` 控制，不做行级隔离；数据权限 5 规则设计保留，**留待业务表出现时实现**（业务表写入时冗余归属部门快照，查询按可见部门过滤） |
 
 ## 现状（装配点与复用）
 
@@ -87,14 +87,18 @@
 ## 3. user 域改造（多部门挂载）
 
 - Create/Update 请求新增 `depts: [{ deptId, isPrimary, isLeader }]`（缺省空数组 =
-  不挂部门，种子/管理员兼容）；列表过滤条件同步补 `deptId`。
+  不挂部门，种子/管理员兼容）；~~列表过滤条件补 `deptId`~~（随批次 5 取消，不做）。
 - service 校验：部门存在且未软删；`depts` 非空时主部门有且仅有一个 `isPrimary`。
 - 关联维护进既有 user create/update 事务：清 `sys_user_dept` 后整体重建。
 - UserResp 新增 `depts: [{ deptId, deptName, isPrimary, isLeader }]`；deptName 批量
   拼装（收集 user_ids → 一次查关联 + 部门名 → 填充，查询不到空串）。
 - 部门名拼装工具放 `utils/`（只依赖 entity），仿 `user_ref.rs` 但不归人字段协议。
 
-## 4. 数据权限（部门直控，本轮闭环 `user/list`）
+## 4. 数据权限（部门直控）— 规则设计保留，实施延后
+
+> **状态（2026-09-12）**：原计划「本轮闭环 `user/list`」**已取消**。用户管理是系统管理
+> 功能（管理员 / HR 需维护全量用户），只受权限码 `system:user:*` 控制，不做行级隔离；
+> 否则 HR 将无法管理其他部门账号。本节 5 条规则作为**未来业务表的实现依据**保留。
 
 ### 可见性规则
 
@@ -115,11 +119,13 @@
   - 路径前缀集（规则 4：对 X 每个挂载部门 e，取其严格下辖子树，用
     `dept_path LIKE e.path || '%'` 表达或展开为后代 id 集，实现期二选一，以索引
     与测试为准）。
-- 过滤：user_repo 分页主查询保持**不重复**（EXISTS 子查询判断目标用户至少一个挂载
-  部门命中 Scope），辅以 `id = X.id` 白名单；超管跳过 Scope。
+- 过滤（未来业务表套用）：分页主查询保持**不重复**（EXISTS 子查询判断目标记录至少
+  一个归属部门命中 Scope），辅以「本人可见」白名单；超管跳过 Scope。
+  **注**：用户管理不套用本节（批次 5 已取消），本节仅作未来业务表依据。
 - 边界：X 无任何挂载部门 → 仅本人（除超管）。
-- 本规则首落 `user/list`；其它资源（日志等）未来按同一模型扩展，届时审计类数据
-  需按「写入时部门快照」落库，另行计划。
+- **实施时机（2026-09-12 修订）**：待出现需要部门隔离的**业务数据表**时按本节规则实现
+  （用户管理不做）。业务/审计类数据一律按「写入时归属部门快照」落库，
+  不 join `sys_user` 现查——否则用户调岗会让历史数据归属漂移。
 
 ## 5. 权限码与种子
 
@@ -138,7 +144,7 @@
 | `src/entity/mod.rs` | 注册 |
 | `src/modules/dept/{api,dto,service,repo,validate}.rs` + mod.rs | 新建域 |
 | `src/modules/mod.rs` | pub mod dept + DOMAINS 登记一行 |
-| `src/modules/user/*` | depts 入参/校验/关联维护/Resp/部门名拼装/list Scope 过滤 |
+| `src/modules/user/*` | depts 入参/校验/关联维护/Resp/部门名拼装（Scope 过滤已取消） |
 | `src/modules/permission/mod.rs` | SYSTEM_DEPT_* 常量 |
 | `src/infra/seed.rs` | 菜单 / API / 演示数据 |
 | `src/utils/` | dept 名批量拼装辅助 |
@@ -161,12 +167,13 @@
 2. `cargo check`
 3. `cargo test`（需本地 MySQL：`docker compose up -d`）
 4. 行为抽查：dept 树 CRUD + 移动后 dept_path 正确；用户多部门挂载/主部门切换；
-   以不同部门挂载账号调 `user/list` 断言可见集合符合 5 规则。
+   `POST /api/v1/user/get-depts` 返回关联部门与主部门标记。
 
 ## 9. 不做 / 后续
 
 - 岗位 sys_post（后单列，届时 user-post 关联）。
-- 数据权限扩展到日志等历史事实表（需先立「写入时部门快照」约定）。
+- 数据权限（含日志等历史事实表）：**延后至业务表出现**（2026-09-12 修订）；
+  实施前需先立「写入时归属部门快照」约定，且只作用于业务数据，不改系统管理页。
 - codegen 树模板扩展、部门树批量导入导出。
 - 「角色携带数据范围」经典 GVA 模型（当前选择用户部门直控，如未来切换需另计划）。
 
@@ -196,8 +203,66 @@
 - 当前状态：`cargo test dept::repo` → **14 passed / 0 failed**；
   service 5 个业务函数 + `count_user_refs_by_dept_id` 仍为 stub（14 红待实现）。
 
-### 后续批次（待排）
-- 批次 3：`dept/api.rs` + `validate.rs` + DOMAINS 登记挂载 + permission 常量/seed +
-  `leaders` 拼装（按 `sys_user_dept.is_leader`）
-- 批次 4：user 域多部门改造（`depts` 入参 / 关联重建 / Resp 部门名）
-- 批次 5：数据权限运行时过滤（5 规则，`user/list`）
+### 批次 3（2026-09-11 完成）
+- `dept/service.rs`：5 个业务函数实现完成（含 `move_subtree_in_tx` 接入）、
+  `count_user_refs_by_dept_id`、对外事务入口 `create/update/delete_dept`、
+  树填充 `fill_dept_audit_names` / `fill_dept_leaders`；`cargo test dept` **34 passed**。
+- `dept/validate.rs`：名称/备注长度 + status 值域 + id 校验（6 个单测）。
+- `dept/api.rs` + `routes()` + DOMAINS 登记（`path: "dept"`，Protected），
+  端点 `POST /api/v1/dept/{list,create,update,get,delete}`。
+- `DeptResp` 新增 `leaders: [{userId,userName}]`；repo 新增 `find_leaders_by_dept_ids`
+  原语（`sys_user_dept.is_leader = 1`，用户不过滤软删）。
+- seed：`MENU_SEEDS` 补部门管理页面 + 3 按钮权限码（sort 9）、`API_SEEDS` 补 5 条
+  （共 73 条）。
+- 服务验证：路由挂载生效（无 token 返回未登录）、seed 幂等（重启后每 name 1 行）、
+  super 角色自动绑定 4 个部门菜单。
+
+### 批次 4（2026-09-11 完成）— user 域多部门改造
+- `UserDeptReq`：`{ deptId: u64, isPrimary: i8, isLeader: i8 }`——请求字段用 **i8**
+  （与项目 `status` 口径一致），落库同为 i8，不做 bool 转换。
+- `CreateUserReq` / `UpdateUserReq` 加 `#[serde(default)] depts: Vec<UserDeptReq>`（缺省空数组）。
+- **`depts` 非空时恰好一个 `isPrimary = 1`**；`isLeader` 允许多个（部门允许有多负责人）。
+- 软删部门 → 拒绝挂载；**停用部门允许挂载**（前端不展示）。
+- `depts` 数量上限 **50**。
+- **主部门唯一性定稿**（2026-09-12）：`is_primary` 只承担「展示/默认 + 业务归属默认值」
+  一个职责，业务上必须唯一；兼任与多部门任职一律用「挂载 + `is_leader`」表达。
+  DB 层用生成列 `primary_owner = IF(is_primary = 1, user_id, NULL)` + 唯一索引
+  `uk_sys_user_dept_primary` 锁死（迁移 `m20260909_000021`），杜绝脚本 / 并发 /
+  未来写入方绕过 validate 造出多主部门。
+- 前置依赖已就绪：`dept::repo::find_by_ids` / `dept::service::find_by_ids`
+  （批量有效部门，排除软删、含停用；空入参短路；含 repo 测试）。
+- 名称拼装：`fill_user_dept_names(db, &mut [UserResp])`——收集 user_ids → 一次查
+  `sys_user_dept` → 一次查部门名 → 填充（列表/详情/创建/更新/`info` 调用）。
+- 关系维护：`user/repo.rs::replace_user_depts_in_tx`（无条件清空再插入，空数组即清空），
+  由 service 在既有 create/update 事务内调用。
+
+落地清单：
+- `user/dto.rs`：`UserDeptReq` / `UserDeptResp`；`Create/UpdateUserReq.depts`（`serde(default)`）；
+  `UserResp.depts`。
+- `user/validate.rs`：deptId>0、去重、恰好一个 primary、上限 50、i8 值域 0/1、多 leader 允许。
+- `user/repo.rs`：`find_dept_links_by_user_id` / `find_dept_links_by_user_ids`（空入参短路）/
+  `replace_user_depts_in_tx`（无旧行跳过 DELETE，避免 RR 间隙锁并发死锁）。
+- `user/service.rs`：create/update 双侧部门存在性校验（`dept::service::find_by_ids` 差集，
+  软删拒绝、停用允许）；事务内全量替换（空数组清空）；`get_depts_by_user_id`；
+  `fill_user_dept_names`（批量，查不到给空串）。
+- `user/api.rs` + `user/mod.rs`：`POST /api/v1/user/get-depts` 挂载；seed 登记（共 74 条）。
+- 测试：user 域 **72 passed**（新增 20 个用例：repo 4 / validate 6 / service 10）。
+- 验证：服务启动后 `user/get-depts` 无 token 返回未登录；`sys_api` 登记成功；菜单 seed 幂等。
+
+### 批次 5（2026-09-12 取消）
+- 原计划：`user/list` 按 5 条可见性规则收窄数据范围。
+- 决策：**取消**。用户管理是系统管理功能（管理员 / HR 需维护全量用户），只受权限码
+  `system:user:*` 控制，做行级隔离会让 HR 无法管理其他部门账号；企业实践里数据权限
+  落在**业务数据**上，系统管理页不做。
+- 存量资产全部保留、不回退：部门树、`sys_user_dept`（多部门 + 主部门唯一约束）、
+  `is_leader`、§4 的 5 条规则设计——待业务表出现时按「写入时归属部门快照」实现。
+
+### 后续待办
+- 数据权限：待出现需要部门隔离的业务数据表时实施（依据 §4，落库带归属部门快照）
+- 前端：部门管理页面（`salvo-vben-web` 暂无 `views/system/dept`），契约已就绪
+
+### 已知问题（2026-09-11 发现）
+- **并发 seed 重复插入**：`sys_menu.name` 无唯一索引，`SEED_LOCK` 仅进程内生效；
+  服务启动与另一进程（如并发跑的 seed 测试直连真库）同时执行 `ensure_seed` 时
+  TOCTOU 会重复插入菜单（已手工清理）。建议：给 `sys_menu.name` 加唯一索引或
+  改 seed 为 upsert；且避免在服务运行时跑 seed 测试。
