@@ -17,7 +17,7 @@ jobs:
     name: fmt + clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 钉住 Rust 工具链
         uses: dtolnay/rust-toolchain@1.96.0
@@ -59,7 +59,7 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 钉住 Rust 工具链
         uses: dtolnay/rust-toolchain@1.96.0
