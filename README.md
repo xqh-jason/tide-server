@@ -2,8 +2,7 @@
 
 # tide-server
 
-基于 **Rust · Salvo · SeaORM** 的 RBAC 中后台管理系统后端
-复刻 [gin-vue-admin](https://github.com/flipped-aurora/gin-vue-admin) 业务模型，
+基于 **Rust · Salvo · SeaORM** 的 RBAC 中后台管理系统后端，
 配套前端 [tide-admin](https://github.com/xqh-jason/tide-admin)（Vue Vben Admin 5.x）
 
 [![CI](https://github.com/xqh-jason/tide-server/actions/workflows/ci.yml/badge.svg)](https://github.com/xqh-jason/tide-server/actions/workflows/ci.yml)
@@ -45,8 +44,6 @@
 - SeaORM 迁移（独立 crate）+ 启动幂等种子（菜单树 / API 权限点 85 条 / 默认定时任务）
 - 438 个真库集成测试（事务回滚隔离，无孤儿数据）；clippy 对 unwrap / expect / todo /
   unsafe 全量 deny
-
-明确不做：断点续传、服务器监控、表单生成器。
 
 ## 🧱 技术栈
 
@@ -170,7 +167,6 @@ CI（`.github/workflows/ci.yml`，`push/PR → main` 触发）：lint job
 
 ## 🙏 致谢
 
-- [gin-vue-admin](https://github.com/flipped-aurora/gin-vue-admin) — 业务模型参考
 - [Salvo](https://github.com/salvo-rs/salvo) / [SeaORM](https://github.com/SeaQL/sea-orm) — 后端框架
 - [Vue Vben Admin](https://github.com/vbenjs/vue-vben-admin) — 配套前端脚手架
 
