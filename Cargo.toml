@@ -56,6 +56,8 @@ argon2 = "0.5"
 jsonwebtoken = { version = "10", default-features = false, features = [
     "rust_crypto",
 ] }
+# refresh token 落库哈希（SHA-256 hex；lock 已有传递依赖 0.10.9，不产生新下载）
+sha2 = "0.10"
 # 内存缓存实现（token 黑名单）
 dashmap = "6"
 tokio-cron-scheduler = "0.15.1"

@@ -304,6 +304,7 @@ mod tests {
         depot.insert_typed(AuthUser {
             user_id: 1,
             roles: vec![],
+            refresh_token_id: 0,
         });
         depot.insert_typed(CapturedBody(raw_body.to_string()));
 
@@ -357,6 +358,7 @@ mod tests {
         depot.insert_typed(AuthUser {
             user_id: 2,
             roles: vec![],
+            refresh_token_id: 0,
         });
         depot.insert_typed(CapturedBody("{\"name\":\"bob\"}".to_string()));
 

@@ -60,6 +60,7 @@ pub mod menu;
 pub mod operation_log;
 pub mod permission;
 pub mod position;
+pub mod refresh_token;
 pub mod role;
 pub mod sys_api;
 pub mod system;
@@ -197,5 +198,11 @@ pub const DOMAINS: &[DomainMount] = &[
         path: "site-config",
         guard: MountGuard::Public,
         routers: &[config::site_routes],
+    },
+    // 刷新凭证：POST /api/v1/refresh-token/{list,delete,delete-batch,force-logout}（在线会话 / 强制下线 / 历史清理）
+    DomainMount {
+        path: "refresh-token",
+        guard: MountGuard::Protected,
+        routers: &[refresh_token::routes],
     },
 ];

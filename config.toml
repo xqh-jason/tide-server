@@ -26,7 +26,10 @@ max_age = 3600
 [jwt]
 # 开发密钥；生产环境务必用 config.local.toml 或环境变量覆盖
 secret = "dev-secret-change-me"
-ttl_seconds = 604800            # 7 天
+# access token 2 小时；过期由前端静默调 /auth/refresh 续期
+ttl_seconds = 7200
+# refresh token（会话）7 天；存 HttpOnly Cookie，服务端可吊销
+refresh_ttl_seconds = 604800
 
 [upload]
 # 文件落盘目录（相对进程工作目录或绝对路径均可），生产与本地一致

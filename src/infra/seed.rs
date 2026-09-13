@@ -369,6 +369,40 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemLoginLog"),
         sort: 1,
     },
+    // 会话管理页面 + 强制下线 / 删除权限码（页面：#views/system/session/index.vue）
+    MenuSeed {
+        name: "SystemSession",
+        title: "会话管理",
+        path: "/system/session",
+        component: "#/views/system/session/index.vue",
+        icon: "lucide:activity",
+        menu_type: 2,
+        permission: "",
+        parent: Some("System"),
+        sort: 11,
+    },
+    MenuSeed {
+        name: "SystemSessionForceLogout",
+        title: "会话强制下线",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:session:force-logout",
+        parent: Some("SystemSession"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "SystemSessionDelete",
+        title: "会话删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "system:session:delete",
+        parent: Some("SystemSession"),
+        sort: 2,
+    },
     // 数据字典页面 + 类型 / 字典项各三个按钮权限码
     MenuSeed {
         name: "SystemDictionary",
@@ -550,7 +584,7 @@ const fn api(
     }
 }
 
-/// 全部管理端点登记（81 条）。刻意排除：
+/// 全部管理端点登记（85 条）。刻意排除：
 /// - 公开接口：/health、/captcha/generate、/auth/{login,logout}、GET /site-config/get；
 /// - 登录后每个用户必调的契约端点：POST /user/{info,access-codes,menus}
 ///   （登记即 fail-closed，会把所有非超管用户挡在登录态之外）。
@@ -770,6 +804,31 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/position/update", "POST", "职位修改", "职位管理"),
     api("/api/v1/position/get", "POST", "职位详情", "职位管理"),
     api("/api/v1/position/delete", "POST", "职位删除", "职位管理"),
+    // 刷新凭证（/auth/refresh 属公开契约端点，不登记）
+    api(
+        "/api/v1/refresh-token/list",
+        "POST",
+        "刷新凭证列表查询",
+        "刷新凭证",
+    ),
+    api(
+        "/api/v1/refresh-token/delete",
+        "POST",
+        "刷新凭证删除（仅历史记录）",
+        "刷新凭证",
+    ),
+    api(
+        "/api/v1/refresh-token/delete-batch",
+        "POST",
+        "刷新凭证批量删除（仅历史记录）",
+        "刷新凭证",
+    ),
+    api(
+        "/api/v1/refresh-token/force-logout",
+        "POST",
+        "会话强制下线",
+        "刷新凭证",
+    ),
 ];
 
 /// 按 name 查菜单 id（不过滤软删，与 seed 的查重口径一致）。
@@ -1061,6 +1120,27 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         .await?;
     }
 
+    // 5.1 刷新凭证每日清理（幂等按 job_name；调度器在 init_scheduler 装载）
+    const SEED_SESSION_JOB_NAME: &str = "刷新凭证每日清理";
+    let session_job = sys_job::Entity::find()
+        .filter(sys_job::Column::JobName.eq(SEED_SESSION_JOB_NAME))
+        .one(db)
+        .await?;
+    if session_job.is_none() {
+        sys_job::ActiveModel {
+            job_name: Set(SEED_SESSION_JOB_NAME.to_string()),
+            cron_expr: Set("0 30 4 * * *".to_string()),
+            handler_name: Set(crate::task::refresh_token_cleanup::HANDLER_NAME.to_string()),
+            status: Set(1),
+            remark: Set("每日 04:30:00 清理过期超 30 天的登录刷新凭证".to_string()),
+            created_by: Set(admin_id),
+            updated_by: Set(admin_id),
+            ..Default::default()
+        }
+        .insert(db)
+        .await?;
+    }
+
     // 6. super 角色绑定全部菜单：缺失的关联补上
     for menu_id in menu_ids_by_name.values() {
         let bound = sys_role_menu::Entity::find()
@@ -1331,6 +1411,52 @@ mod tests {
             .expect("登录日志删除按钮权限码应存在");
         assert_eq!(button.menu_type, 3, "按钮应为菜单类型 3");
         assert_eq!(button.parent_id, menu.id, "按钮应挂在登录日志菜单下");
+    }
+
+    /// 会话管理菜单页面与强制下线 / 删除按钮权限码应随种子就绪（前端页面
+    /// views/system/session 依赖这两个码控制按钮显隐）。
+    #[tokio::test]
+    async fn ensure_seed_creates_session_menu_and_buttons() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let menu = sys_menu::Entity::find()
+            .filter(sys_menu::Column::Name.eq("SystemSession"))
+            .filter(sys_menu::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("会话管理菜单应存在");
+        assert_eq!(menu.menu_type, 2, "会话管理应为页面菜单");
+        assert_eq!(menu.title, "会话管理");
+        assert_eq!(menu.path, "/system/session");
+        assert_eq!(
+            menu.component, "#/views/system/session/index.vue",
+            "component 必须能被 views glob 匹配，否则前端路由 404"
+        );
+        let system = sys_menu::Entity::find()
+            .filter(sys_menu::Column::Name.eq("System"))
+            .filter(sys_menu::Column::DeletedAt.is_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("System 目录应存在");
+        assert_eq!(menu.parent_id, system.id, "会话管理应挂在 System 目录下");
+
+        for (name, permission) in [
+            ("SystemSessionForceLogout", "system:session:force-logout"),
+            ("SystemSessionDelete", "system:session:delete"),
+        ] {
+            let button = sys_menu::Entity::find()
+                .filter(sys_menu::Column::Permission.eq(permission))
+                .filter(sys_menu::Column::DeletedAt.is_null())
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("{name} 按钮权限码应存在"));
+            assert_eq!(button.menu_type, 3, "{name} 应为菜单类型 3");
+            assert_eq!(button.parent_id, menu.id, "{name} 应挂在会话管理菜单下");
+        }
     }
 
     /// 数据字典菜单页面与类型 / 字典项各三个按钮权限码应随种子就绪。

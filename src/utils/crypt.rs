@@ -1,7 +1,8 @@
-//! 密码哈希（argon2）：注册/登录共用。
+//! 哈希工具：密码（argon2id）与通用 SHA-256。
 //!
-//! 只暴露两个函数：`hash_password`（生成 PHC 字符串，可直接存库）与
+//! 密码只暴露 `hash_password`（生成 PHC 字符串，可直接存库）与
 //! `verify_password`（明文 + PHC 哈希校验）。盐由 OS 随机源生成，无需手动管理。
+//! SHA-256 用于 refresh token 落库哈希（明文只存 HttpOnly Cookie）。
 
 use argon2::{
     Argon2,
@@ -26,6 +27,14 @@ pub fn verify_password(password: &str, password_hash: &str) -> bool {
                 .is_ok()
         })
         .unwrap_or(false)
+}
+
+/// 计算十六进制 SHA-256（refresh token 落库哈希；密码不走此函数，用 argon2）。
+pub fn sha256_hex(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 #[cfg(test)]
@@ -58,5 +67,18 @@ mod tests {
     #[test]
     fn malformed_hash_fails() {
         assert!(!verify_password("admin123", "not-a-phc-hash"));
+    }
+
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        // 标准测试向量：空串与 "abc"
+        assert_eq!(
+            sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 }

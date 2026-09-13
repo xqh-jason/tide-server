@@ -9,11 +9,14 @@ pub mod api;
 pub mod dto;
 pub mod service;
 
-/// 认证端点：`POST /api/v1/auth/login`（公开）与 `POST /api/v1/auth/logout`（需登录态）。
+/// 认证端点：`POST /api/v1/auth/login`（公开）、`POST /api/v1/auth/refresh`
+/// （公开，凭 HttpOnly Cookie 鉴权）与 `POST /api/v1/auth/logout`（需登录态）。
 pub fn routes() -> Router {
     Router::with_path("auth")
         .oapi_tags(["认证"])
         .push(Router::with_path("login").post(api::login))
+        // 刷新：公开端点（凭 HttpOnly Cookie 中的 refresh token 鉴权，spec §4.3）
+        .push(Router::with_path("refresh").post(api::refresh))
         // logout 需要登录态：子路由单独挂认证中间件
         .push(
             Router::with_path("logout")

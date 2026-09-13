@@ -24,6 +24,7 @@ use crate::infra::state::AppState;
 pub mod job_log_cleanup;
 pub mod login_log_cleanup;
 pub mod operation_log_cleanup;
+pub mod refresh_token_cleanup;
 
 /// 内置任务处理器签名：async fn(&AppState) -> anyhow::Result<()> 装箱为 BoxFuture。
 pub type JobHandler =
@@ -55,6 +56,10 @@ pub fn handler_defs() -> &'static [HandlerDef] {
             HandlerDef {
                 name: operation_log_cleanup::HANDLER_NAME,
                 label: operation_log_cleanup::HANDLER_LABEL,
+            },
+            HandlerDef {
+                name: refresh_token_cleanup::HANDLER_NAME,
+                label: refresh_token_cleanup::HANDLER_LABEL,
             },
         ]
     })
@@ -89,6 +94,14 @@ pub fn handlers() -> &'static HashMap<&'static str, JobHandler> {
                         as Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>
                 }) as JobHandler,
             ),
+            // 会话清理任务（见 refresh_token_cleanup.rs）
+            (
+                refresh_token_cleanup::HANDLER_NAME,
+                (|state: &AppState| {
+                    Box::pin(refresh_token_cleanup::run(state))
+                        as Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>
+                }) as JobHandler,
+            ),
         ])
     })
 }
@@ -104,6 +117,7 @@ mod tests {
         assert!(handlers().contains_key(login_log_cleanup::HANDLER_NAME));
         assert!(handlers().contains_key(job_log_cleanup::HANDLER_NAME));
         assert!(handlers().contains_key(operation_log_cleanup::HANDLER_NAME));
+        assert!(handlers().contains_key(refresh_token_cleanup::HANDLER_NAME));
     }
 
     /// 守卫：`handler_defs` 与注册表 key 一一对应、label 非空——防止新增/删除

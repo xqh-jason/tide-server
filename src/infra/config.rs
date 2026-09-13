@@ -135,7 +135,16 @@ pub struct Database {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Jwt {
     pub secret: String,
+    /// access token 有效期（秒）；配合 refresh token 使用，建议小时级
     pub ttl_seconds: i64,
+    /// refresh token（会话）有效期（秒）；缺省 7 天，兼容未加字段的旧 config.toml
+    #[serde(default = "default_refresh_ttl_seconds")]
+    pub refresh_ttl_seconds: i64,
+}
+
+/// `refresh_ttl_seconds` 缺省值：7 天。
+fn default_refresh_ttl_seconds() -> i64 {
+    604_800
 }
 
 impl Config {
@@ -156,6 +165,9 @@ impl Config {
             .try_deserialize()?;
         if cfg.jwt.ttl_seconds <= 0 {
             anyhow::bail!("config.jwt.ttl_seconds 必须大于 0");
+        }
+        if cfg.jwt.refresh_ttl_seconds <= 0 {
+            anyhow::bail!("config.jwt.refresh_ttl_seconds 必须大于 0");
         }
         if cfg.upload.max_size_mb == 0 {
             anyhow::bail!("config.upload.max_size_mb 必须大于 0");
