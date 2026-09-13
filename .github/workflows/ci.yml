@@ -48,6 +48,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # 双保险：测试连库地址有两条来源——TIDE_DATABASE__URL（优先）与
+      # config.toml 回落值。把回落值也对齐 CI，即使进程环境被测试操纵，
+      # 回落路径也指向可达库。（根因见 infra/config.rs tests 注释：env 测试
+      # 旧写法会把注入的变量清掉。）
+      - name: config.toml 库地址对齐 CI（localhost:3307 → 127.0.0.1:3306）
+        run: sed -i 's|localhost:3307|127.0.0.1:3306|' config.toml
+
       - name: 钉住 Rust 工具链
         uses: dtolnay/rust-toolchain@1.96.0
         with:
@@ -58,13 +65,12 @@ jobs:
         with:
           workspaces: . -> target
 
-      # 2026-09-12/13 两次排障记录（run 94000241977 为后一次）：service container
-      # 方式下，迁移与探活经 127.0.0.1:3306（docker-proxy 端口发布）连接正常，
-      # 紧随其后的测试阶段却从第一个连库测试起全部 30s 连接超时——容器侧 mysqld
-      # 全程健康，本地同拓扑（mysql:8 + -p 3306:3306 + 同连接串）完全无法复现，
-      # 判定为运行器端口发布层（userland proxy）中途失效的环境故障。
-      # 故改用 --network host 自管 MySQL：mysqld 直接绑定宿主网络命名空间，
-      # 127.0.0.1:3306 为本机回环直连，不经过 docker-proxy / 端口发布层。
+      # 自管 MySQL（host 网络直连）：mysqld 直接绑定宿主网络命名空间，
+      # 127.0.0.1:3306 为本机回环直连，不经过 docker-proxy / 端口发布层，
+      # 连接路径与本地 cargo run 同构。
+      # （2026-09-12/13 连库故障根因是 config 域 env 测试污染进程环境变量，
+      # 详见 infra/config.rs tests 与上方 config.toml 对齐步骤；host 网络
+      # 并非该故障的修复手段，保留以减少对端口发布层的依赖。）
       - name: 启动 MySQL 8（host 网络，回环直连）
         run: |
           docker run -d --name mysql --network host \
@@ -106,11 +112,9 @@ jobs:
           # migrations 为独立 crate；config.toml 默认 3307 已被 env 覆盖到 3306
           cd migrations && DATABASE_URL="$TIDE_DATABASE__URL" cargo run -- up && cd ..
 
-      # 2026-09-13 排障：迁移进程连库正常、测试进程全部 30s PoolTimedOut，
-      # 两次运行（services 端口发布 / host 网络直连）同模式，根因未明。
-      # 本步骤拿决定性证据：迁移后再探活（区分连接层是否中断）+ 单测
-      # --nocapture（panic 即时打印，不再等 30 分钟超时后才能看失败详情）。
-      # 本地对照：端口不通时 panic 为 `Err value: Conn(SqlxError(PoolTimedOut))`。
+      # 诊断探针（2026-09-13 排障遗留，保留作回归哨兵）：迁移后再探活 +
+      # 单测 --nocapture 直出真实报错——连库层异常时 30 秒内快速失败并附
+      # mysqld 日志，不再等全量 30 分钟超时后才能看到失败详情。
       - name: 诊断：迁移后再探活 + 单测连库直出真实报错
         run: |
           echo '--- 迁移后再探活（vm → mysqld 可达性对照）---'

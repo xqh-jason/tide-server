@@ -176,7 +176,7 @@ mod tests {
     use std::sync::{Mutex, MutexGuard};
 
     /// 进程环境变量是全局共享资源：本模块两个改 env 的测试互斥执行，
-    /// 避免并行线程间相互踩踏（其他模块不设 TIDE_* 变量，无跨模块竞态）。
+    /// 避免并行线程间相互踩踏。
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn lock_env() -> MutexGuard<'static, ()> {
@@ -185,54 +185,78 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// 环境变量快照守卫：构造时记录原始值，Drop（含断言失败 panic 展开）时
+    /// 精确还原——存在则写回、不存在则移除。
+    ///
+    /// 背景（2026-09-13 CI 排障）：旧写法进入即清变量、收尾无条件 remove_var，
+    /// 会把 CI 经 TIDE_DATABASE__URL 注入的测试库连接串一并清掉，同进程后续
+    /// 所有 Config::load 回落 config.toml（CI 上 localhost:3307 不可达），导致
+    /// 全量连库测试固定 30s PoolTimedOut，且本地（3307 可达）无法复现。
+    /// 测试改写进程级 env 必须可还原。
+    struct EnvGuard(Vec<(&'static str, Option<String>)>);
+
+    impl EnvGuard {
+        fn snapshot<const N: usize>(keys: [&'static str; N]) -> Self {
+            EnvGuard(keys.map(|key| (key, std::env::var(key).ok())).into())
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, original) in &self.0 {
+                unsafe {
+                    match original {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
     /// TIDE_ 环境变量覆盖 config.toml（单函数串行，避免 std::env 的进程级竞态；
-    /// 清理时保证不残留，防止污染同进程其他模块经 Config::load 连库的测试）。
+    /// 结束时经 EnvGuard 精确还原原始快照，不残留、不冲掉 CI 注入的值）。
     #[test]
     fn env_overrides_override_file_fields() {
         let _guard = lock_env();
-        // 兜底：若先前断言失败残留了变量，先清一遍再写
-        for key in [
+        const KEYS: [&str; 4] = [
             "TIDE_DATABASE__URL",
             "TIDE_JWT__SECRET",
             "TIDE_ENV",
             "TIDE_CORS__ALLOW_ORIGINS",
-        ] {
-            unsafe { std::env::remove_var(key) };
+        ];
+
+        // 覆盖阶段：快照原始值，结束（含 panic）由守卫还原
+        {
+            let _env = EnvGuard::snapshot(KEYS);
+
+            // DB URL 覆盖值取 config.toml 默认（同进程并行测试读到的行为不变）
+            let base = Config::load().unwrap();
+            let default_url = base.database.url.clone();
+
+            unsafe {
+                std::env::set_var("TIDE_DATABASE__URL", &default_url);
+                std::env::set_var("TIDE_JWT__SECRET", "env-secret-test");
+                std::env::set_var("TIDE_ENV", "production");
+                std::env::set_var(
+                    "TIDE_CORS__ALLOW_ORIGINS",
+                    "http://a.example,http://b.example",
+                );
+            }
+
+            let cfg = Config::load().unwrap();
+            assert_eq!(cfg.database.url, default_url, "URL 覆盖值生效");
+            assert_eq!(cfg.jwt.secret, "env-secret-test", "secret 被环境变量覆盖");
+            assert!(cfg.jwt.ttl_seconds > 0, "未覆盖字段沿用配置文件");
+            assert_eq!(cfg.env, "production", "env 档位被环境变量覆盖");
         }
 
-        // DB URL 覆盖值取 config.toml 默认（同进程并行测试读到的行为不变）
-        let base = Config::load().unwrap();
-        let default_url = base.database.url.clone();
-
-        unsafe {
-            std::env::set_var("TIDE_DATABASE__URL", &default_url);
-            std::env::set_var("TIDE_JWT__SECRET", "env-secret-test");
-            std::env::set_var("TIDE_ENV", "production");
-            std::env::set_var(
-                "TIDE_CORS__ALLOW_ORIGINS",
-                "http://a.example,http://b.example",
-            );
-        }
-
-        let cfg = Config::load().unwrap();
-        assert_eq!(cfg.database.url, default_url, "URL 覆盖值生效");
-        assert_eq!(cfg.jwt.secret, "env-secret-test", "secret 被环境变量覆盖");
-        assert!(cfg.jwt.ttl_seconds > 0, "未覆盖字段沿用配置文件");
-        assert_eq!(cfg.env, "production", "env 档位被环境变量覆盖");
-
-        for key in [
-            "TIDE_DATABASE__URL",
-            "TIDE_JWT__SECRET",
-            "TIDE_ENV",
-            "TIDE_CORS__ALLOW_ORIGINS",
-        ] {
-            unsafe { std::env::remove_var(key) };
-        }
-
+        // 还原阶段：守卫已按快照恢复（CI 恢复注入的连接串，本地未设置则保持
+        // 未设置），未覆盖字段回落配置文件
         let restored = Config::load().unwrap();
         assert_eq!(
             restored.jwt.secret, "dev-secret-change-me",
-            "清理后回落配置文件"
+            "还原后回落配置文件"
         );
         assert_eq!(restored.env, "development");
     }
@@ -243,9 +267,9 @@ mod tests {
     #[test]
     fn env_numeric_ttl_parses_to_integer() {
         let _guard = lock_env();
+        let _env = EnvGuard::snapshot(["TIDE_JWT__TTL_SECONDS"]);
         unsafe { std::env::set_var("TIDE_JWT__TTL_SECONDS", "123") };
         let cfg = Config::load().unwrap();
-        unsafe { std::env::remove_var("TIDE_JWT__TTL_SECONDS") };
         assert_eq!(cfg.jwt.ttl_seconds, 123, "环境变量数字应解析为整数");
     }
 }
