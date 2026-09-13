@@ -16,7 +16,7 @@ use crate::utils::request::JsonBody;
 use crate::utils::user_ref::fill_user_names;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
-/// vben 菜单树（契约 §3.2），vben `fetchMenuListAsync` 消费后动态注册路由。
+/// vben 菜单树，vben `fetchMenuListAsync` 消费后动态注册路由。
 /// 挂载路径仍为 `POST /api/v1/user/menus`（router.rs 组装），
 /// 按当前登录用户实时角色过滤（超管全量 / 普通用户按 `sys_role_menu` 绑定）。
 /// 返回当前用户有权限访问的菜单树，排除软删除菜单。

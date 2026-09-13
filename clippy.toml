@@ -1,4 +1,4 @@
-# W7-1 工程化基线：unwrap/expect 仅放行测试代码（tests 与 #[cfg(test)] 模块），
+# 工程化基线：unwrap/expect 仅放行测试代码（tests 与 #[cfg(test)] 模块），
 # 业务代码仍被 Cargo.toml [lints.clippy] 的 unwrap_used/expect_used deny。
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true

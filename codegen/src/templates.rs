@@ -1083,7 +1083,7 @@ mod tests {
         .unwrap()
     }
 
-    /// 含 audit 审计字段的域定义（W5 审计字段补项）。
+    /// 含 audit 审计字段的域定义。
     fn def_audit() -> DomainDef {
         DomainDef::from_json(
             r#"{

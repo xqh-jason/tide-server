@@ -18,7 +18,7 @@ use crate::utils::error::AppError;
 /// 菜单树最大深度：防御异常数据（超深 parent 链）导致递归栈溢出。
 const MAX_MENU_DEPTH: usize = 10;
 
-/// vben 菜单树（契约 §3.2 的 `/user/menus`）：超管返回全量，普通用户 W3 按角色过滤。
+/// vben 菜单树（`/user/menus`）：超管返回全量，普通用户按角色过滤。
 pub async fn get_menus(
     db: &impl ConnectionTrait,
     user_id: u64,

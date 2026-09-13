@@ -1,4 +1,4 @@
-//! 全局中间件。W2 起在此添加 JWT 认证、权限校验、CORS、日志、Recovery。
+//! 全局中间件：JWT 认证、接口级授权、CORS、操作日志。
 
 use salvo::prelude::*;
 

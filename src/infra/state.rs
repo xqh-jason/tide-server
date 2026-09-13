@@ -14,7 +14,7 @@ pub struct AppState {
     pub db: sea_orm::DatabaseConnection,
     /// 缓存抽象（token 黑名单 / 验证码），测试时可注入替换实现。
     pub cache: Arc<dyn Cache>,
-    /// 定时任务调度器（W6-2）：启动时装载启用任务，CRUD 经它实时增删改。
+    /// 定时任务调度器：启动时装载启用任务，CRUD 经它实时增删改。
     pub scheduler: Arc<JobScheduler>,
 }
 

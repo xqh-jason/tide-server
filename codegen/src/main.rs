@@ -1,4 +1,4 @@
-//! W4 代码生成器 CLI：从域定义 JSON 生成 entity + 每域四件套。
+//! 代码生成器 CLI：从域定义 JSON 生成 entity + 每域四件套。
 
 mod def;
 mod generate;

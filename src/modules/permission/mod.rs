@@ -2,7 +2,7 @@
 //!
 //! 两条授权通道回答同一个问题「这个用户能不能做这件事」：
 //! - 按钮权限码：`sys_menu.permission`（menu_type=3）→ `has_permission`；
-//! - 接口资源授权：`sys_api` × `sys_role_api` → `has_api_permission`（W6 授权层）。
+//! - 接口资源授权：`sys_api` × `sys_role_api` → `has_api_permission`。
 //!
 //! `sys_api` 域负责接口资源的登记管理（管理面 CRUD），本域只消费这些数据做判定；
 //! 中间件与各 service 的鉴权调用统一收敛到本域的判定函数与常量。

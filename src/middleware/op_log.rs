@@ -1,4 +1,4 @@
-//! 操作日志中间件（W5）：已登录业务请求自动落库（gin-vue-admin 对齐）。
+//! 操作日志中间件：已登录业务请求自动落库（gin-vue-admin 对齐）。
 //!
 //! 组成：`OperationLog` 中间件（AuthRequired 之后挂载）、`sanitize_and_truncate`
 //! JSON 递归脱敏 + 截断、`truncate_utf8` UTF-8 安全截断；

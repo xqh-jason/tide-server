@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 /// 应用配置，从根目录 config.toml 加载。
 ///
-/// 支持环境变量覆盖（容器化部署用，W7-1）：`TIDE_` 前缀 + `__` 作层级分隔符，
+/// 支持环境变量覆盖（容器化部署用）：`TIDE_` 前缀 + `__` 作层级分隔符，
 /// 例如 `TIDE_DATABASE__URL` → `database.url`、`TIDE_JWT__SECRET` → `jwt.secret`、
 /// `TIDE_ENV` → `env`；列表类取值用逗号分隔（`TIDE_CORS__ALLOW_ORIGINS=a,b`）。
 /// 环境变量优先级高于 config.toml，未设置的字段仍取配置文件默认值。
@@ -12,7 +12,7 @@ pub struct Config {
     /// 仅在 `development` 下执行，缺省视为开发环境。
     #[serde(default = "default_env")]
     pub env: String,
-    /// 启动种子开关（W7-1 部署补充）：生产环境默认关闭；首次部署置
+    /// 启动种子开关（部署补充）：生产环境默认关闭；首次部署置
     /// `seed.enabled = true`（或 `TIDE_SEED__ENABLED=true`）一次性创建初始
     /// admin / super 角色 / 基础 RBAC，完成后应关闭并立即改密。
     /// `development` 环境恒执行，不受此开关影响。

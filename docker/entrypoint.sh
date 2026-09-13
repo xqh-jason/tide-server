@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# W7-1 容器入口：默认先执行数据库迁移，再启动 API 服务。
+# 容器入口：默认先执行数据库迁移，再启动 API 服务。
 # 可覆盖行为：
 #   - RUN_MIGRATIONS=0  跳过迁移（多副本扩容场景由外部统一执行）
 #   - DATABASE_URL      迁移 CLI 认领的连接串（未设时回落 TIDE_DATABASE__URL）

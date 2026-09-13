@@ -1,7 +1,7 @@
 //! JWT 签发与校验（jsonwebtoken 10.x，HS256）。
 //!
-//! 对照文档 §1：登录成功签发 JWT 并携带用户身份与角色，
-//! 认证中间件（W2 第 4 步）解析后写入 Depot，后续接口不再重复查库取身份。
+//! 登录成功签发 JWT 并携带用户身份与角色，
+//! 认证中间件解析后写入 Depot，后续接口不再重复查库取身份。
 
 use chrono::Utc;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};

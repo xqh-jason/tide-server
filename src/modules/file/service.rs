@@ -105,7 +105,7 @@ pub async fn upload_file(
     // 原始名只存进 sys_file 记录，下载时从记录取来拼 Content-Disposition。
     let stored_name = format!("{}.{}", uuid::Uuid::new_v4().simple(), ext);
 
-    // 上传目录不做启动预建（规格 §6）：首次上传时兜底创建，目录不存在不算部署错误。
+    // 上传目录不做启动预建：首次上传时兜底创建，目录不存在不算部署错误。
     // create_dir_all 对已存在目录是幂等的，每次调也无妨。
     tokio::fs::create_dir_all(dir)
         .await

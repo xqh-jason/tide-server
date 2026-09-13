@@ -1,4 +1,4 @@
-//! 缓存抽象（对照 GVA 的 `GVA_CACHE` 理念，文档 §1.7）：W2 先用于 token 黑名单。
+//! 缓存抽象（内存实现）：先用于 token 黑名单。
 //!
 //! `Cache` trait 只暴露最小操作（get/set/remove），内存实现用 dashmap 惰性过期；
 //! 后续若换 Redis，只需新增实现并替换注入点，业务代码不变。

@@ -1,4 +1,4 @@
-//! 用户引用字段名称拼装（W5）：created_by / updated_by 等指向 sys_user 的人字段，
+//! 用户引用字段名称拼装：created_by / updated_by 等指向 sys_user 的人字段，
 //! 统一在此补齐 `*_name`，前端不做 id → 名称换算。
 //!
 //! 约定（AGENTS.md「人字段命名与名称拼装约定」）：

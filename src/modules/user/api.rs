@@ -45,7 +45,7 @@ pub async fn get_by_username(
     Ok(ApiResponse::ok(items.into_iter().next()))
 }
 
-/// 当前登录用户信息（契约 §3.2）。认证中间件已注入 `AuthUser`。
+/// 当前登录用户信息。认证中间件已注入 `AuthUser`。
 #[endpoint]
 pub async fn info(depot: &mut Depot) -> ApiResult<UserInfoResp> {
     let state = AppState::from_depot(depot)?;
@@ -59,7 +59,7 @@ pub async fn info(depot: &mut Depot) -> ApiResult<UserInfoResp> {
     Ok(ApiResponse::ok(resp))
 }
 
-/// 权限码数组（契约 §3.2），vben `getAccessCodes` 消费，`v-access` 判断按钮显隐。
+/// 权限码数组，vben `getAccessCodes` 消费，`v-access` 判断按钮显隐。
 #[endpoint]
 pub async fn access_codes(depot: &mut Depot) -> ApiResult<Vec<String>> {
     let state = AppState::from_depot(depot)?;

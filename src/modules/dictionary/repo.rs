@@ -217,7 +217,7 @@ pub async fn find_enabled_details(
     Ok(details)
 }
 
-/// 字典项：查重辅助——同类型同 value 的活记录（软删的不算，见规格 §3.3）。
+/// 字典项：查重辅助——同类型同 value 的活记录（软删的不算）。
 pub async fn find_alive_detail_by_value(
     db: &impl ConnectionTrait,
     dictionary_id: u64,

@@ -1,4 +1,4 @@
-//! 系统配置域：键值参数（/config）与网站设置（/site-config），W5-6。
+//! 系统配置域：键值参数（/config）与网站设置（/site-config）。
 
 use salvo::prelude::*;
 

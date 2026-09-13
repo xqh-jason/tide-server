@@ -1,4 +1,4 @@
-//! 内置定时任务注册表（W6-2）：一个任务一个文件，文件名 = `HANDLER_NAME`。
+//! 内置定时任务注册表：一个任务一个文件，文件名 = `HANDLER_NAME`。
 //!
 //! 新增任务的固定动作：建 `src/task/<name>.rs` 实现 `run` + 导出 `HANDLER_NAME`
 //! 常量，并在本文件 `handlers()` 注册一行；无需改动 scheduler。任务跨域只调用

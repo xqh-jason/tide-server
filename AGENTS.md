@@ -153,6 +153,6 @@ repo / service / task / middleware 的依赖方向与跨域访问规则：
 
 ## 协作约定
 
-- W3 起固定分工：AI 编写失败测试并做最终 review，用户手动实现业务代码
+- 固定分工：AI 编写失败测试并做最终 review，用户手动实现业务代码
 - 新功能先建设计文档（`docs/superpowers/specs/`），按测试红 → 实现 → 验证推进
 - 测试与迁移需要连接本地 MySQL，在非沙箱环境执行

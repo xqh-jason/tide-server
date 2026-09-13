@@ -156,7 +156,7 @@ pub struct UsernameReq {
     pub username: String,
 }
 
-/// 用户信息响应（契约 §3.2）：`{ userInfo, roles }`，vben 的 fetchUserInfo 消费。
+/// 用户信息响应：`{ userInfo, roles }`，vben 的 fetchUserInfo 消费。
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UserInfoResp {

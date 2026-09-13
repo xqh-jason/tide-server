@@ -1,4 +1,4 @@
-//! 数据字典域（W5-3）：类型表与字典项表两级结构。
+//! 数据字典域：类型表与字典项表两级结构。
 //!
 //! 路由挂载见 `src/infra/router.rs`：`/api/v1/dictionary`（类型）与
 //! `/api/v1/dictionary-detail`（字典项）两个路由组，均在 AuthRequired 之后。

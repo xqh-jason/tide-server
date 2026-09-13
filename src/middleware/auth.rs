@@ -1,4 +1,4 @@
-//! 认证中间件（W2 第 4 步）：`Authorization: Bearer <token>` → JWT 校验 → 黑名单检查。
+//! 认证中间件：`Authorization: Bearer <token>` → JWT 校验 → 黑名单检查。
 //!
 //! 校验通过后把 `AuthUser` 按类型写入 Depot，handler 用 `depot.get_typed::<AuthUser>()`
 //! 取当前登录用户；鉴权失败返回 HTTP 401 + `{code:0, data, message}` 契约体

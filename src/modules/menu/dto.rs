@@ -1,4 +1,4 @@
-//! 菜单域 DTO：`sys_menu → vben schema` 转换层（契约 §3.4 字段映射）+ 菜单管理 CRUD。
+//! 菜单域 DTO：`sys_menu → vben schema` 转换层 + 菜单管理 CRUD。
 //!
 //! 校验约定：请求体的值域校验**不写在 DTO 文件里**，见同模块 `validate.rs` 中
 //! 手写的 `validate_*` 函数（规则与错误文案按字段分组，字段在此保持纯声明）。

@@ -18,7 +18,7 @@
 //!
 //! 按钮权限码示例：`system:user:create` 必须同时作为前端按钮权限码和
 //! `create_user` 接口的授权依据。
-//! W6 起新增接口级授权层（`ApiPermission` 中间件）：请求按 `path + method` 匹配
+//! 接口级授权层（`ApiPermission` 中间件）：请求按 `path + method` 匹配
 //! `sys_api`（未登记放行），已登记接口校验 `sys_role_api` 角色授权、超管短路。
 //! 按钮码与接口授权两条通道并存，构成“看得到按钮但调接口被拒”的双保险。
 //!

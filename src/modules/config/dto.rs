@@ -149,7 +149,7 @@ pub struct UpdateConfigReq {
 pub struct UpdateSiteConfigReq {
     /// 站点名称
     pub name: String,
-    /// logo 图片 URL（可来自 W5-4 文件上传）
+    /// logo 图片 URL（可来自文件上传）
     pub logo: String,
     /// 浏览器 tab 图标 URL
     pub ico: String,

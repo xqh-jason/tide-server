@@ -323,7 +323,7 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemApi"),
         sort: 3,
     },
-    // 操作日志页面 + 删除权限码（W5-1）
+    // 操作日志页面 + 删除权限码
     MenuSeed {
         name: "SystemOperationLog",
         title: "操作日志",
@@ -346,7 +346,7 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemOperationLog"),
         sort: 1,
     },
-    // 登录日志页面 + 删除权限码（W5-2）
+    // 登录日志页面 + 删除权限码
     MenuSeed {
         name: "SystemLoginLog",
         title: "登录日志",
@@ -369,7 +369,7 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemLoginLog"),
         sort: 1,
     },
-    // 数据字典页面 + 类型 / 字典项各三个按钮权限码（W5-3）
+    // 数据字典页面 + 类型 / 字典项各三个按钮权限码
     MenuSeed {
         name: "SystemDictionary",
         title: "数据字典",
@@ -1215,7 +1215,7 @@ mod tests {
         assert_eq!(admin.updated_by, admin.id, "updated_by 应为 admin 自身 id");
     }
 
-    /// W5-1：操作日志菜单页面与删除按钮权限码应随种子就绪。
+    /// 操作日志菜单页面与删除按钮权限码应随种子就绪。
     #[tokio::test]
     async fn ensure_seed_creates_operation_log_menu_and_button() {
         let db = test_db().await;
@@ -1297,7 +1297,7 @@ mod tests {
         }
     }
 
-    /// W5-2：登录日志菜单页面与删除按钮权限码应随种子就绪。
+    /// 登录日志菜单页面与删除按钮权限码应随种子就绪。
     #[tokio::test]
     async fn ensure_seed_creates_login_log_menu_and_button() {
         let db = test_db().await;
@@ -1333,7 +1333,7 @@ mod tests {
         assert_eq!(button.parent_id, menu.id, "按钮应挂在登录日志菜单下");
     }
 
-    /// W5-3：数据字典菜单页面与类型 / 字典项各三个按钮权限码应随种子就绪。
+    /// 数据字典菜单页面与类型 / 字典项各三个按钮权限码应随种子就绪。
     #[tokio::test]
     async fn ensure_seed_creates_dictionary_menu_and_buttons() {
         let db = test_db().await;

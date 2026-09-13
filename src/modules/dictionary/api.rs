@@ -1,4 +1,4 @@
-//! 数据字典 handler（W5-3）。
+//! 数据字典 handler。
 //!
 //! 函数顺序 = `mod.rs` 路由挂载顺序：类型组 CRUD → `get-by-type`（特殊契约
 //! 端点，排在 CRUD 之后）→ 字典项组 CRUD。

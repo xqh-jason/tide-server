@@ -1,4 +1,4 @@
-//! 数据字典业务：类型表与字典项表（W5-3）。
+//! 数据字典业务：类型表与字典项表。
 //!
 //! 错误文案口径：
 //! - `字典类型不存在：{id}` / `字典项不存在：{id}`
@@ -61,7 +61,7 @@ pub async fn page_dictionaries(
 
 /// 创建类型：type 查重（含软删占位）→ 落库。
 ///
-/// 唯一性口径见规格 §3.3：`type` 是数据库唯一键，软删行仍占位，
+/// 唯一性口径：`type` 是数据库唯一键，软删行仍占位，
 /// 因此查重必须走 `*_include_deleted`（不过滤 deleted_at），
 /// 否则同一 type 在软删后会被误判为「可重建」而撞唯一键。
 pub async fn create_dictionary(
@@ -250,7 +250,7 @@ pub async fn page_dictionary_details(
 
 /// 创建字典项：类型存在性校验 → 活记录 value 查重 → 落库。
 ///
-/// value 唯一性口径见规格 §3.3：仅活记录占位，软删过的同 value 允许重建，
+/// value 唯一性口径：仅活记录占位，软删过的同 value 允许重建，
 /// 因此查重必须用 `find_alive_detail_by_value`（过滤 deleted_at），
 /// 不能依赖数据库唯一键（表上刻意不加）。
 pub async fn create_dictionary_detail(

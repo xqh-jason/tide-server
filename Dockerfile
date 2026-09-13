@@ -1,4 +1,4 @@
-# W7-1 后端多阶段构建：builder（rustc 全量编译）→ runtime（bookworm-slim 瘦身）
+# 后端多阶段构建：builder（rustc 全量编译）→ runtime（bookworm-slim 瘦身）
 # 产物：tide-server（API 服务）+ migration（数据库迁移 CLI，entrypoint 先跑）
 # 版本锁定：rust:1.96-slim 与本地工具链（rustc 1.96.1）一致，避免依赖 MSRV 漂移
 

@@ -71,7 +71,7 @@ pub async fn page_users(
     Ok(model)
 }
 
-/// 当前登录用户完整信息（契约 §3.2 的 `/user/info`）；返回 Model，
+/// 当前登录用户完整信息（`/user/info`）；返回 Model，
 /// UserInfoResp 组装与创建人名称拼装统一在 handler 层完成。
 pub async fn get_user_info(
     txn: &impl ConnectionTrait,
@@ -82,8 +82,8 @@ pub async fn get_user_info(
         .ok_or_else(|| AppError::Biz("用户不存在".into()))
 }
 
-/// 权限码数组（契约 §3.2 的 `/user/access-codes`）：
-/// 超管返回 `['super']`；普通用户按角色查按钮权限码（W3 完善）。
+/// 权限码数组（`/user/access-codes`）：
+/// 超管返回 `['super']`；普通用户按角色查按钮权限码。
 pub async fn get_access_codes(
     txn: &impl ConnectionTrait,
     user_id: u64,
@@ -1224,7 +1224,7 @@ mod tests {
         assert_eq!(links.len(), 3);
     }
 
-    /// access-codes 契约（W3 步骤 7）：super 返回超管标识，普通用户返回去重的按钮权限码。
+    /// access-codes 契约：super 返回超管标识，普通用户返回去重的按钮权限码。
     #[tokio::test]
     async fn access_codes_returns_super_flag_for_super_user() {
         let db = test_txn().await;

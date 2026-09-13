@@ -1,4 +1,4 @@
-# W7-1 一键编排：MySQL（含本地开发端口 3307）+ 后端 API + 前端静态托管
+# 一键编排：MySQL（含本地开发端口 3307）+ 后端 API + 前端静态托管
 #
 # 快速开始：
 #   docker compose up -d --build

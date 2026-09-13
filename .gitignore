@@ -22,7 +22,7 @@ config.local.toml
 *.swp
 *.swo
 
-# 运行时产物（W5 文件上传 / 临时文件）
+# 运行时产物（文件上传 / 临时文件）
 uploads/
 tmp/
 backups/

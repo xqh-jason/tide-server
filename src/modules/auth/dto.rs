@@ -1,4 +1,4 @@
-//! 认证域 DTO：登录请求/响应（契约 §3.2）。
+//! 认证域 DTO：登录请求/响应。
 
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};

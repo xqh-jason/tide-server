@@ -83,7 +83,7 @@ pub async fn upload_file(depot: &mut Depot, req: &mut Request) -> ApiResult<File
     .await?;
 
     // url 用相对路径：前端拼站点域名后可直接用，反向代理改前缀也不用改后端；
-    // created_by_name 与列表契约一致（规格 §5：上传响应在列表字段基础上含 url）
+    // created_by_name 与列表契约一致（上传响应在列表字段基础上含 url）
     let url = format!("/api/v1/file/download?id={}", model.id);
     let mut resp = fill_user_names(&state.db, vec![model], FileResp::from).await?;
     let file = resp.remove(0);

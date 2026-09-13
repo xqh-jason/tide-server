@@ -1,4 +1,4 @@
-//! 验证码域：生成与一次性校验（W5-5）。cache 即存储，无 repo。
+//! 验证码域：生成与一次性校验。cache 即存储，无 repo。
 //!
 //! 端点：`POST /api/v1/captcha/generate`（公开路由，登录前调用）。
 

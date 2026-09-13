@@ -20,7 +20,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     } else {
         tracing::info!("env={} 且未开启 seed，跳过种子数据初始化", config.env);
     }
-    // 定时任务调度器（W6-2）：先建调度器与 AppState，再装载启用任务并 start。
+    // 定时任务调度器：先建调度器与 AppState，再装载启用任务并 start。
     // 顺序固定「先 add 后 start」——未 start 即 drop 会刷错误日志。
     // 包 Arc 前显式 init：add/start 内部虽有惰性 init（幂等），但首次 add 会打印
     // 噪音日志 "Uninited"，且 init 失败应尽早 fail-fast 于装载任务之前。
@@ -40,7 +40,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let cors = crate::middleware::cors::Cors(state.config.cors.clone());
     let router = crate::infra::router::build(state);
 
-    // OpenAPI 契约交付：JSON 文档 + Swagger UI 页面（W1 目标）。
+    // OpenAPI 契约交付：JSON 文档 + Swagger UI 页面。
     // 只有 #[endpoint] 定义的接口会被 merge_router 收录。
     let doc = OpenApi::new("tide-server API", "0.1.0").merge_router(&router);
     let router = router
