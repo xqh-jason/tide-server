@@ -246,7 +246,11 @@ mod tests {
             last_active_at: Set(now + last_active_in),
             expires_at: Set(now + expires_in),
             revoked_at: Set(revoked.then_some(now)),
-            revoke_reason: Set(revoked.then(|| "测试吊销".to_string()).unwrap_or_default()),
+            revoke_reason: Set(if revoked {
+                "测试吊销".to_string()
+            } else {
+                String::new()
+            }),
             ..Default::default()
         }
         .insert(db)
