@@ -8,8 +8,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
-  # 测试与迁移统一连 CI 的 MySQL service container（任务 2 的环境变量覆盖，免改 config.toml）。
-  # 用 127.0.0.1 而非 localhost：排除 IPv6 解析歧义（::1 端口映射在部分运行器上不可靠）。
+  # 测试与迁移统一连自管 MySQL（host 网络直连，见 test job 的排障记录）。
+  # 用 127.0.0.1 而非 localhost：排除 IPv6 解析歧义（::1 在部分运行器上不可靠）。
   TIDE_DATABASE__URL: "mysql://root:root@127.0.0.1:3306/tide_server?charset=utf8mb4&timezone=%2B08:00"
 
 jobs:
@@ -45,19 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     # 兜底：正常全程约 10 分钟；防运行器故障时长时间空转
     timeout-minutes: 30
-    services:
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: tide_server
-        ports:
-          - "3306:3306"
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - uses: actions/checkout@v7
 
@@ -71,23 +58,28 @@ jobs:
         with:
           workspaces: . -> target
 
-      # 先编译测试二进制（无需数据库），把「编译」与「连库执行」分离，
-      # 让探活紧贴测试执行点：运行器端口映射若失效可在此快速失败
+      # 2026-09-12/13 两次排障记录（run 94000241977 为后一次）：service container
+      # 方式下，迁移与探活经 127.0.0.1:3306（docker-proxy 端口发布）连接正常，
+      # 紧随其后的测试阶段却从第一个连库测试起全部 30s 连接超时——容器侧 mysqld
+      # 全程健康，本地同拓扑（mysql:8 + -p 3306:3306 + 同连接串）完全无法复现，
+      # 判定为运行器端口发布层（userland proxy）中途失效的环境故障。
+      # 故改用 --network host 自管 MySQL：mysqld 直接绑定宿主网络命名空间，
+      # 127.0.0.1:3306 为本机回环直连，不经过 docker-proxy / 端口发布层。
+      - name: 启动 MySQL 8（host 网络，回环直连）
+        run: |
+          docker run -d --name mysql --network host \
+            -e TZ=Asia/Shanghai \
+            -e MYSQL_ROOT_PASSWORD=root \
+            -e MYSQL_DATABASE=tide_server \
+            mysql:8 \
+            --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+
+      # 先编译测试二进制（无需数据库）：编译约 3 分钟，MySQL 首次初始化约 20s，
+      # 两者时间重叠；探活紧贴迁移/测试执行点，异常时带诊断信息快速失败
       - name: 编译测试二进制
         run: cargo test --no-run
 
-      - name: 应用迁移建表
-        run: |
-          # migrations 为独立 crate；config.toml 默认 3307 已被 env 覆盖到 3306
-          cd migrations && DATABASE_URL="$TIDE_DATABASE__URL" cargo run -- up && cd ..
-
-      # 2026-09-12 排障记录：一次运行中迁移阶段（13:02）经 localhost:3306 连接正常，
-      # 2 分钟后测试阶段全部 DB 连接被静默丢弃——236 个连库测试各自恰好 30s
-      # PoolTimedOut（合计空耗约 1 小时），容器侧 mysqld 日志全程干净（无崩溃无连接异常），
-      # 判定为运行器 docker 端口映射中途失效的环境故障。
-      # 此步从宿主机探测已发布端口：映射失效时 1 分钟内带诊断信息快速失败，
-      # 重跑 job（新容器新映射）即可恢复，而不是空耗 1 小时。
-      - name: 探活 MySQL（宿主机 → 容器端口映射）
+      - name: 探活 MySQL（宿主回环直连）
         run: |
           probe() {
             if command -v mysqladmin >/dev/null 2>&1; then
@@ -96,17 +88,23 @@ jobs:
               timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/3306' 2>/dev/null
             fi
           }
-          for i in $(seq 1 15); do
+          for i in $(seq 1 30); do
             if probe; then
-              echo "MySQL 端口映射正常（第 ${i} 次探测通过）"
+              echo "MySQL 就绪（第 ${i} 次探测通过）"
               exit 0
             fi
             echo "第 ${i} 次探测失败，2s 后重试..."
             sleep 2
           done
-          echo "::error::宿主机无法连通 127.0.0.1:3306（端口映射失效或容器异常）——测试必然全量 PoolTimedOut，请重跑 job"
+          echo "::error::宿主机无法连通 127.0.0.1:3306（MySQL 未就绪或异常）"
           docker ps -a
+          docker logs mysql | tail -50
           exit 1
+
+      - name: 应用迁移建表
+        run: |
+          # migrations 为独立 crate；config.toml 默认 3307 已被 env 覆盖到 3306
+          cd migrations && DATABASE_URL="$TIDE_DATABASE__URL" cargo run -- up && cd ..
 
       - name: 跑全量测试
         run: cargo test
