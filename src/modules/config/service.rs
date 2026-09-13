@@ -1,7 +1,6 @@
 //! 系统配置业务：键值参数 CRUD（key 查重含软删占位）与网站设置（单行 id=1）。
 //!
 //! 审计字段由 repo 统一盖章，service 只透传 actor_id（AGENTS.md 写入口径）。
-//! 规格依据：docs/superpowers/specs/2026-09-05-w5-config-design.md §4 / §6。
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::ConnectionTrait;

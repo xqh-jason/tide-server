@@ -101,7 +101,6 @@ pub(crate) async fn create_role_in_tx(
     role.created_by = Set(actor_id);
     role.updated_by = Set(actor_id);
     let role = role.insert(txn).await?;
-    // 插入菜单关联
     if !menu_ids.is_empty() {
         let role_menu_ids = menu_ids
             .into_iter()
@@ -114,7 +113,6 @@ pub(crate) async fn create_role_in_tx(
             .exec(txn)
             .await?;
     }
-    // 插入 API关联
     if !api_ids.is_empty() {
         let role_api_ids = api_ids
             .into_iter()
@@ -143,22 +141,18 @@ pub(crate) async fn update_role_in_tx(
     let mut role = role;
     role.updated_by = Set(actor_id);
 
-    // 更新角色
     let role = role.update(txn).await?;
 
-    // 删除旧菜单关联
     sys_role_menu::Entity::delete_many()
         .filter(sys_role_menu::Column::RoleId.eq(role.id))
         .exec(txn)
         .await?;
 
-    // 删除旧 API关联
     sys_role_api::Entity::delete_many()
         .filter(sys_role_api::Column::RoleId.eq(role.id))
         .exec(txn)
         .await?;
 
-    // 写入菜单关联
     if !menu_ids.is_empty() {
         let role_menu_ids = menu_ids
             .into_iter()
@@ -173,7 +167,6 @@ pub(crate) async fn update_role_in_tx(
             .await?;
     }
 
-    // 写入 API关联
     if !api_ids.is_empty() {
         let role_api_ids = api_ids
             .into_iter()
@@ -194,17 +187,14 @@ pub(crate) async fn soft_delete_role_in_tx(
     txn: &DatabaseTransaction,
     id: u64,
 ) -> anyhow::Result<bool> {
-    // 删除旧菜单关联
     sys_role_menu::Entity::delete_many()
         .filter(sys_role_menu::Column::RoleId.eq(id))
         .exec(txn)
         .await?;
-    // 删除旧 API关联
     sys_role_api::Entity::delete_many()
         .filter(sys_role_api::Column::RoleId.eq(id))
         .exec(txn)
         .await?;
-    // 更新角色（原实现对 txn 连接查询，此处统一在事务内完成）
     let role = sys_role::Entity::find()
         .filter(sys_role::Column::Id.eq(id))
         .one(txn)

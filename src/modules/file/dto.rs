@@ -1,6 +1,4 @@
 //! 文件 DTO：entity 不直接暴露给接口，经 From 转换。
-//!
-//! 规格依据：docs/superpowers/specs/2026-09-05-w5-file-upload-design.md §5。
 
 use std::collections::HashMap;
 use std::path::PathBuf;

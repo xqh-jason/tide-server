@@ -1,7 +1,5 @@
 //! 验证码业务：生成（渲染 + 存 cache）与校验（一次性消费）。
-//!
-//! 纯 cache 操作，不连数据库；规格依据 §4 / §5：
-//! docs/superpowers/specs/2026-09-05-w5-captcha-design.md。
+//! 纯 cache 操作，不连数据库。
 
 use std::time::Duration;
 
@@ -27,7 +25,6 @@ const CHARS: usize = 4;
 pub fn generate_captcha(cache: &dyn Cache) -> Result<CaptchaGenerateResp, AppError> {
     // 1. 生成 4 位数字答案：uuid v4 前 4 字节各 % 10。
     //    不为此引入 rand 依赖——验证码答案对分布均匀性要求极低，取模偏差无安全影响。
-    //    （uuid 先绑定再取字节：as_bytes 借用的是临时值，链式调用过不了生命周期检查）
     let uuid_val = uuid::Uuid::new_v4();
     let bytes = uuid_val.as_bytes();
     let answer: String = bytes[..CHARS]

@@ -87,7 +87,7 @@ where
 ///
 /// - `select`：已带过滤条件的查询（`Entity::find().filter(...)` 的结果）
 /// - `page_index`：0-based（由 `PageQuery::page_index()` 转换）
-/// - `page_size`：1..=100（`PageQuery::page_size()` 已 clamp）
+/// - `page_size`：1..=1000（`PageQuery::page_size()` 已 clamp）
 pub async fn paginate<E>(
     select: Select<E>,
     db: &impl ConnectionTrait,
@@ -98,7 +98,6 @@ where
     E: EntityTrait,
     E::Model: FromQueryResult + Sized + Send + Sync,
 {
-    // paginate / num_items_and_pages / fetch_page 来自 PaginatorTrait
     let paginator = select.paginate(db, page_size);
     let items_and_pages = paginator.num_items_and_pages().await?;
     let items = paginator.fetch_page(page_index).await?;

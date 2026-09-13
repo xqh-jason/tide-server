@@ -1,7 +1,6 @@
 //! 文件业务：上传校验链、uuid 命名落盘、软删 + 物理删除、下载路径解析。
 //!
-//! 磁盘操作放本层（业务规则），repo 只管库。规格依据：
-//! docs/superpowers/specs/2026-09-05-w5-file-upload-design.md §6 / §7 / §8.2。
+//! 磁盘操作放本层（业务规则），repo 只管库。
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -56,9 +55,9 @@ pub async fn page_files(
 
 /// 上传：校验链 → uuid 命名 → 落盘 → 写记录。
 ///
-/// 校验链（规格 §6）：空名 → Biz("未选择文件")；扩展名小写后不在 `allows`
+/// 校验链：空名 → Biz("未选择文件")；扩展名小写后不在 `allows`
 /// → Biz("不支持的文件类型：{ext}")；size 超限 → Biz("文件大小超出限制：{size} 字节")。
-/// 磁盘 IO 失败 → `AppError::Internal`（规格 §7）。
+/// 磁盘 IO 失败 → `AppError::Internal`。
 pub async fn upload_file(
     db: &impl ConnectionTrait,
     dir: &Path,

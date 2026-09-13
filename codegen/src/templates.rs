@@ -547,7 +547,8 @@ fn render_filter_construct_fields(def: &DomainDef) -> String {
         .join("\n")
 }
 
-/// 字段名转提示标签（type_code → 字典类型编码？第一版直接用小写字段名）。
+/// 字段名转提示标签：下划线换空格（如 type_code → "type code"），
+/// 不做字段级中文映射，中文提示由生成后的 FIELD_LABELS 词典按需补充。
 fn field_label(field: &str) -> String {
     field.replace('_', " ")
 }

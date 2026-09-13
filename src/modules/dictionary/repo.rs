@@ -1,6 +1,5 @@
 //! 数据字典数据访问：类型表（`sys_dictionary`）与字典项表（`sys_dictionary_detail`）。
-//!
-//! 函数体按实现计划任务 5 补全；下方 `#[cfg(test)]` 集成测试直连 MySQL，由 AI 编写。
+//! 集成测试直连 MySQL。
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;

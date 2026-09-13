@@ -1,6 +1,4 @@
 //! 文件数据访问（`sys_file`）。
-//!
-//! 规格依据：docs/superpowers/specs/2026-09-05-w5-file-upload-design.md §3 / §8.1。
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;

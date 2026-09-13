@@ -17,7 +17,7 @@
 
 已完成：用户/角色/菜单/API 管理、RBAC 权限码、JWT 认证、数据字典、操作日志、
 登录日志、文件上传、图形验证码、系统配置、定时任务（job + 日志清理）、CORS。
-明确不做（见 `docs/Rust学习计划-Salvo-vben.md`）：断点续传、服务器监控、表单生成器。
+明确不做：断点续传、服务器监控、表单生成器。
 
 ## 目录结构
 
@@ -31,11 +31,11 @@ src/
 └── task/                                     # 定时清理任务（job 域注册）
 migrations/          # sea-orm-migration（独立 crate）
 codegen/             # 代码生成器（entity / 四件套骨架）
-docs/                # 学习计划与各模块实现计划（docs/superpowers/plans/）
 ```
 
 接口契约约定：所有端点 `POST + JSON body`（文件上传为 multipart），响应体统一
-`{ code: 200, data, message }`；Swagger UI 在 `/swagger-ui`（规范文件 `/api-doc/openapi.json`）。
+`{ code: 1, data, message }`（`code=1` 成功 / `0` 失败，HTTP 恒 200，仅认证失败 401）；
+Swagger UI 在 `/swagger-ui`（规范文件 `/api-doc/openapi.json`）。
 
 ## 本地开发
 
@@ -112,8 +112,3 @@ cargo fmt --check && (cd migrations && cargo fmt --check)
 cargo clippy --all-targets -- -D warnings && (cd migrations && cargo clippy --all-targets -- -D warnings)
 cargo test              # 需本地 MySQL（docker compose up -d mysql 后即可）
 ```
-
-## 相关文档
-
-- 学习与功能规划：`docs/Rust学习计划-Salvo-vben.md`
-- 各模块实现计划与设计：`docs/superpowers/plans/`、`docs/superpowers/specs/`

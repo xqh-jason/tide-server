@@ -3,7 +3,7 @@
 //! 内置任务（handler）注册表在 `src/task/`：一个任务一个文件，新增任务
 //! 建文件 + 注册一行，无需改动本文件。
 //!
-//! 设计要点（docs/superpowers/specs/2026-09-07-w6-job-design.md §4~§5）：
+//! 设计要点：
 //! - 数据库为事实来源：启动时装载 `status=1` 未删任务；CRUD 在 DB 提交后同步
 //!   调度器 add/remove，调度器操作失败不回滚 DB，只记 error 日志（重启自愈）；
 //! - scheduler 的 Uuid 由 job_id 确定性派生（[`job_uuid`]），remove 无需内存映射；
@@ -90,15 +90,6 @@ pub async fn init_scheduler(state: &AppState) -> anyhow::Result<()> {
 /// JobBuilder 支持 `with_job_id`，把 uuid 固定为 [`job_uuid`] 的确定性派生值，
 /// remove 时无需维护 job_id → Uuid 的内存映射。
 ///
-/// 闭包三要点（学习笔记）：
-/// 1. `move`：Job 会被调度器长期持有，闭包必须搬走 state/任务信息的所有权，
-///    不能借用本函数的局部变量（借用者活得比被借者久，编译不过）；
-/// 2. clone 写在闭包体内而不是外面：闭包**每次触发都会执行一遍**，每轮从自己
-///    拥有的那份克隆出一份交给本轮 async 块，原值留给下一轮触发用；
-/// 3. `Box::pin(async move { ... })`：`with_run_async` 要求闭包返回
-///    `Pin<Box<dyn Future + Send>>`。async 块是大小未知的匿名类型，先 `Box`
-///    装箱到堆、再 `Pin` 固定地址，才能统一成 trait 对象。
-///
 /// 细节：`with_schedule` 的解析器未开 `dom_and_dow(true)`，日/周同时受限的
 /// 表达式与 new_async 语义略有差异；常规表达式（两者至多一个受限）无影响。
 pub fn build_scheduled_job(
@@ -117,7 +108,8 @@ pub fn build_scheduled_job(
         .with_timezone(chrono::Local)
         .with_schedule(cron_expr)?
         .with_run_async(Box::new(move |_uuid, _lock| {
-            // 每轮触发执行一次：克隆本轮所需状态（job_id 是 u64/Copy，直接复制）
+            // clone 必须留在闭包体内：闭包每轮触发都执行一遍，从自己拥有的那份
+            // 克隆交给本轮 async 块，原值留给下一轮触发（job_id 是 u64/Copy，直接复制）
             let state = state.clone();
             let job_name = job_name.clone();
             let handler_name = handler_name.clone();
@@ -207,12 +199,9 @@ pub async fn run_scheduled(
 
 /// 单次执行核心：panic/超时兜底包裹 handler → 无论成败写 `sys_job_log`。
 ///
-/// 嵌套 Result 的来历（学习笔记）：`tokio::time::timeout(d, fut)` 返回
-/// `Result<T, Elapsed>`——外层 `Err` = 限时到了被掐断；`T` 本身是 handler 的
-/// `anyhow::Result<()>`，内层 `Err` = 任务自己报错；`catch_unwind` 再包一层
-/// `thread::Result`，最外层 `Err(payload)` = handler panic。四态一网打尽：
-/// `Ok(Ok(Ok(())))` 成功 / `Ok(Ok(Err(e)))` 失败 / `Ok(Err(_))` 超时 /
-/// `Err(_)` panic。
+/// 返回值三层嵌套的含义：`Ok(Ok(Ok(())))` 成功 / `Ok(Ok(Err(e)))` 任务自身失败 /
+/// `Ok(Err(_))` 超时（`tokio::time::timeout` 外层 Err）/ `Err(_)` panic
+/// （`catch_unwind` 最外层）。
 ///
 /// panic 必须拦在这里而非放任上抛：否则该轮执行被打断、防重叠标志无人释放
 /// （后续轮次永久跳过），也落不了一条失败日志。捕获后统一走失败日志，正常
@@ -240,7 +229,6 @@ pub async fn execute_job_run(
             // 捕获，panic 穿过 timeout 结构到达此处被转为 thread::Result::Err。
             AssertUnwindSafe(tokio::time::timeout(
                 std::time::Duration::from_secs(JOB_TIMEOUT_SECS),
-                // handler 是函数指针，(&state) 解引用 Arc 后调用，返回装箱 future
                 handler(&state),
             ))
             .catch_unwind()
@@ -248,7 +236,7 @@ pub async fn execute_job_run(
         }
     };
 
-    // payload 只能按值消费（downcast_ref 需 &Box<dyn Any>），故直接 match 值而非借用
+    // payload 按值 match（catch_unwind 的 thread::Result 消费所有权）
     let (status, error_msg) = match result {
         Ok(Ok(Ok(()))) => (1, String::new()),
         Ok(Ok(Err(e))) => (0, truncate_bytes(format!("任务执行失败：{e}"))),

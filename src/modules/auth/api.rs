@@ -36,7 +36,7 @@ pub async fn login(
     let resp = auth_service::login(
         &state.db,
         &state.config.jwt,
-        // Arc<dyn Cache> → &dyn Cache：显式 as_ref，编译器不做跨智能指针的自动强转
+        // 显式 as_ref：Arc<dyn Cache> → &dyn Cache，编译器不做跨智能指针自动强转
         state.cache.as_ref(),
         body.into_inner(),
         meta,

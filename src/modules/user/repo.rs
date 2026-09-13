@@ -41,7 +41,7 @@ pub async fn find_by_username_include_deleted(
     Ok(user)
 }
 
-/// 查询用户关联的所有启用角色（W2 登录取角色；先不做 join，W3 学 many-to-many 时再换 Linked）。
+/// 查询用户关联的所有启用角色（登录后解析用户角色用）。
 pub async fn find_roles_by_user_id(
     db: &impl ConnectionTrait,
     user_id: u64,
@@ -391,7 +391,6 @@ mod tests {
         let db = test_txn().await;
         let username = unique_name("test_user");
 
-        // 1. 插入测试数据（ActiveModel 写入，NotSet 字段保持默认）
         let model = sys_user::ActiveModel {
             username: Set(username.clone()),
             password: Set("x".to_string()),
@@ -400,7 +399,6 @@ mod tests {
         };
         let _inserted = model.insert(&db).await.unwrap();
 
-        // 2. 查询并断言
         let found = find_by_username(&db, &username).await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().username, username);

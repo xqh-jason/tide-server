@@ -8,7 +8,7 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
 
-/// 查询全部启用菜单（W2 超管全量菜单树；按角色过滤 W3 再做）。
+/// 查询全部启用菜单（超管全量菜单树用；按角色过滤见 `find_menus_by_role_ids`）。
 pub async fn find_all_menus(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Model>> {
     Ok(sys_menu::Entity::find()
         .filter(sys_menu::Column::Status.eq(1))
@@ -104,11 +104,11 @@ pub async fn update_menu(
     Ok(model)
 }
 
-/// 软删除菜单：递归收集目标及其全部子孙菜单（BFS），在同一事务内
-/// 事务内实现：清空目标及子孙菜单的角色关联并批量软删主表（不 begin/commit）。
+/// 软删除菜单（不 begin/commit，事务边界由调用方负责）：BFS 递归收集目标及
+/// 其全部子孙菜单，清空这些菜单的角色关联并批量软删主表。
 ///
 /// 子级收集**不过滤软删状态**：即使某个中间节点已软删，其下仍正常的子孙也要级联处理，
-/// 避免父已删、子孤立的脏数据。事务边界由调用方负责（service 公共入口 / 测试外层事务）。
+/// 避免父已删、子孤立的脏数据。
 pub(crate) async fn soft_delete_menu_in_tx(
     txn: &DatabaseTransaction,
     id: u64,

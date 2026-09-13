@@ -34,9 +34,6 @@ pub async fn list_users(
 }
 
 /// 按用户名查询用户（POST + JSON body：`{ "username": "..." }`）。
-///
-/// 说明：`ApiResult<T>` = `Result<ApiResponse<T>, AppError>`，Ok/Err 都实现 `Writer`，
-/// 由 Salvo 自动渲染；`#[endpoint]` 据此生成 OpenAPI 文档。
 #[endpoint]
 pub async fn get_by_username(
     depot: &mut Depot,

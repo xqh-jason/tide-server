@@ -106,8 +106,7 @@ mod tests {
     async fn missing_fields_get_uniform_error_body_with_http_200() {
         let service = Service::new(router()).catcher(build());
 
-        // 缺字段（StrictReq 必填 username/id 都在，但少一个 username 模拟失败）
-        // 这里模拟：只传 id 缺 username → 反序列化失败
+        // 模拟缺字段：StrictReq 必填 username/id，只传 id → 反序列化失败
         let mut res = TestClient::post("http://test/api/v1/user/update")
             .json(&serde_json::json!({ "id": 1 }))
             .send(&service)

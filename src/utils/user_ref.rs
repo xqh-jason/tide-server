@@ -60,17 +60,12 @@ pub async fn fill_user_names<M: UserRefIds, R: UserRefNames>(
     items: Vec<M>,
     convert: impl Fn(M) -> R,
 ) -> Result<Vec<R>, AppError> {
-    // 1. 收集：借用 items（不消费），把每条记录的 (created_by, updated_by)
-    //    摊平成扁平的 id 序列
-    let ids: Vec<u64> = items
-        .iter()
-        .flat_map(|m| m.user_ref_ids()) // &M 调方法（自动解引用），Vec<u64> 是 IntoIterator
-        .collect();
+    let ids: Vec<u64> = items.iter().flat_map(|m| m.user_ref_ids()).collect();
     let names = find_user_name_map_by_ids(db, ids).await?;
     Ok(items
         .into_iter()
         .map(|m| {
-            let mut resp = convert(m); // Model -> Resp
+            let mut resp = convert(m);
             resp.set_user_ref_names(&names);
             resp
         })

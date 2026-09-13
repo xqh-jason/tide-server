@@ -2,7 +2,7 @@
 
 基于 Rust + Salvo + SeaORM 的 RBAC 后端项目（复刻 gin-vue-admin，前端为 vue-vben-admin）。
 业务按垂直切片组织，契约驱动：所有接口统一 `POST + JSON body`，响应体
-`{ code: 200, data, message }`。
+`{ code: 1, data, message }`（`code=1` 成功 / `0` 失败，HTTP 恒 200，仅认证失败 401）。
 
 ## 项目结构与模块组织
 
@@ -12,7 +12,6 @@
 - `src/entity/`：SeaORM 实体，全局共享
 - `src/utils/`：错误、响应体、JWT、密码、缓存、分页
 - `migrations/`：sea-orm-migration 迁移（独立 crate）
-- `docs/`：学习计划与实现计划（`docs/superpowers/plans/` 按 TDD 勾选推进）
 
 ## 构建、测试与运行
 
@@ -155,5 +154,5 @@ repo / service / task / middleware 的依赖方向与跨域访问规则：
 ## 协作约定
 
 - W3 起固定分工：AI 编写失败测试并做最终 review，用户手动实现业务代码
-- 新功能先建计划文档（`docs/superpowers/plans/`），按测试红 → 实现 → 验证推进
+- 新功能先建设计文档（`docs/superpowers/specs/`），按测试红 → 实现 → 验证推进
 - 测试与迁移需要连接本地 MySQL，在非沙箱环境执行

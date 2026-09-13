@@ -1,10 +1,7 @@
 //! 业务错误类型。Handler 返回 `Result<T, AppError>`，由 Salvo 的 `Writer` trait 统一渲染。
 //!
-//! Salvo 0.95 的错误处理机制：handler 返回 `Result<Ok, Err>` 要求：
-//! - Ok 与 Err 都实现 `salvo::Writer`（运行时渲染）；
-//! - `#[endpoint]` 额外要求 Err 实现 `salvo::oapi::EndpointOutRegister`（OpenAPI 文档化）。
-//!
-//! 因此为 `AppError` 实现 `Writer` + `EndpointOutRegister`，错误统一输出
+//! Salvo 0.95 要求 `Result` 的 Ok/Err 都实现 `Writer`、`#[endpoint]` 的 Err 另需实现
+//! `EndpointOutRegister`，因此本文件为 `AppError` 实现这两个 trait，错误统一输出
 //! `{code, data, message}` 契约体（`code`: 1 成功 / 0 失败，与 vben successCode=1 对齐）。
 
 use salvo::oapi::{self, EndpointOutRegister, ToSchema};

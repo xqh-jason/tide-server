@@ -1,7 +1,6 @@
 //! 系统配置数据访问：键值参数（sys_config）与网站设置（sys_site_config）。
 //!
-//! 审计字段由 repo 统一盖章；查重含软删占位与 dictionary 的 type 同语义。规格依据：
-//! docs/superpowers/specs/2026-09-05-w5-config-design.md §3 / §6。
+//! 审计字段由 repo 统一盖章；查重含软删占位与 dictionary 的 type 同语义。
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;

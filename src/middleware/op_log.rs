@@ -1,10 +1,8 @@
 //! 操作日志中间件（W5）：已登录业务请求自动落库（gin-vue-admin 对齐）。
 //!
-//! 本文件当前只含 AI 维护的失败测试；实现代码由业务作者补齐：
-//! - `OperationLog`：中间件（AuthRequired 之后挂载）
-//! - `sanitize_and_truncate`：JSON 递归脱敏 + 截断
-//! - `truncate_utf8`：UTF-8 安全截断
-//! - `utils::request::CapturedBody`：JsonBody 提取时写入 Depot 的原始请求体
+//! 组成：`OperationLog` 中间件（AuthRequired 之后挂载）、`sanitize_and_truncate`
+//! JSON 递归脱敏 + 截断、`truncate_utf8` UTF-8 安全截断；
+//! 原始请求体由 `utils::request::CapturedBody` 在 JsonBody 提取时写入 Depot。
 
 use salvo::http::body::ResBody;
 use salvo::prelude::*;
@@ -58,7 +56,6 @@ impl Handler for OperationLog {
             .map(|u| u.user_id)
             .unwrap_or(0);
 
-        // 执行后续 handler（含真正的业务端点）
         ctrl.call_next(req, depot, res).await;
 
         // 响应体此时已写完：status 先读，body 取走记录后再放回

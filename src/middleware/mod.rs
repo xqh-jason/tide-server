@@ -13,7 +13,7 @@ pub mod op_log;
 /// handler 中通过 `depot.get_typed::<AppState>()` 获取。
 ///
 /// 等价于官方 `affix_state::inject`（后者依赖 salvo_extra 0.95.2，rsproxy 镜像暂无，
-/// 手写 3 行更可控，也便于理解 Depot 机制）。
+/// 手写 3 行更可控）。
 pub struct InjectState(pub AppState);
 
 #[async_trait]

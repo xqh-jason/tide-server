@@ -12,20 +12,6 @@
 //!
 //! 限制：`#[serde(flatten)]`（如分页 `PageQuery`）会丢失字段路径，该类错误只能给出
 //! 「请求体不符合接口要求」这类通用提示，无法定位到具体字段。
-//!
-//! 请求出错时的完整链路（学习用）：
-//! ```text
-//! 客户端 POST JSON
-//!   │
-//!   ▼
-//! #[endpoint] 宏先提取参数（调用本模块的 JsonBody::extract）
-//!   │ 反序列化失败
-//!   ▼
-//! BodyParamError::write 渲染 StatusError(400)，并把中文提示放进 origin
-//!   │（Salvo 看到 4xx + ResBody::Error 时不会直接返回，而是交给 catcher）
-//!   ▼
-//! infra/catcher 的 handle_error 从 origin 取回提示，改写为 HTTP 200 + code 0 契约体
-//! ```
 
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -104,10 +90,8 @@ impl<'ex, T> Extractible<'ex> for JsonBody<T>
 where
     T: Deserialize<'ex> + Send,
 {
-    // Extractible 是 Salvo 的“提取器”接口：handler 参数里写的
-    // JsonBody<T> 会被 #[endpoint] 宏在调用业务函数之前先“提取”出来。
-    // 我们复刻 Salvo 内置 JsonBody 的这组 trait 实现，只是把解析换成
-    // 带字段路径的版本，因此业务代码（handler 签名、into_inner、字段访问）零改动。
+    // 复刻 Salvo 内置 JsonBody 的这组 trait 实现，仅把解析换成带字段路径的版本，
+    // 业务代码（handler 签名、into_inner、字段访问）零改动。
     fn metadata() -> &'static Metadata {
         static METADATA: Metadata = Metadata::new("");
         &METADATA
@@ -257,12 +241,6 @@ fn normalize_path(path: &str) -> &str {
 }
 
 /// 把 serde 的英文错误（去掉行列号后）按模式翻译成中文。
-///
-/// 常见原文示例（学习用）：
-/// - `missing field \`username\``          → 缺字段，字段名在反引号里
-/// - `invalid type: string "x", expected u8` → 类型错，期望类型是 Rust 类型名
-/// - `invalid value: integer \`300\`, expected u8` → 值越界（不是类型错）
-/// - `unknown variant \`a\`, expected one of \`x\`, \`y\`` → 枚举值不合法
 fn describe_data_error(path: &str, reason: &str) -> String {
     if let Some(field) = backticked_after(reason, "missing field ") {
         // 字段标签词典：命中时给「请输入用户名」这类友好提示，否则退回通用文案。
