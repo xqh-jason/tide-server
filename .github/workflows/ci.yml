@@ -106,5 +106,35 @@ jobs:
           # migrations 为独立 crate；config.toml 默认 3307 已被 env 覆盖到 3306
           cd migrations && DATABASE_URL="$TIDE_DATABASE__URL" cargo run -- up && cd ..
 
+      # 2026-09-13 排障：迁移进程连库正常、测试进程全部 30s PoolTimedOut，
+      # 两次运行（services 端口发布 / host 网络直连）同模式，根因未明。
+      # 本步骤拿决定性证据：迁移后再探活（区分连接层是否中断）+ 单测
+      # --nocapture（panic 即时打印，不再等 30 分钟超时后才能看失败详情）。
+      # 本地对照：端口不通时 panic 为 `Err value: Conn(SqlxError(PoolTimedOut))`。
+      - name: 诊断：迁移后再探活 + 单测连库直出真实报错
+        run: |
+          echo '--- 迁移后再探活（vm → mysqld 可达性对照）---'
+          if command -v mysqladmin >/dev/null 2>&1; then
+            mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --connect-timeout=3 \
+              || echo '::warning::此刻探活已失败——连接层在迁移成功之后中断'
+          else
+            timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/3306' 2>/dev/null \
+              || echo '::warning::此刻 TCP 探活已失败——连接层在迁移成功之后中断'
+          fi
+          echo '--- 单测连库（--nocapture 直出 panic）---'
+          if ! cargo test ensure_seed_api_is_idempotent -- --nocapture --test-threads=1; then
+            echo '::error::单个连库测试失败：上方 panic 即真实错误'
+            docker ps -a
+            docker logs mysql 2>&1 | tail -100 || true
+            ss -ltnp | grep 3306 || true
+            exit 1
+          fi
+
       - name: 跑全量测试
         run: cargo test
+
+      - name: 失败诊断：容器状态与 mysqld 日志
+        if: failure()
+        run: |
+          docker ps -a
+          docker logs mysql 2>&1 | tail -100 || true
