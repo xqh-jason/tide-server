@@ -14,7 +14,7 @@ use crate::utils::error::AppError;
 const KEY_PREFIX: &str = "captcha:";
 /// 答案有效期（秒）
 const TTL_SECS: u64 = 180;
-/// 验证码位数（4 位数字，对齐 GVA DriverDigit）
+/// 验证码位数（4 位数字）
 const CHARS: usize = 4;
 
 /// 生成验证码：渲染 PNG → 存 cache → 返回 id 与裸 base64。

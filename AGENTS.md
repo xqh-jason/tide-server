@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-基于 Rust + Salvo + SeaORM 的 RBAC 后端项目（复刻 gin-vue-admin，前端为 vue-vben-admin）。
+基于 Rust + Salvo + SeaORM 的 RBAC 后端项目（前端为 vue-vben-admin）。
 业务按垂直切片组织，契约驱动：所有接口统一 `POST + JSON body`，响应体
 `{ code: 1, data, message }`（`code=1` 成功 / `0` 失败，HTTP 恒 200，仅认证失败 401）。
 
