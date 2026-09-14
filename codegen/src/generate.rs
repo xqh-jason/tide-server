@@ -4,11 +4,11 @@ use std::path::Path;
 
 use crate::def::DomainDef;
 
-/// 生成全部文件到 `root/src` 下（entity/ 与 modules/<domain>/），返回写入的文件路径。
+/// 生成全部文件到 `root/src` 下（entity/ 与 modules/<group>/<domain>/），返回写入的文件路径。
 pub fn write_all(def: &DomainDef, root: &Path) -> anyhow::Result<Vec<String>> {
     let src_dir = root.join("src");
     let entity_dir = src_dir.join("entity");
-    let module_dir = src_dir.join("modules").join(&def.domain);
+    let module_dir = src_dir.join("modules").join(&def.group).join(&def.domain);
     std::fs::create_dir_all(&entity_dir)?;
     std::fs::create_dir_all(&module_dir)?;
 
@@ -59,11 +59,11 @@ mod tests {
 
         for name in [
             "src/entity/sys_dict.rs",
-            "src/modules/dict/api.rs",
-            "src/modules/dict/service.rs",
-            "src/modules/dict/repo.rs",
-            "src/modules/dict/dto.rs",
-            "src/modules/dict/mod.rs",
+            "src/modules/system/dict/api.rs",
+            "src/modules/system/dict/service.rs",
+            "src/modules/system/dict/repo.rs",
+            "src/modules/system/dict/dto.rs",
+            "src/modules/system/dict/mod.rs",
         ] {
             assert!(out_dir.join(name).exists(), "缺少 {name}");
         }

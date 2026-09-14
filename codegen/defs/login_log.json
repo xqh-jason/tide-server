@@ -1,22 +1,80 @@
 {
   "domain": "login_log",
+  "group": "system",
   "table": "sys_login_log",
   "comment": "登录日志",
   "fields": [
-    { "name": "id", "rust_type": "u64", "primary": true, "auto_increment": true },
-    { "name": "user_id", "rust_type": "u64", "optional": true, "default": 0, "comment": "登录成功后的用户 ID，失败为 0" },
-    { "name": "username", "rust_type": "String", "optional": false, "comment": "本次尝试的用户名" },
-    { "name": "ip", "rust_type": "String", "optional": true, "default": "", "comment": "来源 IP" },
-    { "name": "agent", "rust_type": "String", "optional": true, "default": "", "comment": "User-Agent" },
-    { "name": "status", "rust_type": "i8", "optional": true, "default": 0, "comment": "1 成功 / 0 失败" },
-    { "name": "msg", "rust_type": "String", "optional": true, "default": "", "comment": "内部原因或成功提示" },
-    { "name": "created_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "deleted_at", "rust_type": "Option<DateTime>", "readonly": true }
+    {
+      "name": "id",
+      "rust_type": "u64",
+      "primary": true,
+      "auto_increment": true
+    },
+    {
+      "name": "user_id",
+      "rust_type": "u64",
+      "optional": true,
+      "default": 0,
+      "comment": "登录成功后的用户 ID，失败为 0"
+    },
+    {
+      "name": "username",
+      "rust_type": "String",
+      "optional": false,
+      "comment": "本次尝试的用户名"
+    },
+    {
+      "name": "ip",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "来源 IP"
+    },
+    {
+      "name": "agent",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "User-Agent"
+    },
+    {
+      "name": "status",
+      "rust_type": "i8",
+      "optional": true,
+      "default": 0,
+      "comment": "1 成功 / 0 失败"
+    },
+    {
+      "name": "msg",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "内部原因或成功提示"
+    },
+    {
+      "name": "created_at",
+      "rust_type": "DateTime",
+      "readonly": true
+    },
+    {
+      "name": "deleted_at",
+      "rust_type": "Option<DateTime>",
+      "readonly": true
+    }
   ],
   "unique_fields": [],
   "filters": [
-    { "field": "username", "kind": "keyword" },
-    { "field": "ip", "kind": "keyword" },
-    { "field": "status", "kind": "exact" }
+    {
+      "field": "username",
+      "kind": "keyword"
+    },
+    {
+      "field": "ip",
+      "kind": "keyword"
+    },
+    {
+      "field": "status",
+      "kind": "exact"
+    }
   ]
 }

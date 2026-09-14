@@ -13,7 +13,7 @@
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
-use crate::modules::refresh_token::repo as refresh_token_repo;
+use crate::modules::system::refresh_token::repo as refresh_token_repo;
 use crate::utils::error::AppError;
 use crate::utils::response::ApiResponse;
 

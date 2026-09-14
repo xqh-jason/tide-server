@@ -1,21 +1,79 @@
 {
   "domain": "dictionary",
+  "group": "system",
   "table": "sys_dictionary",
   "comment": "字典类型",
   "fields": [
-    { "name": "id", "rust_type": "u64", "primary": true, "auto_increment": true },
-    { "name": "name", "rust_type": "String", "optional": true, "default": "", "comment": "字典名称" },
-    { "name": "type", "rust_type": "String", "unique": true, "comment": "字典类型编码" },
-    { "name": "status", "rust_type": "i8", "optional": true, "default": 1, "comment": "状态" },
-    { "name": "remark", "rust_type": "String", "optional": true, "default": "", "comment": "备注" },
-    { "name": "created_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "updated_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "created_by", "rust_type": "u64", "readonly": true, "audit": true, "comment": "创建人 ID" },
-    { "name": "updated_by", "rust_type": "u64", "readonly": true, "audit": true, "comment": "更新人 ID" },
-    { "name": "deleted_at", "rust_type": "Option<DateTime>", "readonly": true }
+    {
+      "name": "id",
+      "rust_type": "u64",
+      "primary": true,
+      "auto_increment": true
+    },
+    {
+      "name": "name",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "字典名称"
+    },
+    {
+      "name": "type",
+      "rust_type": "String",
+      "unique": true,
+      "comment": "字典类型编码"
+    },
+    {
+      "name": "status",
+      "rust_type": "i8",
+      "optional": true,
+      "default": 1,
+      "comment": "状态"
+    },
+    {
+      "name": "remark",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "备注"
+    },
+    {
+      "name": "created_at",
+      "rust_type": "DateTime",
+      "readonly": true
+    },
+    {
+      "name": "updated_at",
+      "rust_type": "DateTime",
+      "readonly": true
+    },
+    {
+      "name": "created_by",
+      "rust_type": "u64",
+      "readonly": true,
+      "audit": true,
+      "comment": "创建人 ID"
+    },
+    {
+      "name": "updated_by",
+      "rust_type": "u64",
+      "readonly": true,
+      "audit": true,
+      "comment": "更新人 ID"
+    },
+    {
+      "name": "deleted_at",
+      "rust_type": "Option<DateTime>",
+      "readonly": true
+    }
   ],
-  "unique_fields": ["type"],
+  "unique_fields": [
+    "type"
+  ],
   "filters": [
-    { "field": "status", "kind": "exact" }
+    {
+      "field": "status",
+      "kind": "exact"
+    }
   ]
 }

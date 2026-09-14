@@ -96,7 +96,8 @@ impl Handler for OperationLog {
         };
 
         if let Err(err) =
-            crate::modules::operation_log::repo::create_operation_log(&state.db, model).await
+            crate::modules::system::operation_log::repo::create_operation_log(&state.db, model)
+                .await
         {
             tracing::error!(%err, "operation log 落库失败");
         }

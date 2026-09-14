@@ -1,20 +1,70 @@
 {
   "domain": "job_log",
+  "group": "system",
   "table": "sys_job_log",
   "comment": "定时任务执行日志",
   "fields": [
-    { "name": "id", "rust_type": "u64", "primary": true, "auto_increment": true },
-    { "name": "job_id", "rust_type": "u64", "optional": false, "comment": "任务 ID（主任务删除后日志保留）" },
-    { "name": "job_name", "rust_type": "String", "optional": true, "default": "", "comment": "任务名称（冗余存，主任务删除后仍可读）" },
-    { "name": "status", "rust_type": "i8", "optional": true, "default": 0, "comment": "执行结果：1 成功 / 0 失败（含超时）" },
-    { "name": "error_msg", "rust_type": "String", "optional": true, "default": "", "comment": "失败原因（截断 2KB）" },
-    { "name": "duration_ms", "rust_type": "u32", "optional": true, "default": 0, "comment": "本次耗时（毫秒）" },
-    { "name": "created_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "deleted_at", "rust_type": "Option<DateTime>", "readonly": true, "soft_delete": true }
+    {
+      "name": "id",
+      "rust_type": "u64",
+      "primary": true,
+      "auto_increment": true
+    },
+    {
+      "name": "job_id",
+      "rust_type": "u64",
+      "optional": false,
+      "comment": "任务 ID（主任务删除后日志保留）"
+    },
+    {
+      "name": "job_name",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "任务名称（冗余存，主任务删除后仍可读）"
+    },
+    {
+      "name": "status",
+      "rust_type": "i8",
+      "optional": true,
+      "default": 0,
+      "comment": "执行结果：1 成功 / 0 失败（含超时）"
+    },
+    {
+      "name": "error_msg",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "失败原因（截断 2KB）"
+    },
+    {
+      "name": "duration_ms",
+      "rust_type": "u32",
+      "optional": true,
+      "default": 0,
+      "comment": "本次耗时（毫秒）"
+    },
+    {
+      "name": "created_at",
+      "rust_type": "DateTime",
+      "readonly": true
+    },
+    {
+      "name": "deleted_at",
+      "rust_type": "Option<DateTime>",
+      "readonly": true,
+      "soft_delete": true
+    }
   ],
   "unique_fields": [],
   "filters": [
-    { "field": "job_id", "kind": "exact" },
-    { "field": "status", "kind": "exact" }
+    {
+      "field": "job_id",
+      "kind": "exact"
+    },
+    {
+      "field": "status",
+      "kind": "exact"
+    }
   ]
 }

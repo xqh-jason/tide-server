@@ -5,7 +5,7 @@
 use tracing::info;
 
 use crate::infra::state::AppState;
-use crate::modules::operation_log::repo as operation_log_repo;
+use crate::modules::system::operation_log::repo as operation_log_repo;
 
 /// handler 名（= 文件名 = `sys_job.handler_name` 的合法值，三处保持一致）。
 pub const HANDLER_NAME: &str = "cleanup_operation_logs";

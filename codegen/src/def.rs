@@ -6,6 +6,9 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 pub struct DomainDef {
     pub domain: String,
+    /// 生成目标分组：modules 下的容器目录（`system` = 平台能力，`biz` = 业务域）。
+    #[serde(default = "default_group")]
+    pub group: String,
     pub table: String,
     pub comment: String,
     pub fields: Vec<FieldDef>,
@@ -13,6 +16,11 @@ pub struct DomainDef {
     pub unique_fields: Vec<String>,
     #[serde(default)]
     pub filters: Vec<FilterDef>,
+}
+
+/// 未显式声明分组时默认生成到平台容器 system/ 下。
+fn default_group() -> String {
+    "system".to_string()
 }
 
 /// 字段定义。
@@ -71,7 +79,7 @@ impl DomainDef {
         }
         for f in &self.filters {
             anyhow::ensure!(
-                self.fields.iter().any(|fd| &fd.name == &f.field),
+                self.fields.iter().any(|fd| fd.name == f.field),
                 "filters 引用不存在的字段: {}",
                 f.field
             );

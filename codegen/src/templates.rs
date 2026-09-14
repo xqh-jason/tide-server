@@ -68,7 +68,7 @@ use sea_orm::entity::prelude::*;
 use sea_orm::{{Condition, DatabaseConnection}};
 
 use crate::entity::{{{entity}, {entity}::Model}};
-use crate::modules::{domain}::dto::{filter};
+use crate::modules::{group}::{domain}::dto::{filter};
 
 /// 查询单个有效记录（排除软删除）。
 pub async fn find_by_id(db: &DatabaseConnection, id: u64) -> anyhow::Result<Option<Model>> {{
@@ -126,6 +126,7 @@ pub async fn soft_delete_{domain}(db: &DatabaseConnection, id: u64) -> anyhow::R
         comment = def.comment,
         entity = entity,
         domain = def.domain,
+        group = def.group,
         filter = filter,
         filter_conds = render_filter_conditions(def),
     )
@@ -147,7 +148,7 @@ fn render_filter_conditions(def: &DomainDef) -> String {
             .map(|fd| fd.rust_type.as_str())
             .unwrap_or("String");
         let op = if f.kind == "keyword" {
-            format!("like(format!(\"%{{v}}%\"))")
+            "like(format!(\"%{v}%\"))".to_string()
         } else if matches!(fty, "u64" | "i64" | "i32" | "i8" | "bool") {
             "eq(*v)".to_string()
         } else {
@@ -200,6 +201,7 @@ fn render_repo_tests(def: &DomainDef) -> String {
     let entity = def.entity_ident();
     let seed_fields = render_seed_fields(def, &def.unique_field_names());
     let filter_fields = render_filter_none_fields(def, &def.unique_field_names());
+    let filter = format!("{}Filter", def.camel());
     format!(
         r#"#[cfg(test)]
 mod tests {{
@@ -292,7 +294,7 @@ mod tests {{
 
         let data = find_page(
             &db,
-            &crate::modules::{domain}::dto::{filter} {{
+            &crate::modules::{group}::{domain}::dto::{filter} {{
                 type_code: Some(kw_live.clone()),
 {filter_fields}
             }},
@@ -311,7 +313,8 @@ mod tests {{
 "#,
         entity = entity,
         domain = def.domain,
-        filter = format!("{}Filter", def.camel()),
+        group = def.group,
+        filter = filter,
     )
 }
 
@@ -361,8 +364,8 @@ pub fn render_service(def: &DomainDef) -> String {
 use sea_orm::{{ActiveValue::Set, DatabaseConnection}};
 
 use crate::entity::{entity};
-use crate::modules::{domain}::dto::{{{create_req}, {filter}, {list_req}, {update_req}}};
-use crate::modules::{domain}::repo as {domain}_repo;
+use crate::modules::{group}::{domain}::dto::{{{create_req}, {filter}, {list_req}, {update_req}}};
+use crate::modules::{group}::{domain}::repo as {domain}_repo;
 use crate::utils::PageData;
 use crate::utils::error::AppError;
 
@@ -434,6 +437,7 @@ pub async fn delete_{singular}(db: &DatabaseConnection, id: u64) -> Result<(), A
         comment = def.comment,
         entity = entity,
         domain = def.domain,
+        group = def.group,
         create_req = create_req,
         filter = filter,
         list_req = list_req,
@@ -513,7 +517,7 @@ fn render_create_model_fields(def: &DomainDef) -> String {
 
 /// Update ActiveModel 字段（id + 非 readonly 全量）。
 fn render_update_model_fields(def: &DomainDef) -> String {
-    let mut fields = format!("        id: Set(req.id),");
+    let mut fields = "        id: Set(req.id),".to_string();
     for f in def.fields.iter().filter(|f| !f.primary && !f.readonly) {
         match f.rust_type.as_str() {
             "String" | "Text" => fields.push_str(&format!(
@@ -639,7 +643,7 @@ fn render_service_tests(def: &DomainDef) -> String {
 mod tests {{
     use super::*;
     use crate::entity::{entity};
-    use crate::modules::{domain}::dto::{{{create_req}, {update_req}}};
+    use crate::modules::{group}::{domain}::dto::{{{create_req}, {update_req}}};
     use crate::utils::error::AppError;
     use sea_orm::{{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set}};
     use std::sync::atomic::{{AtomicU64, Ordering}};
@@ -716,6 +720,7 @@ mod tests {{
 "#,
         entity = entity,
         domain = def.domain,
+        group = def.group,
         create_req = create_req,
         update_req = update_req,
         singular = singular,
@@ -879,7 +884,7 @@ fn render_list_req_fields(def: &DomainDef) -> String {
                 .fields
                 .iter()
                 .find(|fd| fd.name == f.field)
-                .map(|fd| field_rust_type(fd))
+                .map(field_rust_type)
                 .unwrap_or_else(|| "String".to_string());
             format!("    pub {}: Option<{ty}>,\n", f.field)
         })
@@ -895,7 +900,7 @@ fn render_filter_fields(def: &DomainDef) -> String {
                 .fields
                 .iter()
                 .find(|fd| fd.name == f.field)
-                .map(|fd| field_rust_type(fd))
+                .map(field_rust_type)
                 .unwrap_or_else(|| "String".to_string());
             format!("    pub {}: Option<{ty}>,\n", f.field)
         })
@@ -948,8 +953,8 @@ use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
-use crate::modules::{domain}::dto::{{Create{camel}Req, {camel}ListReq, {camel}Resp, Update{camel}Req}};
-use crate::modules::{domain}::service as {domain}_service;
+use crate::modules::{group}::{domain}::dto::{{Create{camel}Req, {camel}ListReq, {camel}Resp, Update{camel}Req}};
+use crate::modules::{group}::{domain}::service as {domain}_service;
 use crate::utils::{{ApiResponse, ApiResult, IdReq, PageResult}};
 use crate::utils::request::JsonBody;
 
@@ -1004,6 +1009,7 @@ pub async fn delete_{singular}(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiR
         comment = def.comment,
         camel = camel,
         domain = domain,
+        group = def.group,
         plural = plural,
         singular = singular,
     )

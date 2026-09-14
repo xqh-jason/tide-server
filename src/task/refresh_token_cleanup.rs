@@ -18,7 +18,8 @@ pub const HANDLER_LABEL: &str = "清理刷新凭证";
 pub async fn run(state: &AppState) -> anyhow::Result<()> {
     let cutoff = chrono::Local::now().naive_local() - chrono::Duration::days(30);
     let deleted =
-        crate::modules::refresh_token::repo::delete_expired_before(&state.db, cutoff).await?;
+        crate::modules::system::refresh_token::repo::delete_expired_before(&state.db, cutoff)
+            .await?;
     info!(
         "刷新凭证清理任务：删除 {} 条过期超 30 天的用户会话",
         deleted

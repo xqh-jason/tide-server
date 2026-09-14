@@ -135,7 +135,8 @@ docker compose up -d backend                                  # 改回默认后�
 
 ```
 src/
-├── modules/<域>/{api,service,repo,dto}.rs   # 业务垂直切片（契约驱动四件套）
+├── modules/system/<域>/                      # 平台能力域（垂直切片契约驱动四件套，18 个）
+├── modules/biz/<域>/                         # 业务域容器（具体业务功能从这里生长）
 ├── infra/                                    # 启动管线、配置、AppState、路由登记表
 ├── middleware/                               # AuthRequired / OperationLog / ApiPermission
 ├── entity/                                   # SeaORM 实体（全局共享）

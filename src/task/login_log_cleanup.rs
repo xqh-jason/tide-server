@@ -15,7 +15,8 @@ pub const HANDLER_LABEL: &str = "清理登录日志";
 /// 任务入口。
 pub async fn run(state: &AppState) -> anyhow::Result<()> {
     let cutoff = chrono::Local::now().naive_local() - chrono::Duration::days(90);
-    let deleted = crate::modules::login_log::repo::delete_created_before(&state.db, cutoff).await?;
+    let deleted =
+        crate::modules::system::login_log::repo::delete_created_before(&state.db, cutoff).await?;
     info!("登录日志清理任务：删除 {} 条过期登录日志", deleted);
     Ok(())
 }

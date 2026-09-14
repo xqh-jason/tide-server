@@ -1,22 +1,84 @@
 {
   "domain": "position",
+  "group": "system",
   "table": "sys_position",
   "comment": "职位",
   "fields": [
-    { "name": "id", "rust_type": "u64", "primary": true, "auto_increment": true },
-    { "name": "position_code", "rust_type": "String", "unique": true, "comment": "职位编码（全局唯一，含软删占位）" },
-    { "name": "position_name", "rust_type": "String", "comment": "职位名称" },
-    { "name": "sort", "rust_type": "i32", "optional": true, "default": 0, "comment": "排序值，越小越靠前" },
-    { "name": "status", "rust_type": "i8", "optional": true, "default": 1, "comment": "状态" },
-    { "name": "remark", "rust_type": "String", "optional": true, "default": "", "comment": "备注" },
-    { "name": "created_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "updated_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "created_by", "rust_type": "u64", "readonly": true, "audit": true, "comment": "创建人 ID" },
-    { "name": "updated_by", "rust_type": "u64", "readonly": true, "audit": true, "comment": "更新人 ID" },
-    { "name": "deleted_at", "rust_type": "Option<DateTime>", "readonly": true }
+    {
+      "name": "id",
+      "rust_type": "u64",
+      "primary": true,
+      "auto_increment": true
+    },
+    {
+      "name": "position_code",
+      "rust_type": "String",
+      "unique": true,
+      "comment": "职位编码（全局唯一，含软删占位）"
+    },
+    {
+      "name": "position_name",
+      "rust_type": "String",
+      "comment": "职位名称"
+    },
+    {
+      "name": "sort",
+      "rust_type": "i32",
+      "optional": true,
+      "default": 0,
+      "comment": "排序值，越小越靠前"
+    },
+    {
+      "name": "status",
+      "rust_type": "i8",
+      "optional": true,
+      "default": 1,
+      "comment": "状态"
+    },
+    {
+      "name": "remark",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "备注"
+    },
+    {
+      "name": "created_at",
+      "rust_type": "DateTime",
+      "readonly": true
+    },
+    {
+      "name": "updated_at",
+      "rust_type": "DateTime",
+      "readonly": true
+    },
+    {
+      "name": "created_by",
+      "rust_type": "u64",
+      "readonly": true,
+      "audit": true,
+      "comment": "创建人 ID"
+    },
+    {
+      "name": "updated_by",
+      "rust_type": "u64",
+      "readonly": true,
+      "audit": true,
+      "comment": "更新人 ID"
+    },
+    {
+      "name": "deleted_at",
+      "rust_type": "Option<DateTime>",
+      "readonly": true
+    }
   ],
-  "unique_fields": ["position_code"],
+  "unique_fields": [
+    "position_code"
+  ],
   "filters": [
-    { "field": "status", "kind": "exact" }
+    {
+      "field": "status",
+      "kind": "exact"
+    }
   ]
 }

@@ -55,7 +55,7 @@ impl Handler for ApiPermission {
         let path = req.uri().path().to_string();
         let method = req.method().as_str().to_string();
 
-        match crate::modules::permission::service::has_api_permission(
+        match crate::modules::system::permission::service::has_api_permission(
             &state.db,
             auth.user_id,
             &path,

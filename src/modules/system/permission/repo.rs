@@ -1,0 +1,550 @@
+//! 权限数据访问层。
+
+use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, QueryOrder, QuerySelect};
+
+use crate::entity::{sys_api, sys_menu, sys_role_api, sys_role_menu};
+
+/// 按角色集合查按钮权限码：sys_role_menu → 菜单（启用未删 + 按钮类型 + permission 非空）→ 去重排序。
+///
+/// 角色解析（有效角色 = 启用且未删）由 service 层负责，repo 不跨域查用户域；
+/// `role_ids` 为空直接返回空，避免生成空 IN 的无效 SQL。
+pub async fn find_permission_codes_by_role_ids(
+    db: &impl ConnectionTrait,
+    role_ids: &[u64],
+) -> anyhow::Result<Vec<String>> {
+    if role_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let role_menu_ids = sys_role_menu::Entity::find()
+        .filter(sys_role_menu::Column::RoleId.is_in(role_ids.iter().copied()))
+        .column(sys_role_menu::Column::MenuId)
+        .all(db)
+        .await?;
+
+    let menu_ids = role_menu_ids
+        .into_iter()
+        .map(|role_menu| role_menu.menu_id)
+        .collect::<Vec<_>>();
+    if menu_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let menus = sys_menu::Entity::find()
+        .filter(sys_menu::Column::Id.is_in(menu_ids))
+        .filter(sys_menu::Column::DeletedAt.is_null())
+        .filter(sys_menu::Column::Status.eq(1))
+        .filter(sys_menu::Column::Permission.ne(""))
+        // 仅查询menu类型 = 3 的为按钮
+        .filter(sys_menu::Column::MenuType.eq(3))
+        .order_by_asc(sys_menu::Column::Id)
+        .all(db)
+        .await?;
+
+    let mut permission_codes = menus
+        .into_iter()
+        .map(|menu| menu.permission)
+        .collect::<Vec<_>>();
+
+    permission_codes.sort();
+    permission_codes.dedup();
+
+    Ok(permission_codes)
+}
+
+/// 接口级授权（一）：按请求路径与方法查生效 API（未软删且启用）。
+///
+/// 未登记的 `path + method` 返回 `None`，由 service 层按 fail-open 放行；
+/// 软删除与禁用记录不参与拦截（等同未登记）。
+/// `uk_api_path_method` 唯一索引保证命中至多一行，无需 LIMIT/排序；
+/// method 为请求原值精确匹配（本项目除 `file/download` / `site-config/get` 外
+/// 全部为 POST，两条 GET 均为公开/自挂路由，不经过授权中间件）。
+pub async fn find_active_api_by_path_method(
+    db: &impl ConnectionTrait,
+    path: &str,
+    method: &str,
+) -> anyhow::Result<Option<sys_api::Model>> {
+    let model = sys_api::Entity::find()
+        .filter(sys_api::Column::Path.eq(path))
+        .filter(sys_api::Column::Method.eq(method))
+        .filter(sys_api::Column::DeletedAt.is_null())
+        .filter(sys_api::Column::Status.eq(1))
+        .one(db)
+        .await?;
+
+    Ok(model)
+}
+
+/// 接口级授权（二）：判定角色集合与某 API 的 `sys_role_api` 授权交集是否非空。
+///
+/// `sys_role_api` 是硬删除关系表（无 `deleted_at` 列），存在关联行即有效授权；
+/// `role_ids` 为空时直接返回 false，避免生成空 IN 的无效 SQL。
+pub async fn exists_role_api(
+    db: &impl ConnectionTrait,
+    api_id: u64,
+    role_ids: &[u64],
+) -> anyhow::Result<bool> {
+    if role_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let exists = sys_role_api::Entity::find()
+        .filter(sys_role_api::Column::ApiId.eq(api_id))
+        .filter(sys_role_api::Column::RoleId.is_in(role_ids.iter().copied()))
+        .exists(db)
+        .await?;
+
+    Ok(exists)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::{
+        sys_api, sys_menu, sys_role, sys_role_api, sys_role_menu, sys_user, sys_user_role,
+    };
+    use crate::modules::system::permission::SUPER_ROLE_KEY;
+    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 已存在的 `super` 是全局唯一角色，测试只能复用；只有新创建时才物理清理。
+    struct SuperRoleFixture {
+        role: sys_role::Model,
+        owned_by_test: bool,
+    }
+
+    #[derive(Default)]
+    struct Fixture {
+        user: Option<sys_user::Model>,
+        roles: Vec<sys_role::Model>,
+        menus: Vec<sys_menu::Model>,
+        super_role: Option<SuperRoleFixture>,
+    }
+
+    fn unique(prefix: &str) -> String {
+        format!(
+            "{prefix}_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    async fn test_db() -> DatabaseConnection {
+        let config = crate::infra::config::Config::load().unwrap();
+        Database::connect(&config.database.url).await.unwrap()
+    }
+
+    /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    async fn test_txn() -> sea_orm::DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
+    async fn load_super_role(db: &impl ConnectionTrait) -> SuperRoleFixture {
+        let existing = sys_role::Entity::find()
+            .filter(sys_role::Column::RoleKey.eq(SUPER_ROLE_KEY))
+            .one(db)
+            .await
+            .unwrap();
+
+        if let Some(role) = existing {
+            return SuperRoleFixture {
+                role,
+                owned_by_test: false,
+            };
+        }
+
+        let role = sys_role::ActiveModel {
+            role_name: Set("超级管理员".to_string()),
+            role_key: Set(SUPER_ROLE_KEY.to_string()),
+            sort: Set(0),
+            status: Set(1),
+            remark: Set("权限测试创建".to_string()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+
+        SuperRoleFixture {
+            role,
+            owned_by_test: true,
+        }
+    }
+
+    async fn seed_user(
+        db: &impl ConnectionTrait,
+        status: i8,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_user::Model {
+        sys_user::ActiveModel {
+            username: Set(unique("perm_user")),
+            password: Set("x".to_string()),
+            nickname: Set("权限测试用户".to_string()),
+            status: Set(status),
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn seed_role(
+        db: &impl ConnectionTrait,
+        status: i8,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_role::Model {
+        sys_role::ActiveModel {
+            role_name: Set(unique("perm_role")),
+            role_key: Set(unique("perm_role_key")),
+            sort: Set(0),
+            status: Set(status),
+            remark: Set(String::new()),
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn seed_button(
+        db: &impl ConnectionTrait,
+        permission: &str,
+        status: i8,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_menu::Model {
+        seed_menu(db, permission, status, deleted_at, 3).await
+    }
+
+    async fn seed_menu(
+        db: &impl ConnectionTrait,
+        permission: &str,
+        status: i8,
+        deleted_at: Option<chrono::NaiveDateTime>,
+        menu_type: i8,
+    ) -> sys_menu::Model {
+        sys_menu::ActiveModel {
+            parent_id: Set(0),
+            title: Set(unique("perm_menu")),
+            name: Set(unique("PermMenu")),
+            menu_type: Set(menu_type),
+            permission: Set(permission.to_string()),
+            status: Set(status),
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn bind_user_role(db: &impl ConnectionTrait, user_id: u64, role_id: u64) {
+        sys_user_role::ActiveModel {
+            user_id: Set(user_id),
+            role_id: Set(role_id),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn bind_role_menu(db: &impl ConnectionTrait, role_id: u64, menu_id: u64) {
+        sys_role_menu::ActiveModel {
+            role_id: Set(role_id),
+            menu_id: Set(menu_id),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn seed_api(
+        db: &impl ConnectionTrait,
+        status: i8,
+        deleted_at: Option<chrono::NaiveDateTime>,
+    ) -> sys_api::Model {
+        sys_api::ActiveModel {
+            // uk_api_path_method 物理唯一（含软删行占位），每行用不同 path
+            path: Set(format!("/api/v1/{}/delete", unique("perm_api"))),
+            method: Set("POST".to_string()),
+            description: Set("接口授权测试".to_string()),
+            api_group: Set("perm_test".to_string()),
+            status: Set(status),
+            deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn bind_role_api(db: &impl ConnectionTrait, role_id: u64, api_id: u64) {
+        sys_role_api::ActiveModel {
+            role_id: Set(role_id),
+            api_id: Set(api_id),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn cleanup(db: &impl ConnectionTrait, fixture: Fixture) {
+        if let Some(user) = fixture.user.as_ref() {
+            sys_user_role::Entity::delete_many()
+                .filter(sys_user_role::Column::UserId.eq(user.id))
+                .exec(db)
+                .await
+                .unwrap();
+            sys_user::Entity::delete_by_id(user.id)
+                .exec(db)
+                .await
+                .unwrap();
+        }
+
+        for role in &fixture.roles {
+            sys_role_menu::Entity::delete_many()
+                .filter(sys_role_menu::Column::RoleId.eq(role.id))
+                .exec(db)
+                .await
+                .unwrap();
+            sys_role::Entity::delete_by_id(role.id)
+                .exec(db)
+                .await
+                .unwrap();
+        }
+
+        for menu in &fixture.menus {
+            sys_menu::Entity::delete_by_id(menu.id)
+                .exec(db)
+                .await
+                .unwrap();
+        }
+
+        if let Some(super_role) = fixture.super_role.filter(|item| item.owned_by_test) {
+            sys_role_menu::Entity::delete_many()
+                .filter(sys_role_menu::Column::RoleId.eq(super_role.role.id))
+                .exec(db)
+                .await
+                .unwrap();
+            sys_role::Entity::delete_by_id(super_role.role.id)
+                .exec(db)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn find_permission_codes_returns_bound_active_button() {
+        let db = test_txn().await;
+        let role = seed_role(&db, 1, None).await;
+        let menu = seed_button(&db, "system:user:create", 1, None).await;
+        bind_role_menu(&db, role.id, menu.id).await;
+
+        let result = find_permission_codes_by_role_ids(&db, &[role.id]).await;
+
+        cleanup(
+            &db,
+            Fixture {
+                roles: vec![role],
+                menus: vec![menu],
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let codes = result.unwrap();
+        assert!(codes.contains(&"system:user:create".to_string()));
+    }
+
+    /// role_ids 并集：多个角色各自绑定的按钮都计入；空 role_ids 短路为空。
+    /// 「禁用/删除角色排除」是角色解析语义，由 user repo 负责（见
+    /// user/repo.rs 的 find_roles_by_user_id 测试），repo 层只按传入 role_ids 查询。
+    #[tokio::test]
+    async fn find_permission_codes_unions_all_roles_in_role_ids() {
+        let db = test_txn().await;
+        let role_a = seed_role(&db, 1, None).await;
+        let role_b = seed_role(&db, 1, None).await;
+        let menu_a = seed_button(&db, "system:user:create", 1, None).await;
+        let menu_b = seed_button(&db, "system:role:update", 1, None).await;
+        bind_role_menu(&db, role_a.id, menu_a.id).await;
+        bind_role_menu(&db, role_b.id, menu_b.id).await;
+
+        let union = find_permission_codes_by_role_ids(&db, &[role_a.id, role_b.id])
+            .await
+            .unwrap();
+        let empty = find_permission_codes_by_role_ids(&db, &[]).await.unwrap();
+
+        cleanup(
+            &db,
+            Fixture {
+                roles: vec![role_a, role_b],
+                menus: vec![menu_a, menu_b],
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(
+            union.contains(&"system:user:create".to_string())
+                && union.contains(&"system:role:update".to_string()),
+            "并集应包含两个角色各自的按钮权限码，实际：{union:?}"
+        );
+        assert!(empty.is_empty(), "空 role_ids 应短路为空");
+    }
+
+    #[tokio::test]
+    async fn find_permission_codes_excludes_invalid_buttons() {
+        let db = test_txn().await;
+        let role = seed_role(&db, 1, None).await;
+        let active_menu = seed_button(&db, "system:user:update", 1, None).await;
+        let disabled_menu = seed_button(&db, "system:user:create", 0, None).await;
+        let deleted_menu = seed_button(
+            &db,
+            "system:user:create",
+            1,
+            Some(chrono::Local::now().naive_local()),
+        )
+        .await;
+        let empty_permission_menu = seed_button(&db, "", 1, None).await;
+
+        for menu in [
+            &active_menu,
+            &disabled_menu,
+            &deleted_menu,
+            &empty_permission_menu,
+        ] {
+            bind_role_menu(&db, role.id, menu.id).await;
+        }
+
+        let result = find_permission_codes_by_role_ids(&db, &[role.id]).await;
+
+        cleanup(
+            &db,
+            Fixture {
+                roles: vec![role],
+                menus: vec![
+                    active_menu,
+                    disabled_menu,
+                    deleted_menu,
+                    empty_permission_menu,
+                ],
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let codes = result.unwrap();
+        assert_eq!(codes, vec!["system:user:update"]);
+    }
+
+    #[tokio::test]
+    async fn find_permission_codes_only_accepts_button_type() {
+        let db = test_txn().await;
+        let role = seed_role(&db, 1, None).await;
+        let button = seed_menu(&db, "system:user:create", 1, None, 3).await;
+        let directory = seed_menu(&db, "system:user:create", 1, None, 1).await;
+
+        bind_role_menu(&db, role.id, button.id).await;
+        bind_role_menu(&db, role.id, directory.id).await;
+
+        let result = find_permission_codes_by_role_ids(&db, &[role.id]).await;
+
+        cleanup(
+            &db,
+            Fixture {
+                roles: vec![role],
+                menus: vec![button, directory],
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let codes = result.unwrap();
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "system:user:create")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn super_owner_has_permission_without_binding_a_button() {
+        let db = test_txn().await;
+        let super_role_fixture = load_super_role(&db).await;
+        let user = seed_user(&db, 1, None).await;
+        bind_user_role(&db, user.id, super_role_fixture.role.id).await;
+
+        let result =
+            super::super::service::has_permission(&db, user.id, "anything:not:listed").await;
+
+        cleanup(
+            &db,
+            Fixture {
+                user: Some(user),
+                super_role: Some(SuperRoleFixture {
+                    role: super_role_fixture.role,
+                    owned_by_test: super_role_fixture.owned_by_test,
+                }),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn find_active_api_by_path_method_returns_none_for_unregistered_path() {
+        let db = test_txn().await;
+
+        let result =
+            find_active_api_by_path_method(&db, "/api/v1/not-registered/delete", "POST").await;
+
+        assert!(result.unwrap().is_none(), "未登记的接口应返回 None");
+    }
+
+    #[tokio::test]
+    async fn find_active_api_by_path_method_excludes_deleted_and_disabled() {
+        let db = test_txn().await;
+        let active = seed_api(&db, 1, None).await;
+        let disabled = seed_api(&db, 0, None).await;
+        let deleted = seed_api(&db, 1, Some(chrono::Local::now().naive_local())).await;
+
+        let hit = find_active_api_by_path_method(&db, &active.path, &active.method).await;
+        let disabled_hit =
+            find_active_api_by_path_method(&db, &disabled.path, &disabled.method).await;
+        let deleted_hit = find_active_api_by_path_method(&db, &deleted.path, &deleted.method).await;
+        let method_mismatch = find_active_api_by_path_method(&db, &active.path, "GET").await;
+
+        assert_eq!(hit.unwrap().unwrap().id, active.id, "生效 API 应被命中");
+        assert!(disabled_hit.unwrap().is_none(), "禁用 API 不应参与拦截");
+        assert!(deleted_hit.unwrap().is_none(), "软删 API 不应参与拦截");
+        assert!(method_mismatch.unwrap().is_none(), "method 不匹配不应命中");
+    }
+
+    #[tokio::test]
+    async fn exists_role_api_matches_intersection_only() {
+        let db = test_txn().await;
+        let api = seed_api(&db, 1, None).await;
+        let granted = seed_role(&db, 1, None).await;
+        let ungranted = seed_role(&db, 1, None).await;
+        bind_role_api(&db, granted.id, api.id).await;
+
+        let hit = exists_role_api(&db, api.id, &[granted.id]).await;
+        let miss = exists_role_api(&db, api.id, &[ungranted.id]).await;
+        let mixed = exists_role_api(&db, api.id, &[ungranted.id, granted.id]).await;
+        let empty = exists_role_api(&db, api.id, &[]).await;
+
+        assert!(hit.unwrap(), "已授权角色应命中");
+        assert!(!miss.unwrap(), "未授权角色不应命中");
+        assert!(mixed.unwrap(), "交集中任一命中即通过");
+        assert!(!empty.unwrap(), "空角色集合应短路返回 false");
+    }
+}

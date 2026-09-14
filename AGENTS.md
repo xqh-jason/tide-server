@@ -6,7 +6,9 @@
 
 ## 项目结构与模块组织
 
-- `src/modules/<域>/{api,service,repo,dto}.rs`：业务垂直切片（如 user、role、menu、permission）
+- `src/modules/system/<域>/{api,service,repo,dto}.rs`：平台能力域（user、role、menu、
+  dictionary 等 18 个，随脚手架交付，保持稳定）
+- `src/modules/biz/<域>/`：业务域容器（具体业务功能从这里生长，结构与平台域一致）
 - `src/infra/`：启动管线、配置、全局状态（`AppState`）、路由组装
 - `src/middleware/`：横切中间件（`InjectState`、`AuthRequired`）
 - `src/entity/`：SeaORM 实体，全局共享

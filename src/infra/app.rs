@@ -33,7 +33,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         std::sync::Arc::new(MemoryCache::new()),
         scheduler,
     );
-    crate::modules::job::scheduler::init_scheduler(&state).await?;
+    crate::modules::system::job::scheduler::init_scheduler(&state).await?;
 
     // CORS 中间件挂在 Service 层（先于 router 的 InjectState），因此提前取出配置副本构造，
     // 不依赖 Depot 注入的状态。

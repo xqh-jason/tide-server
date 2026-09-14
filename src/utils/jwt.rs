@@ -61,7 +61,7 @@ pub fn verify(token: &str, secret: &str) -> anyhow::Result<Claims> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modules::permission::SUPER_ROLE_KEY;
+    use crate::modules::system::permission::SUPER_ROLE_KEY;
 
     const SECRET: &str = "test-secret";
 

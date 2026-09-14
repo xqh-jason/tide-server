@@ -1,23 +1,92 @@
 {
   "domain": "job",
+  "group": "system",
   "table": "sys_job",
   "comment": "定时任务",
   "fields": [
-    { "name": "id", "rust_type": "u64", "primary": true, "auto_increment": true },
-    { "name": "job_name", "rust_type": "String", "optional": true, "default": "", "comment": "任务名称（唯一含软删占位）" },
-    { "name": "cron_expr", "rust_type": "String", "optional": true, "default": "", "comment": "cron 表达式（6 段秒级：秒 分 时 日 月 周）" },
-    { "name": "handler_name", "rust_type": "String", "optional": true, "default": "", "comment": "任务处理器名（内置注册表键）" },
-    { "name": "status", "rust_type": "i8", "optional": true, "default": 1, "comment": "状态：1 启用 / 0 停用" },
-    { "name": "remark", "rust_type": "String", "optional": true, "default": "", "comment": "备注" },
-    { "name": "created_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "updated_at", "rust_type": "DateTime", "readonly": true },
-    { "name": "created_by", "rust_type": "u64", "readonly": true, "audit": true, "comment": "创建人 ID" },
-    { "name": "updated_by", "rust_type": "u64", "readonly": true, "audit": true, "comment": "更新人 ID" },
-    { "name": "deleted_at", "rust_type": "Option<DateTime>", "readonly": true, "soft_delete": true }
+    {
+      "name": "id",
+      "rust_type": "u64",
+      "primary": true,
+      "auto_increment": true
+    },
+    {
+      "name": "job_name",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "任务名称（唯一含软删占位）"
+    },
+    {
+      "name": "cron_expr",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "cron 表达式（6 段秒级：秒 分 时 日 月 周）"
+    },
+    {
+      "name": "handler_name",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "任务处理器名（内置注册表键）"
+    },
+    {
+      "name": "status",
+      "rust_type": "i8",
+      "optional": true,
+      "default": 1,
+      "comment": "状态：1 启用 / 0 停用"
+    },
+    {
+      "name": "remark",
+      "rust_type": "String",
+      "optional": true,
+      "default": "",
+      "comment": "备注"
+    },
+    {
+      "name": "created_at",
+      "rust_type": "DateTime",
+      "readonly": true
+    },
+    {
+      "name": "updated_at",
+      "rust_type": "DateTime",
+      "readonly": true
+    },
+    {
+      "name": "created_by",
+      "rust_type": "u64",
+      "readonly": true,
+      "audit": true,
+      "comment": "创建人 ID"
+    },
+    {
+      "name": "updated_by",
+      "rust_type": "u64",
+      "readonly": true,
+      "audit": true,
+      "comment": "更新人 ID"
+    },
+    {
+      "name": "deleted_at",
+      "rust_type": "Option<DateTime>",
+      "readonly": true,
+      "soft_delete": true
+    }
   ],
-  "unique_fields": ["job_name"],
+  "unique_fields": [
+    "job_name"
+  ],
   "filters": [
-    { "field": "job_name", "kind": "keyword" },
-    { "field": "status", "kind": "exact" }
+    {
+      "field": "job_name",
+      "kind": "keyword"
+    },
+    {
+      "field": "status",
+      "kind": "exact"
+    }
   ]
 }
