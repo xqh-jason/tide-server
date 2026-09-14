@@ -7,6 +7,7 @@ use crate::utils::PageData;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
+use std::collections::HashSet;
 
 /// 查询全部启用菜单（超管全量菜单树用；按角色过滤见 `find_menus_by_role_ids`）。
 pub async fn find_all_menus(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Model>> {
@@ -104,8 +105,39 @@ pub async fn update_menu(
     Ok(model)
 }
 
-/// 软删除菜单（不 begin/commit，事务边界由调用方负责）：BFS 递归收集目标及
-/// 其全部子孙菜单，清空这些菜单的角色关联并批量软删主表。
+/// 收集 `root_id` 的全部子孙菜单 id（**不含** root 自身，**不过滤软删**）。
+///
+/// `visited` 防御：库内若存在环状脏数据（`A→B→A`），遍历必须终止而不是无限扩展。
+/// 返回 id 集合而非业务判定——「新父是否为自身子孙」的策略由 service 层决定。
+pub async fn find_descendant_ids(
+    db: &impl ConnectionTrait,
+    root_id: u64,
+) -> anyhow::Result<Vec<u64>> {
+    let mut descendants = Vec::new();
+    // visited 先放入 root：root 不会被当作自身的子孙重复收集
+    let mut visited: HashSet<u64> = HashSet::from([root_id]);
+    let mut frontier = vec![root_id];
+    while !frontier.is_empty() {
+        let children = sys_menu::Entity::find()
+            .filter(sys_menu::Column::ParentId.is_in(frontier))
+            .column(sys_menu::Column::Id)
+            .all(db)
+            .await?;
+        let mut next = Vec::with_capacity(children.len());
+        for child in children {
+            // 已访问则跳过：环状脏数据下不再入队，保证遍历必然终止
+            if visited.insert(child.id) {
+                descendants.push(child.id);
+                next.push(child.id);
+            }
+        }
+        frontier = next;
+    }
+    Ok(descendants)
+}
+
+/// 软删除菜单（不 begin/commit，事务边界由调用方负责）：收集目标及其全部子孙菜单，
+/// 清空这些菜单的角色关联并批量软删主表（子孙收集走 `find_descendant_ids`，带 `visited` 防环）。
 ///
 /// 子级收集**不过滤软删状态**：即使某个中间节点已软删，其下仍正常的子孙也要级联处理，
 /// 避免父已删、子孤立的脏数据。
@@ -118,22 +150,9 @@ pub(crate) async fn soft_delete_menu_in_tx(
         return Ok(false);
     };
 
-    // BFS 收集目标 + 全部子孙 id
+    // 目标 + 全部子孙 id（子孙收集复用防环原语：脏数据成环时遍历必然终止）
     let mut ids = vec![menu.id];
-    let mut frontier = vec![menu.id];
-    while !frontier.is_empty() {
-        let children = sys_menu::Entity::find()
-            .filter(sys_menu::Column::ParentId.is_in(frontier))
-            .column(sys_menu::Column::Id)
-            .all(txn)
-            .await?;
-        let child_ids: Vec<u64> = children.into_iter().map(|c| c.id).collect();
-        if child_ids.is_empty() {
-            break;
-        }
-        frontier = child_ids.clone();
-        ids.extend(child_ids);
-    }
+    ids.extend(find_descendant_ids(txn, menu.id).await?);
 
     let now = chrono::Local::now().naive_local();
     // 关系表硬删除：清掉这些菜单的角色绑定
@@ -248,6 +267,32 @@ mod tests {
             permission: Set(String::new()),
             status: Set(status),
             deleted_at: Set(deleted_at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    /// 造带指定父节点的子菜单：用于构造级联 / 环状脏数据。
+    async fn seed_menu_with_parent(
+        db: &impl ConnectionTrait,
+        name: &str,
+        parent_id: u64,
+    ) -> sys_menu::Model {
+        sys_menu::ActiveModel {
+            parent_id: Set(parent_id),
+            path: Set(format!("/{}", unique("seed_path"))),
+            name: Set(name.to_string()),
+            component: Set(format!("#/views/{}.vue", unique("seed_comp"))),
+            title: Set(unique("seed_title")),
+            icon: Set(String::new()),
+            sort: Set(0),
+            keep_alive: Set(0),
+            hidden: Set(0),
+            menu_type: Set(1),
+            permission: Set(String::new()),
+            status: Set(1),
             ..Default::default()
         }
         .insert(db)
@@ -710,5 +755,63 @@ mod tests {
             .exec(&db)
             .await
             .unwrap();
+    }
+
+    /// 脏数据自环（`A.parent_id = A`）：级联软删的 BFS 必须终止，不得无限扩展挂死。
+    ///
+    /// MySQL 不允许 CHECK 引用自增列（错误 3818），故自环无法在 DB 层拦截；这条路径
+    /// 只能靠 `visited` 兜底 —— 正是本用例守住的防线。
+    #[tokio::test]
+    async fn soft_delete_menu_terminates_on_self_referencing_menu() {
+        let txn = test_txn().await;
+        let a = seed_menu(&txn, &unique("self_loop"), 1, None).await;
+        // 绕过 service 防环直接改库造自环
+        let mut dirty: sys_menu::ActiveModel = a.clone().into();
+        dirty.parent_id = Set(a.id);
+        dirty.update(&txn).await.unwrap();
+
+        // 旧实现：frontier 每轮查回自身、child_ids 永不为空 ⇒ 永久循环并占住事务连接
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            soft_delete_menu_in_tx(&txn, a.id),
+        )
+        .await;
+
+        assert!(result.is_ok(), "自环脏数据下 BFS 未在限时内终止（挂死）");
+        assert!(
+            find_by_id(&txn, a.id).await.unwrap().is_none(),
+            "自环菜单本身应被软删"
+        );
+    }
+
+    /// 脏数据双节点环（`A→B→A`）：删除 A 必须终止，且环上节点全部级联软删。
+    #[tokio::test]
+    async fn soft_delete_menu_terminates_on_two_node_cycle() {
+        let txn = test_txn().await;
+        let a = seed_menu(&txn, &unique("cycle_a"), 1, None).await;
+        let b = seed_menu_with_parent(&txn, &unique("cycle_b"), a.id).await;
+        // 造环：把 a 的父指向 b，形成 a→b→a
+        let mut dirty: sys_menu::ActiveModel = a.clone().into();
+        dirty.parent_id = Set(b.id);
+        dirty.update(&txn).await.unwrap();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            soft_delete_menu_in_tx(&txn, a.id),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "双节点环脏数据下 BFS 未在限时内终止（挂死）"
+        );
+        assert!(
+            find_by_id(&txn, a.id).await.unwrap().is_none(),
+            "A 应被软删"
+        );
+        assert!(
+            find_by_id(&txn, b.id).await.unwrap().is_none(),
+            "B 应被软删"
+        );
     }
 }

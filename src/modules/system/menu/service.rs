@@ -18,6 +18,11 @@ use crate::utils::error::AppError;
 /// 菜单树最大深度：防御异常数据（超深 parent 链）导致递归栈溢出。
 const MAX_MENU_DEPTH: usize = 10;
 
+/// 级联删除的请求级超时（秒）。级联收集虽已用 `visited` 保证迭代有界，但超大子树
+/// 或库侧劣化仍可能让单次删除长时间占住连接；超时兜底保证单请求不会拖死连接池。
+/// 取值远大于正常级联（数千节点也只有数百次查询），只拦截病态情况。
+const DELETE_MENU_TIMEOUT_SECS: u64 = 10;
+
 /// vben 菜单树（`/user/menus`）：超管返回全量，普通用户按角色过滤。
 pub async fn get_menus(
     db: &impl ConnectionTrait,
@@ -127,6 +132,11 @@ pub async fn create_menu(
     actor_id: u64,
     req: &CreateMenuReq,
 ) -> Result<sys_menu::Model, AppError> {
+    // 父菜单校验：parent_id = 0 为顶级节点，否则须存在且未软删
+    if req.parent_id != 0 && menu_repo::find_by_id(db, req.parent_id).await?.is_none() {
+        return Err(AppError::Biz("上级菜单不存在或已删除".to_string()));
+    }
+
     // 检查名称是否存在
     let menu = menu_repo::find_by_name_include_deleted(db, &req.name).await?;
     if let Some(menu) = menu {
@@ -167,6 +177,23 @@ pub async fn update_menu(
     let Some(_) = menu_repo::find_by_id(db, req.id).await? else {
         return Err(AppError::Biz(format!("菜单不存在：{}", req.id)));
     };
+
+    // 父菜单校验：0 为顶级；否则须存在，且不得为自身或其子孙（防环）
+    if req.parent_id != 0 {
+        // 自环单独拦截：子孙集合不含自身，contains 判不出来
+        if req.parent_id == req.id {
+            return Err(AppError::Biz("上级菜单不能是自身或其下级菜单".to_string()));
+        }
+        if menu_repo::find_by_id(db, req.parent_id).await?.is_none() {
+            return Err(AppError::Biz("上级菜单不存在或已删除".to_string()));
+        }
+        if menu_repo::find_descendant_ids(db, req.id)
+            .await?
+            .contains(&req.parent_id)
+        {
+            return Err(AppError::Biz("上级菜单不能是自身或其下级菜单".to_string()));
+        }
+    }
 
     // 检查名称是否已被其他菜单占用（含软删占位，排除自身）
     let dup = menu_repo::find_by_name_include_deleted(db, &req.name)
@@ -210,9 +237,26 @@ pub async fn get_menu(db: &impl ConnectionTrait, id: u64) -> Result<sys_menu::Mo
 }
 
 /// 对外入口：开事务后委托 `delete_menu_in_tx`，成功后提交。
+///
+/// 超时兜底：超过 `DELETE_MENU_TIMEOUT_SECS` 未完成即放弃本次删除——future 在 `await`
+/// 点被丢弃，`txn` 随之 Drop 触发回滚（沿用本仓既有的事务 Drop 语义），连接立即归还池，
+/// 单个请求无法长期独占连接。返回业务错误而非 `Internal`：超时对调用方是可行动信息
+/// （树层级异常 / 库侧劣化），且与本仓「Biz 文案面向用户、Internal 只回固定串」的分工一致。
 pub async fn delete_menu(db: &DatabaseConnection, id: u64) -> Result<(), AppError> {
     let txn = db.begin().await.map_err(anyhow::Error::from)?;
-    let result = delete_menu_in_tx(&txn, id).await;
+    let result = match tokio::time::timeout(
+        std::time::Duration::from_secs(DELETE_MENU_TIMEOUT_SECS),
+        delete_menu_in_tx(&txn, id),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            return Err(AppError::Biz(format!(
+                "删除菜单超时（超过 {DELETE_MENU_TIMEOUT_SECS} 秒）"
+            )));
+        }
+    };
     if result.is_ok() {
         txn.commit().await.map_err(anyhow::Error::from)?;
     }
@@ -271,6 +315,25 @@ mod tests {
             path: format!("/{name}"),
             name,
             component,
+            title: unique("title"),
+            icon: String::new(),
+            sort: 0,
+            keep_alive: 0,
+            hidden: 0,
+            menu_type: 1,
+            permission: String::new(),
+            status: 1,
+        }
+    }
+
+    /// 更新请求夹具：默认顶级（parent_id = 0），需要时由用例覆写。
+    fn update_req(id: u64, name: String) -> UpdateMenuReq {
+        UpdateMenuReq {
+            id,
+            parent_id: 0,
+            path: format!("/{name}"),
+            name,
+            component: format!("#/views/{}.vue", unique("comp")),
             title: unique("title"),
             icon: String::new(),
             sort: 0,
@@ -448,6 +511,33 @@ mod tests {
         );
     }
 
+    /// 创建菜单：父菜单不存在（悬空 parent_id）应被拒绝，避免产生孤儿菜单。
+    #[tokio::test]
+    async fn create_menu_rejects_nonexistent_parent() {
+        let db = test_txn().await;
+        let mut req = create_req(unique("orphan"), format!("#/views/{}.vue", unique("c")));
+        req.parent_id = 9_999_999_999;
+
+        let result = create_menu(&db, ACTOR_ID, &req).await;
+
+        assert!(
+            matches!(result, Err(AppError::Biz(_))),
+            "父菜单不存在应返回 Biz 业务错误，实际：{result:?}"
+        );
+    }
+
+    /// 创建菜单：`parent_id = 0` 为顶级节点，应正常通过（防过度拦截）。
+    #[tokio::test]
+    async fn create_menu_accepts_root_parent_zero() {
+        let db = test_txn().await;
+        let req = create_req(unique("root_ok"), format!("#/views/{}.vue", unique("c")));
+        assert_eq!(req.parent_id, 0, "前置：create_req 默认顶级菜单");
+
+        let created = create_menu(&db, ACTOR_ID, &req).await.unwrap();
+
+        assert_eq!(created.parent_id, 0);
+    }
+
     /// 更新时 name 与他人重复应被拒绝，但保留自身 name 不算重复。
     #[tokio::test]
     async fn update_menu_rejects_duplicate_name_excluding_self() {
@@ -549,6 +639,76 @@ mod tests {
         );
     }
 
+    /// 更新菜单：`parent_id` 指向自身（自环）应被拒绝。
+    #[tokio::test]
+    async fn update_menu_rejects_self_as_parent() {
+        let db = test_txn().await;
+        let menu = seed_menu(&db, &unique("self_parent"), 0, 1, None).await;
+
+        let mut req = update_req(menu.id, unique("self_parent_renamed"));
+        req.parent_id = menu.id;
+        let result = update_menu(&db, ACTOR_ID, &req).await;
+
+        assert!(
+            matches!(result, Err(AppError::Biz(_))),
+            "parent_id 指向自身应返回 Biz 业务错误，实际：{result:?}"
+        );
+    }
+
+    /// 更新菜单：把节点移动到自身下级（成环）应被拒绝。
+    #[tokio::test]
+    async fn update_menu_rejects_move_under_own_descendant() {
+        let db = test_txn().await;
+        let parent = seed_menu(&db, &unique("cycle_parent"), 0, 1, None).await;
+        let child = seed_menu(&db, &unique("cycle_child"), parent.id, 1, None).await;
+
+        let mut req = update_req(parent.id, unique("cycle_parent_renamed"));
+        req.parent_id = child.id;
+        let result = update_menu(&db, ACTOR_ID, &req).await;
+
+        assert!(
+            matches!(result, Err(AppError::Biz(_))),
+            "移动到自身下级（成环）应返回 Biz 业务错误，实际：{result:?}"
+        );
+    }
+
+    /// 更新菜单：父菜单不存在应被拒绝。
+    #[tokio::test]
+    async fn update_menu_rejects_nonexistent_parent() {
+        let db = test_txn().await;
+        let menu = seed_menu(&db, &unique("orphan_update"), 0, 1, None).await;
+
+        let mut req = update_req(menu.id, unique("orphan_update_renamed"));
+        req.parent_id = 9_999_999_999;
+        let result = update_menu(&db, ACTOR_ID, &req).await;
+
+        assert!(
+            matches!(result, Err(AppError::Biz(_))),
+            "父菜单不存在应返回 Biz 业务错误，实际：{result:?}"
+        );
+    }
+
+    /// 更新菜单：移动到无关分支或顶级是合法操作（防过度拦截）。
+    #[tokio::test]
+    async fn update_menu_allows_move_to_other_branch() {
+        let db = test_txn().await;
+        let branch_a = seed_menu(&db, &unique("move_branch_a"), 0, 1, None).await;
+        let branch_b = seed_menu(&db, &unique("move_branch_b"), 0, 1, None).await;
+        let node = seed_menu(&db, &unique("move_node"), branch_a.id, 1, None).await;
+
+        let mut to_other = update_req(node.id, unique("move_node_other"));
+        to_other.parent_id = branch_b.id;
+        let moved = update_menu(&db, ACTOR_ID, &to_other).await.unwrap();
+
+        assert_eq!(moved.parent_id, branch_b.id, "移动到无关分支应成功");
+
+        let mut to_root = update_req(node.id, unique("move_node_root"));
+        to_root.parent_id = 0;
+        let rooted = update_menu(&db, ACTOR_ID, &to_root).await.unwrap();
+
+        assert_eq!(rooted.parent_id, 0, "移动到顶级应成功");
+    }
+
     /// 删除不存在的菜单应返回业务错误。
     #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
@@ -561,6 +721,34 @@ mod tests {
             matches!(missing, Err(AppError::Biz(_))),
             "删除不存在的菜单应返回 Biz 业务错误，实际：{missing:?}"
         );
+    }
+
+    /// 对外入口 `delete_menu`（自管事务 + 超时包装）正常路径：级联生效并提交。
+    /// 走真实连接而非外层事务：超时包装若误吞 commit，本用例会红。
+    #[tokio::test]
+    async fn delete_menu_commits_cascade_via_public_entry() {
+        let db = test_db().await;
+        let parent = seed_menu(&db, &unique("pub_del_parent"), 0, 1, None).await;
+        let child = seed_menu(&db, &unique("pub_del_child"), parent.id, 1, None).await;
+
+        delete_menu(&db, parent.id).await.unwrap();
+
+        assert!(
+            menu_repo::find_by_id(&db, parent.id)
+                .await
+                .unwrap()
+                .is_none(),
+            "父菜单应在提交后软删"
+        );
+        assert!(
+            menu_repo::find_by_id(&db, child.id)
+                .await
+                .unwrap()
+                .is_none(),
+            "子菜单应被级联软删"
+        );
+
+        cleanup(&db, &[], &[], &[parent.id, child.id]).await;
     }
 
     /// 普通用户只看到其角色绑定的菜单（父子结构完整），未绑定菜单不出现。
