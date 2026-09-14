@@ -90,7 +90,7 @@ pnpm dev:ele    # http://localhost:5910，/api 代理 → http://127.0.0.1:8080
 前后端仓库需同级存放：`tide-server/` 与 `tide-admin/`。
 
 ```bash
-cp .env.example .env      # 按需修改密码与 JWT secret
+cp .env.example .env      # TIDE_JWT_SECRET 必设（生产用强随机串），密码按需修改
 docker compose up -d --build
 ```
 
@@ -116,7 +116,7 @@ docker compose up -d backend                                  # 改回默认后�
 | `TIDE_ENV` | `env` | `development` / `production`（生产不重置 admin 弱口令） |
 | `TIDE_SEED__ENABLED` | `seed.enabled` | 生产环境显式开启启动种子（首次部署 bootstrap 用） |
 | `TIDE_DATABASE__URL` | `database.url` | 连接串，务必带 `charset=utf8mb4&timezone=%2B08:00` |
-| `TIDE_JWT__SECRET` | `jwt.secret` | JWT 签名密钥，生产替换为强随机串 |
+| `TIDE_JWT__SECRET` | `jwt.secret` | JWT 签名密钥（compose 部署必设），生产替换为强随机串；production 下默认开发密钥会被拒绝启动 |
 | `TIDE_JWT__TTL_SECONDS` | `jwt.ttl_seconds` | access token 过期秒数（自动识别数字类型） |
 | `TIDE_JWT__REFRESH_TTL_SECONDS` | `jwt.refresh_ttl_seconds` | 刷新凭证有效期秒数 |
 | `TIDE_CORS__ALLOW_ORIGINS` | `cors.allow_origins` | 跨域白名单，逗号分隔（如 `a.com,b.com`） |

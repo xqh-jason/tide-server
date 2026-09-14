@@ -4,8 +4,8 @@
 #   docker compose up -d --build
 # 访问 http://localhost（前端）→ 登录后各页面可用；健康检查 http://localhost/api/v1/health
 #
-# 可覆盖变量见 .env.example（复制为 .env 后生效）：
-#   MYSQL_ROOT_PASSWORD / TIDE_JWT_SECRET
+# 可覆盖变量见 .env.example（复制为 .env 后生效）：MYSQL_ROOT_PASSWORD；
+# TIDE_JWT_SECRET 必设（production 下默认开发密钥会被后端拒绝启动）
 
 services:
   mysql:
@@ -44,7 +44,8 @@ services:
       # 创建初始 admin / super 角色后应改回 false 并立即修改 admin 密码
       TIDE_SEED__ENABLED: ${TIDE_SEED_ENABLED:-false}
       TIDE_DATABASE__URL: "mysql://root:${MYSQL_ROOT_PASSWORD:-root}@mysql:3306/tide_server?charset=utf8mb4&timezone=%2B08:00"
-      TIDE_JWT__SECRET: ${TIDE_JWT_SECRET:-dev-secret-change-me}
+      # 必设：production 下默认开发密钥会被后端拒绝启动（fail-fast）
+      TIDE_JWT__SECRET: ${TIDE_JWT_SECRET:?请在 .env 设置 TIDE_JWT_SECRET（强随机串，不能用默认开发密钥）}
     volumes:
       - backend_uploads:/app/uploads
     depends_on:

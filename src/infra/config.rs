@@ -147,6 +147,24 @@ fn default_refresh_ttl_seconds() -> i64 {
     604_800
 }
 
+/// 已知开发默认密钥：production 下命中即拒绝启动。公开弱密钥意味着任何人
+/// 可自签合法 token；发版漏设 `TIDE_JWT__SECRET` 时静默回退是真实事故路径
+/// （spec：2026-09-14-jwt-secret-production-guard-design.md）。
+const KNOWN_DEV_SECRETS: [&str; 1] = ["dev-secret-change-me"];
+
+/// production 环境禁用默认开发密钥（fail-fast）。抽成纯函数是为了可测性：
+/// std::env 是进程全局资源，测试篡改 `TIDE_ENV` 会污染并行用例的
+/// `Config::load()`（fail-fast 生效后连库测试会意外失败）。
+fn ensure_production_secret(env: &str, secret: &str) -> anyhow::Result<()> {
+    if env == "production" && KNOWN_DEV_SECRETS.contains(&secret) {
+        anyhow::bail!(
+            "production 环境禁止使用默认开发密钥 jwt.secret，\
+             请设置专用密钥（TIDE_JWT__SECRET 或 config 覆盖）"
+        );
+    }
+    Ok(())
+}
+
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
         let cfg: Config = config::Config::builder()
@@ -175,6 +193,7 @@ impl Config {
         if cfg.upload.dir.trim().is_empty() {
             anyhow::bail!("config.upload.dir 不能为空");
         }
+        ensure_production_secret(&cfg.env, &cfg.jwt.secret)?;
         Ok(cfg)
     }
 }
@@ -283,5 +302,31 @@ mod tests {
         unsafe { std::env::set_var("TIDE_JWT__TTL_SECONDS", "123") };
         let cfg = Config::load().unwrap();
         assert_eq!(cfg.jwt.ttl_seconds, 123, "环境变量数字应解析为整数");
+    }
+
+    // ===== production 禁用默认开发密钥（fail-fast）=====
+    // 纯函数直测：不走 env 篡改路径，避免污染并行用例的 Config::load()
+
+    /// production 命中已知开发默认密钥必须拒绝：公开弱密钥意味着任何人
+    /// 可自签合法 token（spec：2026-09-14-jwt-secret-production-guard-design.md）。
+    #[test]
+    fn production_with_known_dev_secret_is_rejected() {
+        let err = ensure_production_secret("production", "dev-secret-change-me").unwrap_err();
+        assert!(
+            err.to_string().contains("jwt.secret"),
+            "错误应提示设置专用密钥，实际：{err}"
+        );
+    }
+
+    /// production + 专用自定义密钥放行，fail-fast 不误伤。
+    #[test]
+    fn production_with_custom_secret_is_accepted() {
+        ensure_production_secret("production", "prod-only-secret-not-in-dev-list").unwrap();
+    }
+
+    /// development 沿用开发默认密钥不受影响（本地开发无需额外配置）。
+    #[test]
+    fn development_with_dev_secret_is_accepted() {
+        ensure_production_secret("development", "dev-secret-change-me").unwrap();
     }
 }
