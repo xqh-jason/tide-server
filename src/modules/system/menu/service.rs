@@ -127,25 +127,47 @@ pub async fn page_menus(
 
 /// 创建菜单：name 查重（含软删占位）→ 落库（审计字段由 repo 盖章）。
 /// component 格式等值域校验已前移到 handler 前的 `menu::validate`。
+///
+/// 对外入口：开事务后委托 `create_menu_in_tx`，成功后提交——父存在性校验与落库必须原子，
+/// 否则并发下会把子菜单挂到刚被删掉的父菜单下。
 pub async fn create_menu(
-    db: &impl ConnectionTrait,
+    db: &DatabaseConnection,
     actor_id: u64,
     req: &CreateMenuReq,
 ) -> Result<sys_menu::Model, AppError> {
-    // 父菜单校验：parent_id = 0 为顶级节点，否则须存在且未软删
-    if req.parent_id != 0 && menu_repo::find_by_id(db, req.parent_id).await?.is_none() {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = create_menu_in_tx(&txn, actor_id, req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内创建菜单：父存在性校验（加锁读）→ name 查重 → 落库。
+pub(crate) async fn create_menu_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    req: &CreateMenuReq,
+) -> Result<sys_menu::Model, AppError> {
+    // 父菜单校验：parent_id = 0 为顶级节点，否则须存在且未软删。
+    // 加锁读：与并发移动/删除该父的事务在父行上互斥，避免挂到刚被删的父下。
+    if req.parent_id != 0
+        && menu_repo::find_by_id_for_update(txn, req.parent_id)
+            .await?
+            .is_none()
+    {
         return Err(AppError::Biz("上级菜单不存在或已删除".to_string()));
     }
 
-    // 检查名称是否存在
-    let menu = menu_repo::find_by_name_include_deleted(db, &req.name).await?;
+    // 检查名称是否存在（name 全局唯一；并发重复由唯一键兜底，这里给友好错误）
+    let menu = menu_repo::find_by_name_include_deleted(txn, &req.name).await?;
     if let Some(menu) = menu {
         return Err(AppError::Biz(format!("菜单名称已存在：{}", menu.name)));
     }
 
     // 创建菜单
     let menu = menu_repo::create_menu(
-        db,
+        txn,
         sys_menu::ActiveModel {
             parent_id: Set(req.parent_id),
             path: Set(req.path.clone()),
@@ -167,14 +189,61 @@ pub async fn create_menu(
     Ok(menu)
 }
 
-/// 更新菜单：判存在 → name 查重排除自身 → 全量覆盖（审计字段由 repo 盖章）。
+/// 换父前的行锁：按 id 升序对「被移动节点」与「新父」加排他锁，返回两者最新记录。
+///
+/// 升序是防死锁的关键：`A 移到 B 下` 与 `B 移到 A 下` 两个方向相反的并发请求加锁顺序
+/// 一致，不会交叉等待（与 dept 域 `lock_move_rows` 同款语义）。`parent_id = 0` 表示移到
+/// 顶级，无父行可锁；`None` 表示目标行不存在或已软删，文案由调用方决定。
+async fn lock_move_rows(
+    txn: &DatabaseTransaction,
+    menu_id: u64,
+    parent_id: u64,
+) -> Result<(Option<sys_menu::Model>, Option<sys_menu::Model>), AppError> {
+    if parent_id == 0 {
+        let menu = menu_repo::find_by_id_for_update(txn, menu_id).await?;
+        return Ok((menu, None));
+    }
+
+    // 小 id 先锁（自环场景 parent_id == menu_id 是同一行，重复加锁无副作用）
+    if parent_id <= menu_id {
+        let parent = menu_repo::find_by_id_for_update(txn, parent_id).await?;
+        let menu = menu_repo::find_by_id_for_update(txn, menu_id).await?;
+        Ok((menu, parent))
+    } else {
+        let menu = menu_repo::find_by_id_for_update(txn, menu_id).await?;
+        let parent = menu_repo::find_by_id_for_update(txn, parent_id).await?;
+        Ok((menu, parent))
+    }
+}
+
+/// 更新菜单：判存在 → 防环 → name 查重排除自身 → 全量覆盖（审计字段由 repo 盖章）。
+///
+/// 对外入口：开事务后委托 `update_menu_in_tx`，成功后提交——防环校验与换父必须原子。
 pub async fn update_menu(
-    db: &impl ConnectionTrait,
+    db: &DatabaseConnection,
     actor_id: u64,
     req: &UpdateMenuReq,
 ) -> Result<sys_menu::Model, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = update_menu_in_tx(&txn, actor_id, req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内更新菜单：被移动节点与新父都走加锁读，防环判定基于最新已提交结构。
+pub(crate) async fn update_menu_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    req: &UpdateMenuReq,
+) -> Result<sys_menu::Model, AppError> {
+    // 加锁读（升序）：防环是「读-判-写」不变式，快照读下两个方向相反的并发互移会各自
+    // 只看到旧结构、双双通过校验，最终互指成环
+    let (menu, parent) = lock_move_rows(txn, req.id, req.parent_id).await?;
+
     // 检查菜单是否存在（软删视为不存在）
-    let Some(_) = menu_repo::find_by_id(db, req.id).await? else {
+    let Some(_) = menu else {
         return Err(AppError::Biz(format!("菜单不存在：{}", req.id)));
     };
 
@@ -184,10 +253,11 @@ pub async fn update_menu(
         if req.parent_id == req.id {
             return Err(AppError::Biz("上级菜单不能是自身或其下级菜单".to_string()));
         }
-        if menu_repo::find_by_id(db, req.parent_id).await?.is_none() {
+        if parent.is_none() {
             return Err(AppError::Biz("上级菜单不存在或已删除".to_string()));
         }
-        if menu_repo::find_descendant_ids(db, req.id)
+        // 子孙集合也用加锁读收集：必须看到并发已提交的换父结果
+        if menu_repo::find_descendant_ids_for_update(txn, req.id)
             .await?
             .contains(&req.parent_id)
         {
@@ -196,7 +266,7 @@ pub async fn update_menu(
     }
 
     // 检查名称是否已被其他菜单占用（含软删占位，排除自身）
-    let dup = menu_repo::find_by_name_include_deleted(db, &req.name)
+    let dup = menu_repo::find_by_name_include_deleted(txn, &req.name)
         .await?
         .is_some_and(|existing| existing.id != req.id);
     if dup {
@@ -205,7 +275,7 @@ pub async fn update_menu(
 
     // 更新菜单
     let menu = menu_repo::update_menu(
-        db,
+        txn,
         sys_menu::ActiveModel {
             id: Set(req.id),
             parent_id: Set(req.parent_id),
@@ -234,6 +304,22 @@ pub async fn get_menu(db: &impl ConnectionTrait, id: u64) -> Result<sys_menu::Mo
         return Err(AppError::Biz(format!("菜单不存在：{id}")));
     };
     Ok(menu)
+}
+
+/// 批量按 id 查有效菜单并加锁（跨域引用校验用），空入参返回空数组。
+///
+/// 与 `menu_repo::find_by_id` 的区别是**加了排他锁**：跨域写入（role 域写
+/// `sys_role_menu`）必须先锁住被引用的菜单行，才能与「删除菜单」的级联清理串行化
+/// ——删除方清完关联后绑定方才插入，会留下指向已软删菜单的悬挂绑定。须在事务内调用。
+pub async fn find_by_ids_for_update(
+    txn: &DatabaseTransaction,
+    ids: &[u64],
+) -> Result<Vec<sys_menu::Model>, AppError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(menu_repo::find_by_ids_for_update(txn, ids).await?)
 }
 
 /// 对外入口：开事务后委托 `delete_menu_in_tx`，成功后提交。
@@ -265,9 +351,11 @@ pub async fn delete_menu(db: &DatabaseConnection, id: u64) -> Result<(), AppErro
 
 /// 事务内完整业务（存在性 + 级联软删子孙菜单并清空角色关联），不管理事务边界。
 /// 供对外入口与测试外层事务调用。
+///
+/// 存在性检查走加锁读：与并发移动/删除本菜单的事务在自身行上互斥（与 dept 域删除同款）。
 pub(crate) async fn delete_menu_in_tx(txn: &DatabaseTransaction, id: u64) -> Result<(), AppError> {
-    // 检查菜单是否存在
-    let Some(_) = menu_repo::find_by_id(txn, id).await? else {
+    // 检查菜单是否存在（软删视为不存在）
+    let Some(_) = menu_repo::find_by_id_for_update(txn, id).await? else {
         return Err(AppError::Biz("菜单不存在".to_string()));
     };
 
@@ -283,6 +371,7 @@ mod tests {
     use crate::utils::error::AppError;
     use chrono::Local;
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use std::collections::HashSet;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -304,6 +393,9 @@ mod tests {
     }
 
     /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
+    ///
+    /// 注意：`create_menu` / `update_menu` 已是自开事务的对外入口（收 `&DatabaseConnection`），
+    /// 域内测试统一调用 `_in_tx` 版本以复用本夹具的回滚隔离。
     async fn test_txn() -> sea_orm::DatabaseTransaction {
         use sea_orm::TransactionTrait;
         test_db().await.begin().await.unwrap()
@@ -488,13 +580,13 @@ mod tests {
         .await;
         let _live = seed_menu(&db, &live_name, 0, 1, None).await;
 
-        let result_deleted = create_menu(
+        let result_deleted = create_menu_in_tx(
             &db,
             ACTOR_ID,
             &create_req(deleted_name, format!("#/views/{}.vue", unique("c"))),
         )
         .await;
-        let result_live = create_menu(
+        let result_live = create_menu_in_tx(
             &db,
             ACTOR_ID,
             &create_req(live_name, format!("#/views/{}.vue", unique("c"))),
@@ -518,7 +610,7 @@ mod tests {
         let mut req = create_req(unique("orphan"), format!("#/views/{}.vue", unique("c")));
         req.parent_id = 9_999_999_999;
 
-        let result = create_menu(&db, ACTOR_ID, &req).await;
+        let result = create_menu_in_tx(&db, ACTOR_ID, &req).await;
 
         assert!(
             matches!(result, Err(AppError::Biz(_))),
@@ -533,7 +625,7 @@ mod tests {
         let req = create_req(unique("root_ok"), format!("#/views/{}.vue", unique("c")));
         assert_eq!(req.parent_id, 0, "前置：create_req 默认顶级菜单");
 
-        let created = create_menu(&db, ACTOR_ID, &req).await.unwrap();
+        let created = create_menu_in_tx(&db, ACTOR_ID, &req).await.unwrap();
 
         assert_eq!(created.parent_id, 0);
     }
@@ -563,8 +655,8 @@ mod tests {
             status: 1,
         };
 
-        let dup = update_menu(&db, ACTOR_ID, &update_req(name_a.clone())).await;
-        let keep_self = update_menu(&db, ACTOR_ID, &update_req(name_b.clone())).await;
+        let dup = update_menu_in_tx(&db, ACTOR_ID, &update_req(name_a.clone())).await;
+        let keep_self = update_menu_in_tx(&db, ACTOR_ID, &update_req(name_b.clone())).await;
 
         assert!(
             matches!(dup, Err(AppError::Biz(_))),
@@ -579,7 +671,7 @@ mod tests {
     async fn update_menu_returns_biz_error_when_menu_missing() {
         let db = test_txn().await;
 
-        let missing = update_menu(
+        let missing = update_menu_in_tx(
             &db,
             ACTOR_ID,
             &UpdateMenuReq {
@@ -613,7 +705,7 @@ mod tests {
             Some(chrono::Local::now().naive_local()),
         )
         .await;
-        let update_deleted = update_menu(
+        let update_deleted = update_menu_in_tx(
             &db,
             ACTOR_ID,
             &UpdateMenuReq {
@@ -647,7 +739,7 @@ mod tests {
 
         let mut req = update_req(menu.id, unique("self_parent_renamed"));
         req.parent_id = menu.id;
-        let result = update_menu(&db, ACTOR_ID, &req).await;
+        let result = update_menu_in_tx(&db, ACTOR_ID, &req).await;
 
         assert!(
             matches!(result, Err(AppError::Biz(_))),
@@ -664,7 +756,7 @@ mod tests {
 
         let mut req = update_req(parent.id, unique("cycle_parent_renamed"));
         req.parent_id = child.id;
-        let result = update_menu(&db, ACTOR_ID, &req).await;
+        let result = update_menu_in_tx(&db, ACTOR_ID, &req).await;
 
         assert!(
             matches!(result, Err(AppError::Biz(_))),
@@ -680,7 +772,7 @@ mod tests {
 
         let mut req = update_req(menu.id, unique("orphan_update_renamed"));
         req.parent_id = 9_999_999_999;
-        let result = update_menu(&db, ACTOR_ID, &req).await;
+        let result = update_menu_in_tx(&db, ACTOR_ID, &req).await;
 
         assert!(
             matches!(result, Err(AppError::Biz(_))),
@@ -698,13 +790,13 @@ mod tests {
 
         let mut to_other = update_req(node.id, unique("move_node_other"));
         to_other.parent_id = branch_b.id;
-        let moved = update_menu(&db, ACTOR_ID, &to_other).await.unwrap();
+        let moved = update_menu_in_tx(&db, ACTOR_ID, &to_other).await.unwrap();
 
         assert_eq!(moved.parent_id, branch_b.id, "移动到无关分支应成功");
 
         let mut to_root = update_req(node.id, unique("move_node_root"));
         to_root.parent_id = 0;
-        let rooted = update_menu(&db, ACTOR_ID, &to_root).await.unwrap();
+        let rooted = update_menu_in_tx(&db, ACTOR_ID, &to_root).await.unwrap();
 
         assert_eq!(rooted.parent_id, 0, "移动到顶级应成功");
     }
@@ -854,6 +946,197 @@ mod tests {
         assert!(
             depth <= MAX_MENU_DEPTH,
             "异常深链应被截断到深度上限，实际深度：{depth}"
+        );
+    }
+
+    /// 从根（`parent_id = 0`）沿 `parent_id` 遍历，判断目标菜单是否仍挂在树上。
+    fn reachable_from_root(all: &[sys_menu::Model], target: u64) -> bool {
+        let mut frontier = vec![0_u64];
+        let mut visited = HashSet::new();
+        while let Some(parent_id) = frontier.pop() {
+            for menu in all.iter().filter(|menu| menu.parent_id == parent_id) {
+                if menu.id == target {
+                    return true;
+                }
+                if visited.insert(menu.id) {
+                    frontier.push(menu.id);
+                }
+            }
+        }
+        false
+    }
+
+    /// 并发互移防环：事务 1「A 移到 B 下」与事务 2「B 移到 A 下」各自校验时都看不到对方的
+    /// 未提交改动（RR 快照读），两边都放行即互指成环，两个菜单从树中消失。
+    ///
+    /// 复现要点：事务 2 先读一次固定快照，事务 1 完整提交后事务 2 才继续。
+    /// 数据真实提交（并发必需），故用真连接 + 手工清理。
+    #[tokio::test]
+    async fn update_menu_concurrent_cross_move_cannot_create_cycle() {
+        let db = test_db().await;
+        let root = seed_menu(&db, &unique("cycle_root"), 0, 1, None).await;
+        let a = seed_menu(&db, &unique("cycle_a"), root.id, 1, None).await;
+        let b = seed_menu(&db, &unique("cycle_b"), root.id, 1, None).await;
+
+        // 事务 2 先开启并做一次快照读（此后它的普通读都停留在这一刻）
+        let txn2 = db.begin().await.unwrap();
+        assert!(
+            menu_repo::find_by_id(&txn2, a.id).await.unwrap().is_some(),
+            "前置：A 应存在"
+        );
+
+        // 事务 1：A 移到 B 下，提交
+        let txn1 = db.begin().await.unwrap();
+        let mut move_a = update_req(a.id, a.name.clone());
+        move_a.parent_id = b.id;
+        let moved_a = update_menu_in_tx(&txn1, ACTOR_ID, &move_a).await;
+        assert!(moved_a.is_ok(), "前置：单向移动应放行: {moved_a:?}");
+        txn1.commit().await.unwrap();
+
+        // 事务 2：B 移到 A 下——A 已是 B 的父，必须被防环拒绝
+        let mut move_b = update_req(b.id, b.name.clone());
+        move_b.parent_id = a.id;
+        let res = update_menu_in_tx(&txn2, ACTOR_ID, &move_b).await;
+        if res.is_ok() {
+            txn2.commit().await.unwrap();
+        } else {
+            txn2.rollback().await.unwrap();
+        }
+
+        // 用户可见症状：成环后两个菜单都不再从根可达
+        let all = menu_repo::find_all_menus(&db).await.unwrap();
+        let reachable = (
+            reachable_from_root(&all, a.id),
+            reachable_from_root(&all, b.id),
+        );
+        cleanup(&db, &[], &[], &[root.id, a.id, b.id]).await;
+
+        assert!(
+            matches!(res, Err(AppError::Biz(ref m)) if m.contains("自身或其下级")),
+            "并发互移必须拒绝其一，否则 A/B 互指成环: {res:?}"
+        );
+        assert_eq!(
+            reachable,
+            (true, true),
+            "A/B 都应仍能从根遍历到（成环则双双从树中消失）"
+        );
+    }
+
+    /// 真并发冒烟：两个方向相反的互移同时发起，验证加锁顺序不交叉等待（无死锁/锁等待超时）。
+    ///
+    /// 只断言与调度无关的不变量（至少一方被拒、无环）；哪一方胜出由抢锁顺序决定。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_cross_moves_reject_one_side_without_deadlock() {
+        let db = test_db().await;
+        let root = seed_menu(&db, &unique("smoke_root"), 0, 1, None).await;
+        let a = seed_menu(&db, &unique("smoke_a"), root.id, 1, None).await;
+        let b = seed_menu(&db, &unique("smoke_b"), root.id, 1, None).await;
+
+        let (db1, db2) = (db.clone(), db.clone());
+        let (mut req1, mut req2) = (
+            update_req(a.id, a.name.clone()),
+            update_req(b.id, b.name.clone()),
+        );
+        req1.parent_id = b.id;
+        req2.parent_id = a.id;
+        let h1 = tokio::spawn(async move { update_menu(&db1, ACTOR_ID, &req1).await });
+        let h2 = tokio::spawn(async move { update_menu(&db2, ACTOR_ID, &req2).await });
+        let (r1, r2) = (h1.await.unwrap(), h2.await.unwrap());
+
+        let all = menu_repo::find_all_menus(&db).await.unwrap();
+        let reachable = (
+            reachable_from_root(&all, a.id),
+            reachable_from_root(&all, b.id),
+        );
+        cleanup(&db, &[], &[], &[root.id, a.id, b.id]).await;
+
+        assert!(
+            r1.is_err() || r2.is_err(),
+            "并发互移至少一方应被防环拒绝: r1={r1:?} r2={r2:?}"
+        );
+        assert_eq!(reachable, (true, true), "不应成环");
+    }
+
+    /// 并发「建子菜单」+「删父菜单」：级联删除必须覆盖已提交的新建子孙，否则留下孤立菜单。
+    #[tokio::test]
+    async fn delete_menu_cascades_child_created_after_snapshot() {
+        let db = test_db().await;
+        let parent = seed_menu(&db, &unique("cascade_parent"), 0, 1, None).await;
+
+        // 事务 2 先固定快照（此后它的普通读停在「建子之前」）
+        let txn2 = db.begin().await.unwrap();
+        assert!(
+            menu_repo::find_by_id(&txn2, parent.id)
+                .await
+                .unwrap()
+                .is_some(),
+            "前置：父菜单应存在"
+        );
+
+        // 事务 1：在父菜单下建子，提交
+        let txn1 = db.begin().await.unwrap();
+        let mut child_req = create_req(unique("cascade_child"), unique("cascade_comp"));
+        child_req.parent_id = parent.id;
+        let child = create_menu_in_tx(&txn1, ACTOR_ID, &child_req)
+            .await
+            .unwrap();
+        txn1.commit().await.unwrap();
+
+        // 事务 2：删除父菜单并提交（级联软删要落库才能验证）
+        let res = delete_menu_in_tx(&txn2, parent.id).await;
+        txn2.commit().await.unwrap();
+
+        let parent_after = menu_repo::find_by_id(&db, parent.id).await.unwrap();
+        let child_after = menu_repo::find_by_id(&db, child.id).await.unwrap();
+        cleanup(&db, &[], &[], &[child.id, parent.id]).await;
+
+        assert!(res.is_ok(), "删除应成功: {res:?}");
+        assert!(parent_after.is_none(), "父菜单应被软删");
+        assert!(
+            child_after.is_none(),
+            "并发新建的子菜单应被级联软删，而不是留下孤立菜单"
+        );
+    }
+
+    /// 对外入口确实提交事务（`create_menu` 已改为自开事务的包装）。
+    #[tokio::test]
+    async fn create_menu_commits_via_public_entry() {
+        let db = test_db().await;
+        let name = unique("commit_create");
+        let created = create_menu(
+            &db,
+            ACTOR_ID,
+            &create_req(name.clone(), unique("commit_comp")),
+        )
+        .await
+        .unwrap();
+
+        let reloaded = menu_repo::find_by_id(&db, created.id).await.unwrap();
+        cleanup(&db, &[], &[], &[created.id]).await;
+
+        assert_eq!(created.name, name);
+        assert!(reloaded.is_some(), "对外入口应自行提交事务，重新连接可见");
+    }
+
+    /// 对外入口确实提交事务（`update_menu` 已改为自开事务的包装）。
+    #[tokio::test]
+    async fn update_menu_commits_via_public_entry() {
+        let db = test_db().await;
+        let menu = seed_menu(&db, &unique("commit_update"), 0, 1, None).await;
+        let new_name = unique("commit_update_v2");
+
+        let updated = update_menu(&db, ACTOR_ID, &update_req(menu.id, new_name.clone()))
+            .await
+            .unwrap();
+
+        let reloaded = menu_repo::find_by_id(&db, menu.id).await.unwrap();
+        cleanup(&db, &[], &[], &[menu.id]).await;
+
+        assert_eq!(updated.name, new_name);
+        assert_eq!(
+            reloaded.map(|menu| menu.name),
+            Some(new_name),
+            "对外入口应自行提交事务，重新连接可见"
         );
     }
 }

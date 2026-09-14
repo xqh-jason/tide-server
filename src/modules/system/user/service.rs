@@ -222,7 +222,9 @@ pub(crate) async fn create_user_in_tx(
             .iter()
             .map(|dept| dept.dept_id)
             .collect::<Vec<_>>();
-        let depts = dept_service::find_by_ids(txn, &dept_ids).await?;
+        // 加锁读：与「删除部门」的占用检查在部门行上互斥，否则删除方检查完引用后这里才
+        // 插入，会留下指向已软删部门的悬挂引用
+        let depts = dept_service::find_by_ids_for_update(txn, &dept_ids).await?;
         // 检查部门是否都存在
         let found_dept_ids = depts.iter().map(|d| d.id).collect::<Vec<_>>();
         let messing_dept_ids = req
@@ -405,7 +407,8 @@ pub(crate) async fn update_user_in_tx(
             .iter()
             .map(|dept| dept.dept_id)
             .collect::<Vec<_>>();
-        let depts = dept_service::find_by_ids(txn, &dept_ids).await?;
+        // 加锁读：理由同 create（与删除部门的占用检查互斥，防悬挂引用）
+        let depts = dept_service::find_by_ids_for_update(txn, &dept_ids).await?;
         let found_dept_ids = depts.iter().map(|d| d.id).collect::<Vec<_>>();
         let messing_dept_ids = req
             .depts

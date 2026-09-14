@@ -173,6 +173,22 @@ pub async fn get_all_apis(db: &impl ConnectionTrait) -> Result<Vec<sys_api::Mode
     Ok(api_repo::find_all(db).await?)
 }
 
+/// 批量按 id 查有效 API 权限并加锁（跨域引用校验用），空入参返回空数组。
+///
+/// 与普通读的区别是**加了排他锁**：跨域写入（role 域写 `sys_role_api`）必须先锁住被引用的
+/// API 行，才能与「删除 API」的关联清理串行化——否则删除方清完关联后绑定方才插入，会留下
+/// 指向已软删接口的悬挂绑定。须在事务内调用。
+pub async fn find_by_ids_for_update(
+    txn: &DatabaseTransaction,
+    ids: &[u64],
+) -> Result<Vec<sys_api::Model>, AppError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(api_repo::find_by_ids_for_update(txn, ids).await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

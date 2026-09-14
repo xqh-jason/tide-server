@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::Expr;
-use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryOrder};
+use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_dept, sys_user, sys_user_dept};
 
@@ -77,6 +77,12 @@ pub async fn update_dept_in_tx(
 /// - `new_parent_path` 必须以 `/` 结尾（`debug_assert` 校验，防漏写尾斜杠拼出
 ///   `/0/58/` 这类静默脏路径）。
 ///
+/// # 读一致性（加锁读）
+/// 被移动节点与逐层下推的子节点查询都走 `SELECT ... FOR UPDATE`：普通读在 RR 下走事务
+/// 快照，会漏掉并发事务已提交的新建子节点，使这些子节点停留在旧 `dept_path`（与真实
+/// 祖先链不符，进而让基于 path 前缀的防环判定失效）。加锁读还使本函数与并发
+/// 「在该子树下建子节点」的插入意向锁互斥。
+///
 /// # 职责边界
 /// 防环（新父不得为自身或自身下级）由 service 层负责；本函数额外用 `visited`
 /// 作为防御性保险——单父模型 + 起点先改父的正常数据下不会触发，但若将来扩展
@@ -99,7 +105,7 @@ pub async fn move_subtree_in_tx(
     new_parent_path: &str,
     actor_id: u64,
 ) -> anyhow::Result<Option<sys_dept::Model>> {
-    let Some(dept) = find_by_id(txn, dept_id).await? else {
+    let Some(dept) = find_by_id_for_update(txn, dept_id).await? else {
         return Ok(None);
     };
 
@@ -129,9 +135,10 @@ pub async fn move_subtree_in_tx(
     let mut visited: HashSet<u64> = HashSet::from([dept_id]);
     while !current.is_empty() {
         let parent_ids: Vec<u64> = current.iter().map(|(id, _)| *id).collect();
-        // 一次查出本层全部子节点
+        // 一次查出本层全部子节点（加锁读：见上方「读一致性」，兼作与并发建子节点的互斥点）
         let children = sys_dept::Entity::find()
             .filter(sys_dept::Column::ParentId.is_in(parent_ids))
+            .lock_exclusive()
             .all(txn)
             .await?;
         // parent_id -> 父节点新 path 映射（本层节点）
@@ -199,6 +206,28 @@ pub async fn find_by_id(
     Ok(model)
 }
 
+/// 按 id 查询有效部门并加排他锁（SQL 落到 `SELECT ... FOR UPDATE`）。
+///
+/// 供「读 → 判断 → 写」型校验使用：加锁读取的是**最新已提交版本**（绕过 RR 事务
+/// 快照，普通读 `find_by_id` 看不到并发事务已提交的改动），同时与其他事务的加锁读 /
+/// 写互斥，从而把校验变成临界区——并发下必有一方读到对方的结果并被规则拒绝。
+///
+/// **必须在事务内调用**：锁在事务结束时才释放，autocommit 下单条语句执行完即释放，
+/// 等于没加锁。调用方需锁多行时按 id 升序逐个加锁（见 service 层 `lock_move_rows`），
+/// 顺序不一致会交叉等待触发 `Deadlock found`。
+pub async fn find_by_id_for_update(
+    txn: &DatabaseTransaction,
+    id: u64,
+) -> anyhow::Result<Option<sys_dept::Model>> {
+    let model = sys_dept::Entity::find()
+        .filter(sys_dept::Column::Id.eq(id))
+        .filter(sys_dept::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .one(txn)
+        .await?;
+    Ok(model)
+}
+
 /// 批量按 id 查有效部门（排除软删；停用部门仍返回）。空入参短路，不产生空 `IN`。
 ///
 /// 供跨域引用校验（如 user 挂载部门的存在性）与批量名称拼装使用。
@@ -213,6 +242,29 @@ pub async fn find_by_ids(
         .filter(sys_dept::Column::Id.is_in(ids.iter().copied()))
         .filter(sys_dept::Column::DeletedAt.is_null())
         .all(db)
+        .await?;
+    Ok(models)
+}
+
+/// 批量按 id 查有效部门并加排他锁（`SELECT ... FOR UPDATE`）。空入参短路。
+///
+/// 供「挂载引用」前的存在性校验使用：跨域写入（user 域写 `sys_user_dept`）必须先锁住
+/// 被引用的部门行，与「删除部门」的占用检查在同一行上串行化——否则删除方检查完引用、
+/// 挂载方随后插入，会留下指向已软删部门的悬挂引用。
+///
+/// 主键等值/`IN` 只取记录锁（无间隙锁），不阻塞 `sys_dept` 的自增插入。须在事务内调用。
+pub async fn find_by_ids_for_update(
+    txn: &DatabaseTransaction,
+    ids: &[u64],
+) -> anyhow::Result<Vec<sys_dept::Model>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let models = sys_dept::Entity::find()
+        .filter(sys_dept::Column::Id.is_in(ids.iter().copied()))
+        .filter(sys_dept::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .all(txn)
         .await?;
     Ok(models)
 }
@@ -232,9 +284,14 @@ pub async fn find_by_parent_and_name(
     Ok(model)
 }
 
-/// 有效子部门列表（排除软删），按 sort、id 升序。
-pub async fn find_children(
-    db: &impl ConnectionTrait,
+/// 有效子部门列表并加排他锁（`SELECT ... FOR UPDATE`），供删除前的「无活子部门」判定。
+///
+/// 普通读在 RR 下走事务快照，会漏掉并发事务已提交的新建子部门，从而删出游离子树。
+/// 查询走 `uk_sys_dept_parent_name(parent_id, ...)` 的**前缀**范围（非整键唯一），
+/// 因此会取到 next-key / 间隙锁，与并发「在该父下插入子部门」的插入意向锁互斥
+///（依赖 RR 隔离级别：READ COMMITTED 下没有间隙锁）。
+pub async fn find_children_for_update(
+    txn: &DatabaseTransaction,
     parent_id: u64,
 ) -> anyhow::Result<Vec<sys_dept::Model>> {
     let models = sys_dept::Entity::find()
@@ -242,7 +299,8 @@ pub async fn find_children(
         .filter(sys_dept::Column::DeletedAt.is_null())
         .order_by_asc(sys_dept::Column::Sort)
         .order_by_asc(sys_dept::Column::Id)
-        .all(db)
+        .lock_exclusive()
+        .all(txn)
         .await?;
     Ok(models)
 }
@@ -257,17 +315,23 @@ pub async fn find_all_active(db: &impl ConnectionTrait) -> anyhow::Result<Vec<sy
     Ok(models)
 }
 
-/// 统计挂载到该部门的用户引用数（`sys_user_dept` 硬删表，无需软删过滤）。
-/// 删除部门前的占用检查用。
-pub async fn count_user_refs_by_dept_id(
-    db: &impl ConnectionTrait,
+/// 取挂载到该部门的用户引用行并加排他锁（`sys_user_dept` 硬删表，无需软删过滤），
+/// 供删除部门前的「无用户引用」判定。
+///
+/// 返回行而非计数：`.count()` 会被 sea-orm 包成 `SELECT COUNT(*) FROM (SELECT ...)`
+/// 派生表（`Paginator::num_items`），`FOR UPDATE` 落在派生表内层、MySQL 不可靠，故取行后
+/// 由调用方判空。走 `idx_sys_user_dept_dept_id`（非唯一索引）⇒ 有间隙锁，与并发挂载
+///（user 域插入 `sys_user_dept`）的插入意向锁互斥；依赖 RR 隔离级别（RC 下没有间隙锁）。
+pub async fn find_user_refs_by_dept_id_for_update(
+    txn: &DatabaseTransaction,
     dept_id: u64,
-) -> anyhow::Result<u64> {
-    let count = sys_user_dept::Entity::find()
+) -> anyhow::Result<Vec<sys_user_dept::Model>> {
+    let rows = sys_user_dept::Entity::find()
         .filter(sys_user_dept::Column::DeptId.eq(dept_id))
-        .count(db)
+        .lock_exclusive()
+        .all(txn)
         .await?;
-    Ok(count)
+    Ok(rows)
 }
 
 /// 按部门 id 集合查负责人（`is_leader = 1`）及其显示名，返回
@@ -546,8 +610,8 @@ mod tests {
     }
 
     #[tokio::test]
-    // find_children 只返回活子部门，软删子部门剔除。
-    async fn find_children_returns_only_active_children() {
+    // find_children_for_update 只返回活子部门，软删子部门剔除；排序按 sort、id 升序。
+    async fn find_children_for_update_returns_only_active_children() {
         let txn = test_txn().await;
         let root = seed_root(&txn, &unique("children_root")).await;
         let live = seed_child(&txn, &root, &unique("children_live")).await;
@@ -556,7 +620,7 @@ mod tests {
             .await
             .unwrap();
 
-        let children = find_children(&txn, root.id).await.unwrap();
+        let children = find_children_for_update(&txn, root.id).await.unwrap();
         let ids = children.iter().map(|d| d.id).collect::<Vec<_>>();
         assert_eq!(ids, vec![live.id]);
     }
@@ -590,7 +654,7 @@ mod tests {
         // 原父链路径与结构不受影响
         let reloaded_a = find_by_id(&txn, root_a.id).await.unwrap().unwrap();
         assert_eq!(reloaded_a.dept_path, format!("/0/{}/", root_a.id));
-        let a_children = find_children(&txn, root_a.id).await.unwrap();
+        let a_children = find_children_for_update(&txn, root_a.id).await.unwrap();
         assert!(
             a_children.iter().all(|c| c.id != dept.id),
             "移动后原父下不应再有其子节点"

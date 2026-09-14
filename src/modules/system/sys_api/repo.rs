@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction};
+use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QuerySelect};
 
 use crate::entity::{sys_api, sys_api::Model, sys_role_api};
 use crate::modules::system::sys_api::dto::ApiFilter;
@@ -158,6 +158,27 @@ pub async fn find_all(db: &impl ConnectionTrait) -> anyhow::Result<Vec<Model>> {
     let apis = sys_api::Entity::find()
         .filter(sys_api::Column::DeletedAt.is_null())
         .all(db)
+        .await?;
+    Ok(apis)
+}
+
+/// 批量按 id 查有效 API 权限并加排他锁（`SELECT ... FOR UPDATE`）。空入参短路。
+///
+/// 供「角色绑定接口」前的存在性校验使用：跨域写入（role 域写 `sys_role_api`）必须先锁住
+/// 被引用的 API 行，与「删除 API」的清理在同一行上串行化——否则删除方清完关联、绑定方
+/// 随后插入，会留下指向已软删接口的悬挂绑定。须在事务内调用；主键等值/`IN` 只取记录锁。
+pub async fn find_by_ids_for_update(
+    txn: &DatabaseTransaction,
+    ids: &[u64],
+) -> anyhow::Result<Vec<Model>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let apis = sys_api::Entity::find()
+        .filter(sys_api::Column::Id.is_in(ids.iter().copied()))
+        .filter(sys_api::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .all(txn)
         .await?;
     Ok(apis)
 }

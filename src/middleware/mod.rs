@@ -8,6 +8,7 @@ pub mod api_permission;
 pub mod auth;
 pub mod cors;
 pub mod op_log;
+pub mod request_timeout;
 
 /// 状态注入中间件：把 `AppState` 按类型（`insert_typed`）存入每个请求的 Depot，
 /// handler 中通过 `depot.get_typed::<AppState>()` 获取。

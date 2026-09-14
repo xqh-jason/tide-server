@@ -27,6 +27,8 @@ const MAX_DEPT_TREE_DEPTH: usize = 64;
 /// - 父部门不存在或已软删 → `AppError::Biz`；
 /// - 同父下部门名重复（含软删占位）→ `AppError::Biz`；
 /// - `parent_path` 由本层组装（新父 `dept_path`，根传占位 `/0/`），天然以 `/` 结尾。
+/// - 父行走**加锁读**：既取最新 `dept_path`（普通读在 RR 下走快照，并发移动父会拼出
+///   陈旧 path），又与并发移动/删除该父的事务在父行上互斥。
 pub async fn create_dept_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
@@ -36,7 +38,7 @@ pub async fn create_dept_in_tx(
     let parent_path = if req.parent_id == 0 {
         ROOT_PARENT_PATH.to_string()
     } else {
-        let Some(parent) = dept_repo::find_by_id(txn, req.parent_id).await? else {
+        let Some(parent) = dept_repo::find_by_id_for_update(txn, req.parent_id).await? else {
             return Err(AppError::Biz("上级部门不存在或已删除".to_string()));
         };
         parent.dept_path
@@ -68,6 +70,41 @@ pub async fn create_dept_in_tx(
     Ok(model)
 }
 
+/// 移动前的行锁：按 id 升序对「被移动节点」与「新父」加排他锁，返回两者最新记录。
+///
+/// 防环判定依赖「读取对方最新的 `dept_path`」，而 RR 下普通读走事务快照——两个并发
+/// 互移请求（`A 移到 B 下` 与 `B 移到 A 下`）各自只看到旧结构，会双双通过校验、双双
+/// 提交，最终互指成环（两部门从树中消失，`dept_path` 也被拼坏）。加锁读同时给出
+/// 新鲜度（读最新已提交版本）与互斥（两事务在同样的行上串行化），使其中一方必被拒绝。
+///
+/// 升序加锁是防死锁的关键：方向相反的互移请求加锁顺序一致，不会交叉等待；若按
+/// 「先自身后新父」的顺序加锁，两个请求就会互等并触发 `Deadlock found`。
+///
+/// 新父 `id = 0` 表示移到根，无父行可锁。返回值中 `None` 表示目标行不存在（或已软删），
+/// 「部门不存在 / 上级部门不存在」的文案由调用方决定。
+async fn lock_move_rows(
+    txn: &DatabaseTransaction,
+    dept_id: u64,
+    parent_id: u64,
+) -> Result<(Option<sys_dept::Model>, Option<sys_dept::Model>), AppError> {
+    // 移到根：只有被移动节点自身需要加锁
+    if parent_id == 0 {
+        let dept = dept_repo::find_by_id_for_update(txn, dept_id).await?;
+        return Ok((dept, None));
+    }
+
+    // 小 id 先锁（自环场景 parent_id == dept_id 是同一行，重复加锁无副作用）
+    if parent_id <= dept_id {
+        let parent = dept_repo::find_by_id_for_update(txn, parent_id).await?;
+        let dept = dept_repo::find_by_id_for_update(txn, dept_id).await?;
+        Ok((dept, parent))
+    } else {
+        let dept = dept_repo::find_by_id_for_update(txn, dept_id).await?;
+        let parent = dept_repo::find_by_id_for_update(txn, parent_id).await?;
+        Ok((dept, parent))
+    }
+}
+
 /// 事务内更新部门：字段更新；`parent_id` 变更即移动子树（防环 + 重算 path）。
 ///
 /// 规则：
@@ -77,12 +114,16 @@ pub async fn create_dept_in_tx(
 /// - 同父同名（排除自身）→ `AppError::Biz`；
 /// - 传给 repo 的 `new_parent_path` 取新父 `dept_path`（根部门传占位 `/0/`），
 ///   天然以 `/` 结尾——入参约定由本层保证，repo 不做判断。
+/// - 目标部门与新父一律**加锁读**校验（`lock_move_rows`）：防环是「读-判-写」不变式，
+///   快照读会被并发互移绕过成环。
 pub async fn update_dept_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
     req: &UpdateDeptReq,
 ) -> Result<sys_dept::Model, AppError> {
-    let Some(dept) = dept_repo::find_by_id(txn, req.id).await? else {
+    let (dept, parent) = lock_move_rows(txn, req.id, req.parent_id).await?;
+
+    let Some(dept) = dept else {
         return Err(AppError::Biz("部门不存在".to_string()));
     };
 
@@ -90,7 +131,7 @@ pub async fn update_dept_in_tx(
     let new_parent_path = if req.parent_id == 0 {
         ROOT_PARENT_PATH.to_string()
     } else {
-        let Some(parent) = dept_repo::find_by_id(txn, req.parent_id).await? else {
+        let Some(parent) = parent else {
             return Err(AppError::Biz("上级部门不存在或已删除".to_string()));
         };
         // 防环：自身 path 是新父 path 的前缀 ⇒ 新父为自身或自身下级
@@ -136,22 +177,38 @@ pub async fn update_dept_in_tx(
 }
 
 /// 事务内删除部门：有活子部门或有用户挂载引用时拒绝，否则软删。
+///
+/// 三处判定全部走**加锁读**，顺序固定为「自身行 → 子部门区间 → 引用区间」：
+/// - 自身行：与并发「在该部门下建子 / 把节点移入本部门 / 删除本部门」在自身行上互斥；
+/// - 子部门区间：与并发在该父下插入子部门的插入意向锁互斥；
+/// - 引用区间：与并发挂载用户（user 域插入 `sys_user_dept`）的插入意向锁互斥。
+///
+/// 普通读在 RR 下走事务快照，三类并发都可能被漏判，进而删出游离子树或产生悬挂引用。
 pub async fn delete_dept_in_tx(
     txn: &DatabaseTransaction,
     dept_id: u64,
     actor_id: u64,
 ) -> Result<(), AppError> {
-    if dept_repo::find_by_id(txn, dept_id).await?.is_none() {
+    if dept_repo::find_by_id_for_update(txn, dept_id)
+        .await?
+        .is_none()
+    {
         return Err(AppError::Biz("部门不存在".to_string()));
     }
 
     // 存在活子部门 → 拒绝（避免产生游离子树）
-    if !dept_repo::find_children(txn, dept_id).await?.is_empty() {
+    if !dept_repo::find_children_for_update(txn, dept_id)
+        .await?
+        .is_empty()
+    {
         return Err(AppError::Biz("存在下级部门，无法删除".to_string()));
     }
 
     // 存在用户挂载引用 → 拒绝（保持组织归属完整性）
-    if dept_repo::count_user_refs_by_dept_id(txn, dept_id).await? > 0 {
+    if !dept_repo::find_user_refs_by_dept_id_for_update(txn, dept_id)
+        .await?
+        .is_empty()
+    {
         return Err(AppError::Biz("部门下存在用户，无法删除".to_string()));
     }
 
@@ -184,6 +241,22 @@ pub async fn find_by_ids(
     }
 
     Ok(dept_repo::find_by_ids(db, ids).await?)
+}
+
+/// 批量按 id 查有效部门并加锁（挂载引用前校验用），空入参返回空数组。
+///
+/// 与 `find_by_ids` 的区别是**加了排他锁**：跨域写入（user 域写 `sys_user_dept`）必须先
+/// 锁住被引用的部门行，才能与「删除部门」的占用检查串行化——删除方检查完引用后挂载方
+/// 才插入，会留下指向已软删部门的悬挂引用。须在事务内调用。
+pub async fn find_by_ids_for_update(
+    txn: &DatabaseTransaction,
+    ids: &[u64],
+) -> Result<Vec<sys_dept::Model>, AppError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(dept_repo::find_by_ids_for_update(txn, ids).await?)
 }
 
 /// 部门树列表：全量有效部门（含停用）按 `parent_id` 递归组装，返回根节点集合。
@@ -393,6 +466,17 @@ mod tests {
             .unwrap()
     }
 
+    /// 硬删已提交的测试数据。并发用例的两个事务必须**真实提交**才能复现写偏斜，
+    /// 无法复用 `test_txn()` 的回滚隔离，只能用例内手工清理。
+    async fn hard_delete_depts(db: &DatabaseConnection, ids: &[u64]) {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        sys_dept::Entity::delete_many()
+            .filter(sys_dept::Column::Id.is_in(ids.iter().copied()))
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
     /// 造一条用户-部门挂载引用（关系表无外键，用户 id 用高位序号即可）。
     async fn seed_user_dept_ref(txn: &DatabaseTransaction, dept_id: u64) {
         sys_user_dept::ActiveModel {
@@ -403,6 +487,16 @@ mod tests {
         .insert(txn)
         .await
         .unwrap();
+    }
+
+    /// 硬删测试插入的用户-部门挂载引用（关系表硬删，按 dept_id 清理）。
+    async fn hard_delete_user_depts(db: &DatabaseConnection, dept_id: u64) {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        sys_user_dept::Entity::delete_many()
+            .filter(sys_user_dept::Column::DeptId.eq(dept_id))
+            .exec(db)
+            .await
+            .unwrap();
     }
 
     /// 在树里按 id 深度优先找节点。
@@ -505,6 +599,171 @@ mod tests {
         assert!(
             matches!(res, Err(AppError::Biz(ref m)) if m.contains("自身")),
             "移动到自身下级应被防环拒绝: {res:?}"
+        );
+    }
+
+    /// 并发互移防环：事务 1「A 移到 B 下」与事务 2「B 移到 A 下」各自校验时都看不到
+    /// 对方的未提交改动（RR 快照读），两边都放行即互指成环，两部门从树中消失。
+    ///
+    /// 复现要点：事务 2 先开始并读一次以固定快照，事务 1 完整提交后事务 2 才继续——
+    /// 这正是两个真实并发请求的交错顺序，且不依赖线程调度，结果确定。
+    #[tokio::test]
+    async fn update_dept_concurrent_cross_move_cannot_create_cycle() {
+        let db = test_db().await;
+        let root = create_dept(&db, ACTOR_ID, &create_req(0, &unique("race_root")))
+            .await
+            .unwrap();
+        let a = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("race_a")))
+            .await
+            .unwrap();
+        let b = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("race_b")))
+            .await
+            .unwrap();
+
+        // 事务 2 先开启并做一次快照读（此后它的所有普通读都停留在这一刻）
+        let txn2 = db.begin().await.unwrap();
+        assert!(
+            dept_repo::find_by_id(&txn2, a.id).await.unwrap().is_some(),
+            "前置：A 应存在"
+        );
+
+        // 事务 1：A 移到 B 下，提交
+        let txn1 = db.begin().await.unwrap();
+        let moved_a =
+            update_dept_in_tx(&txn1, ACTOR_ID, &update_req(a.id, b.id, &a.dept_name)).await;
+        assert!(moved_a.is_ok(), "前置：单向移动应放行: {moved_a:?}");
+        txn1.commit().await.unwrap();
+
+        // 事务 2：B 移到 A 下——A 已是 B 的父，必须被防环拒绝
+        let res = update_dept_in_tx(&txn2, ACTOR_ID, &update_req(b.id, a.id, &b.dept_name)).await;
+        if res.is_ok() {
+            txn2.commit().await.unwrap();
+        } else {
+            txn2.rollback().await.unwrap();
+        }
+
+        // 用户可见症状：成环后两个部门都不再挂在根下，整棵树里消失
+        let tree = list_dept_tree(&db).await.unwrap();
+        let reachable = (
+            find_node(&tree, a.id).is_some(),
+            find_node(&tree, b.id).is_some(),
+        );
+        hard_delete_depts(&db, &[a.id, b.id, root.id]).await;
+
+        assert!(
+            res.is_err(),
+            "并发互移必须拒绝其一，否则 A/B 互指成环: {res:?}"
+        );
+        assert_eq!(
+            reachable,
+            (true, true),
+            "A/B 都应仍能从根遍历到（成环则双双从树中消失）"
+        );
+    }
+
+    /// 并发「建子部门」+「移动其父」：移动方必须看到已提交的新建子节点，否则该子节点的
+    /// `dept_path` 停留在旧父链（与真实祖先链不符，进而让基于 path 前缀的防环判定失效）。
+    ///
+    /// 复现要点同并发互移用例：事务 2 先读一次固定快照，事务 1 建子并提交后事务 2 才移动。
+    #[tokio::test]
+    async fn move_dept_recomputes_child_created_after_snapshot() {
+        let db = test_db().await;
+        let root = create_dept(&db, ACTOR_ID, &create_req(0, &unique("stale_root")))
+            .await
+            .unwrap();
+        let parent = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("stale_parent")))
+            .await
+            .unwrap();
+        let other = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("stale_other")))
+            .await
+            .unwrap();
+
+        // 事务 2 先固定快照（此后它的普通读停在「建子之前」）
+        let txn2 = db.begin().await.unwrap();
+        dept_repo::find_by_id(&txn2, parent.id)
+            .await
+            .unwrap()
+            .expect("前置：父部门应存在");
+
+        // 事务 1：在父部门下建子，提交
+        let txn1 = db.begin().await.unwrap();
+        let child = create_dept_in_tx(
+            &txn1,
+            ACTOR_ID,
+            &create_req(parent.id, &unique("stale_child")),
+        )
+        .await
+        .unwrap();
+        txn1.commit().await.unwrap();
+
+        // 事务 2：把父移到 other 下（子树 path 需按新父链重算，含刚建的子）
+        let moved = update_dept_in_tx(
+            &txn2,
+            ACTOR_ID,
+            &update_req(parent.id, other.id, &parent.dept_name),
+        )
+        .await
+        .expect("移动到无环位置应放行");
+        txn2.commit().await.unwrap();
+
+        let reloaded_child = dept_repo::find_by_id(&db, child.id)
+            .await
+            .unwrap()
+            .expect("子部门应存在");
+        hard_delete_depts(&db, &[child.id, parent.id, other.id, root.id]).await;
+
+        assert_eq!(
+            reloaded_child.dept_path,
+            format!("{}{}/", moved.dept_path, child.id),
+            "新建子节点的 dept_path 应随父移动重算，而不是停留在旧父链"
+        );
+    }
+
+    /// 并发「移动父」+「在其下建子」：建子方必须读到移动后的最新父 `dept_path`。
+    ///
+    /// 与上一个用例互补：这里移动方先发起并**持有父行锁**（尚未提交），建子方随后插入。
+    /// 若建子方用普通读，它不会被阻塞、也不会看到未提交的移动，会按旧父链拼出陈旧 path
+    /// ——加锁读的互斥只挡得住插入时机，**新鲜度仍需建子方自己加锁读父行**。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn create_dept_under_parent_moved_concurrently_uses_new_path() {
+        let db = test_db().await;
+        let root = create_dept(&db, ACTOR_ID, &create_req(0, &unique("cm_root")))
+            .await
+            .unwrap();
+        let parent = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("cm_parent")))
+            .await
+            .unwrap();
+        let other = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("cm_other")))
+            .await
+            .unwrap();
+
+        // 移动方：先改父 + 重算子树（未提交，父行锁与父的索引间隙仍在手里）
+        let txn_move = db.begin().await.unwrap();
+        let moved = update_dept_in_tx(
+            &txn_move,
+            ACTOR_ID,
+            &update_req(parent.id, other.id, &parent.dept_name),
+        )
+        .await
+        .expect("移动到无环位置应放行");
+
+        // 建子方：另一条连接上发起，卡在移动方持有的父行锁上
+        let db_create = db.clone();
+        let (parent_id, child_name) = (parent.id, unique("cm_child"));
+        let handle = tokio::spawn(async move {
+            create_dept(&db_create, ACTOR_ID, &create_req(parent_id, &child_name)).await
+        });
+        // 让建子方抵达锁等待，再提交移动方（建子若已提前完成，本用例会失败在下面的断言上）
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        txn_move.commit().await.unwrap();
+
+        let created = handle.await.unwrap().expect("建子应成功");
+        hard_delete_depts(&db, &[created.id, parent.id, other.id, root.id]).await;
+
+        assert_eq!(
+            created.dept_path,
+            format!("{}{}/", moved.dept_path, created.id),
+            "并发下新建的子部门应挂到移动后的新父链上"
         );
     }
 
@@ -641,6 +900,138 @@ mod tests {
         );
     }
 
+    /// 并发「建子部门」+「删父部门」：删除方必须看到已提交的新建子部门，否则删出游离子树。
+    ///
+    /// 复现要点同并发互移用例：事务 2 先读一次固定快照，事务 1 建子并提交后事务 2 才删除。
+    #[tokio::test]
+    async fn delete_dept_rejects_child_created_after_snapshot() {
+        let db = test_db().await;
+        let root = create_dept(&db, ACTOR_ID, &create_req(0, &unique("dc_root")))
+            .await
+            .unwrap();
+        let parent = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("dc_parent")))
+            .await
+            .unwrap();
+
+        // 事务 2 先固定快照（此后它的普通读停在「建子之前」）
+        let txn2 = db.begin().await.unwrap();
+        dept_repo::find_by_id(&txn2, parent.id)
+            .await
+            .unwrap()
+            .expect("前置：父部门应存在");
+
+        // 事务 1：在父部门下建子，提交
+        let txn1 = db.begin().await.unwrap();
+        let child = create_dept_in_tx(&txn1, ACTOR_ID, &create_req(parent.id, &unique("dc_child")))
+            .await
+            .unwrap();
+        txn1.commit().await.unwrap();
+
+        let res = delete_dept_in_tx(&txn2, parent.id, ACTOR_ID).await;
+        // 必须先结束事务再清理：txn2 被判拒绝后仍持有父行锁，否则清理的硬删会被锁等待挡住
+        txn2.rollback().await.unwrap();
+        let parent_alive = dept_repo::find_by_id(&db, parent.id)
+            .await
+            .unwrap()
+            .is_some();
+        hard_delete_depts(&db, &[child.id, parent.id, root.id]).await;
+
+        assert!(
+            matches!(res, Err(AppError::Biz(ref m)) if m.contains("下级部门")),
+            "并发新建的子部门应挡住删除: {res:?}"
+        );
+        assert!(
+            parent_alive,
+            "被拒后父部门不应被软删（否则子部门成游离子树）"
+        );
+    }
+
+    /// 并发「挂载用户到部门」+「删部门」：删除方必须看到已提交的挂载引用。
+    #[tokio::test]
+    async fn delete_dept_rejects_user_ref_inserted_after_snapshot() {
+        let db = test_db().await;
+        let root = create_dept(&db, ACTOR_ID, &create_req(0, &unique("dr_root")))
+            .await
+            .unwrap();
+        let parent = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("dr_parent")))
+            .await
+            .unwrap();
+
+        // 事务 2 先固定快照（此后它的普通读停在「挂载之前」）
+        let txn2 = db.begin().await.unwrap();
+        dept_repo::find_by_id(&txn2, parent.id)
+            .await
+            .unwrap()
+            .expect("前置：父部门应存在");
+
+        // 事务 1：插入用户挂载引用，提交
+        let txn1 = db.begin().await.unwrap();
+        seed_user_dept_ref(&txn1, parent.id).await;
+        txn1.commit().await.unwrap();
+
+        let res = delete_dept_in_tx(&txn2, parent.id, ACTOR_ID).await;
+        // 必须先结束事务再清理：txn2 被判拒绝后仍持有父行锁与引用区间锁
+        txn2.rollback().await.unwrap();
+        let parent_alive = dept_repo::find_by_id(&db, parent.id)
+            .await
+            .unwrap()
+            .is_some();
+        hard_delete_user_depts(&db, parent.id).await;
+        hard_delete_depts(&db, &[parent.id, root.id]).await;
+
+        assert!(
+            matches!(res, Err(AppError::Biz(ref m)) if m.contains("用户")),
+            "并发插入的挂载引用应挡住删除: {res:?}"
+        );
+        assert!(
+            parent_alive,
+            "被拒后父部门不应被软删（否则引用指向已删部门）"
+        );
+    }
+
+    /// 真并发冒烟：删部门 与 在其下建子部门 不能同时成功，且不得留下游离子树。
+    ///
+    /// 只断言与调度无关的不变量（两者不可同时成功；不存在「父已软删但仍有活子部门」）；
+    /// 哪一方胜出由抢锁顺序决定，不做断言。数据真实提交（并发必需），用真连接 + 手工清理。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_create_child_and_delete_parent_leaves_no_orphan_subtree() {
+        let db = test_db().await;
+        let parent = create_dept(&db, ACTOR_ID, &create_req(0, &unique("orphan_parent")))
+            .await
+            .unwrap();
+        let parent_id = parent.id;
+
+        let (db_delete, db_create) = (db.clone(), db.clone());
+        let child_name = unique("orphan_child");
+        let delete_handle =
+            tokio::spawn(async move { delete_dept(&db_delete, ACTOR_ID, parent_id).await });
+        let create_handle = tokio::spawn(async move {
+            create_dept(&db_create, ACTOR_ID, &create_req(parent_id, &child_name)).await
+        });
+        let (deleted, created) = (delete_handle.await.unwrap(), create_handle.await.unwrap());
+
+        // 先采集状态并清理，再断言（避免断言 panic 留下孤儿数据）
+        let parent_alive = dept_repo::find_by_id(&db, parent_id)
+            .await
+            .unwrap()
+            .is_some();
+        // 建子成功时返回模型即子部门 id，无需再查一次
+        let created_child_id = created.as_ref().ok().map(|child| child.id);
+        if let Some(child_id) = created_child_id {
+            hard_delete_depts(&db, &[child_id]).await;
+        }
+        hard_delete_depts(&db, &[parent_id]).await;
+
+        assert!(
+            !(deleted.is_ok() && created.is_ok()),
+            "删除与建子不应同时成功: deleted={deleted:?} created={created:?}"
+        );
+        assert!(
+            parent_alive || created_child_id.is_none(),
+            "不应留下游离子树（父已软删但子部门仍在）"
+        );
+    }
+
     #[tokio::test]
     async fn get_dept_rejects_soft_deleted() {
         let txn = test_txn().await;
@@ -675,5 +1066,89 @@ mod tests {
         assert_eq!(disabled_node.status, 0);
         assert_eq!(disabled_node.parent_id, root.id);
         assert!(find_node(&tree, live.id).is_some());
+    }
+
+    /// 真并发冒烟：两个线程同时发起方向相反的互移，验证按 id 升序加锁不会交叉等待。
+    ///
+    /// 与上一个用例的分工：上一个用「先固定快照再串行」确定性复现写偏斜本身；
+    /// 本用例跑真并发，覆盖**加锁顺序**——若改成「先自身后新父」的顺序加锁，这里会
+    /// 触发 `Deadlock found`（1213）或锁等待超时（1205）。
+    ///
+    /// 只断言与调度无关的不变量（至少一方被拒、树中无环）；具体哪一方胜出由抢锁顺序
+    /// 决定，不做断言。数据真实提交（并发必需），故用真连接 + 手工清理。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_cross_moves_reject_one_side_without_deadlock() {
+        let db = test_db().await;
+        let root = create_dept(&db, ACTOR_ID, &create_req(0, &unique("smoke_root")))
+            .await
+            .unwrap();
+        let a = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("smoke_a")))
+            .await
+            .unwrap();
+        let b = create_dept(&db, ACTOR_ID, &create_req(root.id, &unique("smoke_b")))
+            .await
+            .unwrap();
+
+        // 两条连接各自开事务，模拟两个并发请求：A 移到 B 下 / B 移到 A 下
+        let (db1, db2) = (db.clone(), db.clone());
+        let (req1, req2) = (
+            update_req(a.id, b.id, &a.dept_name),
+            update_req(b.id, a.id, &b.dept_name),
+        );
+        let h1 = tokio::spawn(async move { update_dept(&db1, ACTOR_ID, &req1).await });
+        let h2 = tokio::spawn(async move { update_dept(&db2, ACTOR_ID, &req2).await });
+        let (r1, r2) = (h1.await.unwrap(), h2.await.unwrap());
+
+        let tree = list_dept_tree(&db).await.unwrap();
+        let reachable = (
+            find_node(&tree, a.id).is_some(),
+            find_node(&tree, b.id).is_some(),
+        );
+        hard_delete_depts(&db, &[a.id, b.id, root.id]).await;
+
+        assert!(
+            r1.is_err() || r2.is_err(),
+            "并发互移至少一方应被防环拒绝: r1={r1:?} r2={r2:?}"
+        );
+        assert_eq!(reachable, (true, true), "不应成环");
+    }
+
+    /// MySQL 死锁（1213）应被映射成可重试的业务文案，而不是 `Internal` 的固定串
+    /// （覆盖 `utils::error` 的 `From<anyhow::Error>` 分支）。
+    ///
+    /// 必须真库：`MySqlDatabaseError` 无公开构造，纯单测造不出带错误号的 `DbErr`，
+    /// 故 `utils::error` 的单测只覆盖反例。这里用两条连接交叉加锁触发 InnoDB 死锁检测。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn db_deadlock_maps_to_retryable_biz_error() {
+        let db = test_db().await;
+        let a = create_dept(&db, ACTOR_ID, &create_req(0, &unique("deadlock_a")))
+            .await
+            .unwrap();
+        let b = create_dept(&db, ACTOR_ID, &create_req(0, &unique("deadlock_b")))
+            .await
+            .unwrap();
+
+        let txn1 = db.begin().await.unwrap();
+        let txn2 = db.begin().await.unwrap();
+        // 各自先占一行，再互等对方持有的行 → InnoDB 立刻判定死锁并回滚其中一方
+        dept_repo::find_by_id_for_update(&txn1, a.id).await.unwrap();
+        dept_repo::find_by_id_for_update(&txn2, b.id).await.unwrap();
+        let (r1, r2) = tokio::join!(
+            dept_repo::find_by_id_for_update(&txn1, b.id),
+            dept_repo::find_by_id_for_update(&txn2, a.id),
+        );
+        let _ = txn1.rollback().await;
+        let _ = txn2.rollback().await;
+        hard_delete_depts(&db, &[a.id, b.id]).await;
+
+        let loser = [r1, r2]
+            .into_iter()
+            .find(|result| result.is_err())
+            .expect("交叉加锁必然产生死锁，其中一方应报错");
+        let mapped = AppError::from(loser.unwrap_err());
+        assert!(
+            matches!(mapped, AppError::Biz(ref m) if m.contains("重试")),
+            "死锁应映射为可重试业务文案: {mapped:?}"
+        );
     }
 }

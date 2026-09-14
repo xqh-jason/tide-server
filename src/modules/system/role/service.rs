@@ -2,9 +2,13 @@ use crate::modules::system::permission::SUPER_ROLE_KEY;
 use crate::modules::system::role::dto::UpdateRoleStatusReq;
 use crate::utils::PageData;
 use crate::{
-    modules::system::role::{
-        dto::{CreateRoleReq, RoleFilter, RoleListReq, UpdateRoleReq},
-        repo as role_repo,
+    modules::system::{
+        menu::service as menu_service,
+        role::{
+            dto::{CreateRoleReq, RoleFilter, RoleListReq, UpdateRoleReq},
+            repo as role_repo,
+        },
+        sys_api::service as api_service,
     },
     utils::error::AppError,
 };
@@ -13,6 +17,59 @@ use sea_orm::{
 };
 
 use crate::entity::sys_role;
+
+/// 绑定前校验菜单 / 接口引用有效，并**锁住这些行**。
+///
+/// 两件事缺一不可：
+/// - **加锁读**：与「删除菜单 / 删除接口」的关联清理在同一行上互斥。删除方已加锁读自身行，
+///   这里不锁就会在对方清完关联后插入，留下指向已软删记录的悬挂绑定；
+/// - **存在性判定**：加锁读拿到的是最新已提交状态，据此拒绝失效 id（只加锁不判定，
+///   已软删的 id 仍会被写进关系表）。
+///
+/// 缺失文案与 user 域挂载部门的「部门不存在：{}」一致，permission 系统失败宁响不默。
+async fn ensure_menus_and_apis_exist(
+    txn: &DatabaseTransaction,
+    menu_ids: &[u64],
+    api_ids: &[u64],
+) -> Result<(), AppError> {
+    if !menu_ids.is_empty() {
+        let found = menu_service::find_by_ids_for_update(txn, menu_ids).await?;
+        let missing = collect_missing_ids(menu_ids, found.iter().map(|menu| menu.id));
+        if !missing.is_empty() {
+            return Err(AppError::Biz(format!(
+                "菜单不存在：{}",
+                format_ids(&missing)
+            )));
+        }
+    }
+
+    if !api_ids.is_empty() {
+        let found = api_service::find_by_ids_for_update(txn, api_ids).await?;
+        let missing = collect_missing_ids(api_ids, found.iter().map(|api| api.id));
+        if !missing.is_empty() {
+            return Err(AppError::Biz(format!(
+                "接口不存在：{}",
+                format_ids(&missing)
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// 求「请求里的 id」减去「查到的 id」的差集，保持请求顺序。
+fn collect_missing_ids(requested: &[u64], found: impl Iterator<Item = u64>) -> Vec<&u64> {
+    let found = found.collect::<Vec<_>>();
+    requested.iter().filter(|id| !found.contains(id)).collect()
+}
+
+/// 拼错误文案里的 id 列表。
+fn format_ids(ids: &[&u64]) -> String {
+    ids.iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// 分页查询角色（keyword 模糊匹配 role_name / role_key，status 精确，审计过滤），排除软删除。
 pub async fn page_roles(
@@ -94,6 +151,9 @@ pub(crate) async fn create_role_in_tx(
         return Err(AppError::Biz("角色名称已存在".to_string()));
     }
 
+    // 绑定前校验并锁定菜单 / 接口引用（拒绝失效 id，与删除方在同一行上互斥）
+    ensure_menus_and_apis_exist(txn, &req.menu_ids, &req.api_ids).await?;
+
     let model = sys_role::ActiveModel {
         role_name: Set(req.role_name.clone()),
         role_key: Set(req.role_key.clone()),
@@ -171,6 +231,9 @@ pub(crate) async fn update_role_in_tx(
             return Err(AppError::Biz("角色名称已存在".to_string()));
         }
     }
+
+    // 绑定前校验并锁定菜单 / 接口引用（拒绝失效 id，与删除方在同一行上互斥）
+    ensure_menus_and_apis_exist(txn, &req.menu_ids, &req.api_ids).await?;
 
     let model = sys_role::ActiveModel {
         id: Set(req.id),
@@ -387,6 +450,60 @@ mod tests {
         .insert(db)
         .await
         .unwrap()
+    }
+
+    /// 硬删角色及其关联（真连接用例必须真实提交，无法用事务回滚隔离，只能手工清理）。
+    async fn hard_delete_role(db: &DatabaseConnection, role_id: u64) {
+        sys_role_menu::Entity::delete_many()
+            .filter(sys_role_menu::Column::RoleId.eq(role_id))
+            .exec(db)
+            .await
+            .unwrap();
+        sys_role_api::Entity::delete_many()
+            .filter(sys_role_api::Column::RoleId.eq(role_id))
+            .exec(db)
+            .await
+            .unwrap();
+        sys_role::Entity::delete_many()
+            .filter(sys_role::Column::Id.eq(role_id))
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
+    /// 硬删菜单及其关联（含软删记录，按 id 直删）。
+    async fn hard_delete_menu(db: &DatabaseConnection, menu_id: u64) {
+        sys_role_menu::Entity::delete_many()
+            .filter(sys_role_menu::Column::MenuId.eq(menu_id))
+            .exec(db)
+            .await
+            .unwrap();
+        sys_menu::Entity::delete_many()
+            .filter(sys_menu::Column::Id.eq(menu_id))
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
+    /// 该角色是否仍绑定指定菜单（`sys_role_menu` 硬删表，有行即绑定）。
+    async fn role_binds_menu(db: &DatabaseConnection, role_id: u64, menu_id: u64) -> bool {
+        sys_role_menu::Entity::find()
+            .filter(sys_role_menu::Column::RoleId.eq(role_id))
+            .filter(sys_role_menu::Column::MenuId.eq(menu_id))
+            .one(db)
+            .await
+            .unwrap()
+            .is_some()
+    }
+
+    /// 菜单是否已软删（`find_by_id` 会过滤软删，这里直查主键）。
+    async fn menu_is_soft_deleted(db: &DatabaseConnection, menu_id: u64) -> bool {
+        sys_menu::Entity::find()
+            .filter(sys_menu::Column::Id.eq(menu_id))
+            .one(db)
+            .await
+            .unwrap()
+            .is_none_or(|menu| menu.deleted_at.is_some())
     }
 
     /// 创建时 role_key 重复（含软删除占位）应被业务层拒绝。
@@ -774,6 +891,112 @@ mod tests {
         assert!(
             enabled.iter().all(|role| role.id != super_role.id),
             "内置超管不应出现在启用角色列表"
+        );
+    }
+
+    /// 绑定请求夹具：沿用角色原有键名，只替换菜单绑定。
+    fn bind_menu_req(role: &sys_role::Model, menu_ids: Vec<u64>) -> UpdateRoleReq {
+        UpdateRoleReq {
+            id: role.id,
+            role_name: role.role_name.clone(),
+            role_key: role.role_key.clone(),
+            sort: 0,
+            status: 1,
+            remark: String::new(),
+            menu_ids,
+            api_ids: Vec::new(),
+        }
+    }
+
+    /// 绑定前必须校验引用有效：不存在的菜单 / 接口 id 应被拒绝，而不是写进关系表。
+    #[tokio::test]
+    async fn role_binding_rejects_missing_menu_and_api() {
+        let txn = test_txn().await;
+        let role = seed_role(&txn, &unique("miss_role"), &unique("miss_key"), 1, None).await;
+
+        let mut create = create_req(unique("miss_name"), unique("miss_key2"));
+        create.menu_ids = vec![9_999_999_999];
+        let create_result = create_role_in_tx(&txn, ACTOR_ID, &create).await;
+
+        let mut update = bind_menu_req(&role, Vec::new());
+        update.api_ids = vec![9_999_999_998];
+        let update_result = update_role_in_tx(&txn, ACTOR_ID, &update).await;
+
+        assert!(
+            matches!(create_result, Err(AppError::Biz(ref m)) if m.contains("菜单不存在")),
+            "绑定不存在的菜单应被拒绝: {create_result:?}"
+        );
+        assert!(
+            matches!(update_result, Err(AppError::Biz(ref m)) if m.contains("接口不存在")),
+            "绑定不存在的接口应被拒绝: {update_result:?}"
+        );
+    }
+
+    /// 并发「删除菜单」+「角色绑定该菜单」：绑定方必须读到删除结果并拒绝，否则留下悬挂绑定。
+    ///
+    /// 确定性交错：删除方先发起并**持有菜单行锁**（未提交），绑定方随后发起 → 卡在行锁上 →
+    /// 删除方提交后绑定方读到「菜单已软删」→ 报「菜单不存在」，关系表不产生该行。
+    /// 两连接必须真实提交才能互相看见，故用真连接 + 手工清理。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn update_role_rejects_menu_deleted_concurrently() {
+        let db = test_db().await;
+        let role = seed_role(&db, &unique("ct_role"), &unique("ct_key"), 1, None).await;
+        let menu = seed_menu(&db).await;
+
+        // 删除方：软删菜单 + 级联清理关联，均未提交（菜单行锁仍在手里）
+        let txn_delete = db.begin().await.unwrap();
+        menu_service::delete_menu_in_tx(&txn_delete, menu.id)
+            .await
+            .expect("前置：删菜单应放行");
+
+        // 绑定方：另一条连接上发起角色更新，卡在删除方持有的菜单行锁上
+        let db_bind = db.clone();
+        let role_req = bind_menu_req(&role, vec![menu.id]);
+        let handle = tokio::spawn(async move { update_role(&db_bind, ACTOR_ID, &role_req).await });
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        txn_delete.commit().await.unwrap();
+
+        let result = handle.await.unwrap();
+        let dangling = role_binds_menu(&db, role.id, menu.id).await;
+        let menu_deleted = menu_is_soft_deleted(&db, menu.id).await;
+        hard_delete_role(&db, role.id).await;
+        hard_delete_menu(&db, menu.id).await;
+
+        assert!(menu_deleted, "前置：菜单应已被软删");
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("菜单不存在")),
+            "绑定已软删的菜单应被拒绝: {result:?}"
+        );
+        assert!(!dangling, "不应留下指向已软删菜单的悬挂绑定");
+    }
+
+    /// 真并发冒烟：删菜单 与 角色绑定该菜单 同时发起，不得留下悬挂绑定。
+    ///
+    /// 两种合法结果：绑定先赢（随后删除的级联清理会删掉该绑定）或删除先赢（绑定被拒）。
+    /// 只断言与调度无关的不变量：不存在「菜单已软删 + 关系表仍绑着它」。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_delete_menu_and_bind_role_leaves_no_dangling_link() {
+        let db = test_db().await;
+        let role = seed_role(&db, &unique("cc_role"), &unique("cc_key"), 1, None).await;
+        let menu = seed_menu(&db).await;
+
+        let (db_delete, db_bind) = (db.clone(), db.clone());
+        let (role_id, menu_id) = (role.id, menu.id);
+        let role_req = bind_menu_req(&role, vec![menu.id]);
+        let delete_handle =
+            tokio::spawn(async move { menu_service::delete_menu(&db_delete, menu_id).await });
+        let bind_handle =
+            tokio::spawn(async move { update_role(&db_bind, ACTOR_ID, &role_req).await });
+        let (deleted, bound) = (delete_handle.await.unwrap(), bind_handle.await.unwrap());
+
+        let dangling = role_binds_menu(&db, role_id, menu_id).await;
+        let menu_deleted = menu_is_soft_deleted(&db, menu_id).await;
+        hard_delete_role(&db, role_id).await;
+        hard_delete_menu(&db, menu_id).await;
+
+        assert!(
+            !(dangling && menu_deleted),
+            "不应留下悬挂绑定: deleted={deleted:?} bound={bound:?}"
         );
     }
 }

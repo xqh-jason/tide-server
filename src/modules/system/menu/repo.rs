@@ -77,6 +77,45 @@ pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Op
     Ok(menu)
 }
 
+/// 查询单个有效菜单（排除软删除）并加排他锁（`SELECT ... FOR UPDATE`）。
+///
+/// 供「读 → 判断 → 写」型校验使用：加锁读取最新已提交版本（绕过 RR 事务快照），
+/// 并与其他事务的加锁读/写在同一行上互斥，使校验成为临界区。须在事务内调用。
+pub async fn find_by_id_for_update(
+    txn: &DatabaseTransaction,
+    id: u64,
+) -> anyhow::Result<Option<Model>> {
+    let menu = sys_menu::Entity::find()
+        .filter(sys_menu::Column::Id.eq(id))
+        .filter(sys_menu::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .one(txn)
+        .await?;
+    Ok(menu)
+}
+
+/// 批量按 id 查有效菜单（排除软删）并加排他锁（`SELECT ... FOR UPDATE`）。空入参短路。
+///
+/// 供「角色绑定菜单」前的存在性校验使用：跨域写入（role 域写 `sys_role_menu`）必须先锁住
+/// 被引用的菜单行，与「删除菜单」的级联清理在同一行上串行化——否则删除方清完关联、
+/// 绑定方随后插入，会留下指向已软删菜单的悬挂绑定。须在事务内调用；主键等值/`IN`
+/// 只取记录锁（无间隙锁），不阻塞自增插入。
+pub async fn find_by_ids_for_update(
+    txn: &DatabaseTransaction,
+    ids: &[u64],
+) -> anyhow::Result<Vec<Model>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let menus = sys_menu::Entity::find()
+        .filter(sys_menu::Column::Id.is_in(ids.iter().copied()))
+        .filter(sys_menu::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .all(txn)
+        .await?;
+    Ok(menus)
+}
+
 /// 创建菜单（ActiveModel 入参，默认值由 service 层负责）。
 /// 创建菜单。`actor_id` 为操作人，审计字段由 repo 统一盖章。
 pub async fn create_menu(
@@ -105,12 +144,21 @@ pub async fn update_menu(
     Ok(model)
 }
 
-/// 收集 `root_id` 的全部子孙菜单 id（**不含** root 自身，**不过滤软删**）。
+/// 收集 `root_id` 的全部子孙菜单 id 并加排他锁（**不含** root 自身，**不过滤软删**）。
 ///
 /// `visited` 防御：库内若存在环状脏数据（`A→B→A`），遍历必须终止而不是无限扩展。
 /// 返回 id 集合而非业务判定——「新父是否为自身子孙」的策略由 service 层决定。
-pub async fn find_descendant_ids(
-    db: &impl ConnectionTrait,
+///
+/// 加锁读（`SELECT ... FOR UPDATE`）是防环与级联删除的正确性前提：
+/// - 普通读在 RR 下走事务快照，两个并发互移请求各自看不到对方已提交的换父，会双双通过
+///   防环校验而成环；加锁读既读最新已提交版本，又让两端在同样的行上串行化；
+/// - 级联软删若用快照读，会漏掉并发新建的子孙，留下「父已删、子还在」的孤立菜单。
+///
+/// 逐层**自顶向下**加锁（先父行、后其子节点区间），与删除、与并发「在子节点下建子」的
+/// 插入意向锁方向一致，不构成循环等待。走 `idx_sys_menu_parent_id`（非唯一索引）
+/// ⇒ 有间隙锁，依赖 RR 隔离级别。须在事务内调用。
+pub async fn find_descendant_ids_for_update(
+    txn: &DatabaseTransaction,
     root_id: u64,
 ) -> anyhow::Result<Vec<u64>> {
     let mut descendants = Vec::new();
@@ -121,7 +169,8 @@ pub async fn find_descendant_ids(
         let children = sys_menu::Entity::find()
             .filter(sys_menu::Column::ParentId.is_in(frontier))
             .column(sys_menu::Column::Id)
-            .all(db)
+            .lock_exclusive()
+            .all(txn)
             .await?;
         let mut next = Vec::with_capacity(children.len());
         for child in children {
@@ -137,7 +186,8 @@ pub async fn find_descendant_ids(
 }
 
 /// 软删除菜单（不 begin/commit，事务边界由调用方负责）：收集目标及其全部子孙菜单，
-/// 清空这些菜单的角色关联并批量软删主表（子孙收集走 `find_descendant_ids`，带 `visited` 防环）。
+/// 清空这些菜单的角色关联并批量软删主表（子孙收集走 `find_descendant_ids_for_update`，
+/// 带 `visited` 防环，且加锁读避免漏掉并发新建的子孙）。
 ///
 /// 子级收集**不过滤软删状态**：即使某个中间节点已软删，其下仍正常的子孙也要级联处理，
 /// 避免父已删、子孤立的脏数据。
@@ -145,14 +195,14 @@ pub(crate) async fn soft_delete_menu_in_tx(
     txn: &DatabaseTransaction,
     id: u64,
 ) -> anyhow::Result<bool> {
-    // 目标菜单必须存在（排除软删），否则视为无可删除
-    let Some(menu) = find_by_id(txn, id).await? else {
+    // 目标菜单必须存在（排除软删）并加锁，否则视为无可删除
+    let Some(menu) = find_by_id_for_update(txn, id).await? else {
         return Ok(false);
     };
 
     // 目标 + 全部子孙 id（子孙收集复用防环原语：脏数据成环时遍历必然终止）
     let mut ids = vec![menu.id];
-    ids.extend(find_descendant_ids(txn, menu.id).await?);
+    ids.extend(find_descendant_ids_for_update(txn, menu.id).await?);
 
     let now = chrono::Local::now().naive_local();
     // 关系表硬删除：清掉这些菜单的角色绑定

@@ -10,7 +10,8 @@
   dictionary 等 18 个，随脚手架交付，保持稳定）
 - `src/modules/biz/<域>/`：业务域容器（具体业务功能从这里生长，结构与平台域一致）
 - `src/infra/`：启动管线、配置、全局状态（`AppState`）、路由组装
-- `src/middleware/`：横切中间件（`InjectState`、`AuthRequired`）
+- `src/middleware/`：横切中间件（`InjectState`、`AuthRequired`、`RequestTimeout` 请求
+  超时兜底——全局 30s，文件上传 / 下载两个流式端点按路径豁免）
 - `src/entity/`：SeaORM 实体，全局共享
 - `src/utils/`：错误、响应体、JWT、密码、缓存、分页
 - `migrations/`：sea-orm-migration 迁移（独立 crate）
@@ -98,6 +99,23 @@ repo / service / task / middleware 的依赖方向与跨域访问规则：
 3. `user/repo.rs::update_user_in_tx` 用 `if !role_ids.is_empty()` 包住关联清空
    → 无条件清空，「空数组即清空」由 service 语义决定（否则空数组无法清空关联）
 
+## 并发一致性约定（加锁读，2026-09-14）
+
+凡「读 → 判断 → 写」型不变式（防环 / 占用检查 / 引用挂载校验等），读取必须走加锁读
+`SELECT ... FOR UPDATE`（sea-orm `.lock_exclusive()`）：RR 快照读下两个并发事务会各自
+基于旧结构决策、双双通过校验（写偏斜），成环 / 游离子树 / 悬挂引用都由此而来。
+
+- repo 提供 `*_for_update` 原语，签名收 `&DatabaseTransaction`（事务外调用等于没加锁）
+- 一个事务要锁多行时**按 id 升序加锁**：方向相反的并发操作加锁顺序一致才不会交叉等待
+- 跨域写入（角色绑菜单 / 接口、用户挂部门）同样要先加锁读 + 做存在性判定——只靠对方
+  持有的间隙锁只能挡住插入时机，不判定仍会把已软删记录写进关系表（悬挂引用）
+- 加锁读在 RR 下会取间隙锁，可阻塞**相邻区间**的插入：展示类查询（列表 / 详情 /
+  名称拼装）一律保持普通读，不要顺手加锁
+- 子树下推 / 级联收集等遍历加锁统一**自顶向下**（先父行、后子区间），与并发建子的插入
+  意向锁方向一致；加锁顺序无法全局一致的极端交错仍可能 1213 / 1205，由 `utils/error.rs`
+  把这两类错误映射成「操作冲突，请稍后重试」兜底（不再应用层加超时，锁等待超时由
+  router 级超时中间件统一兜底）
+
 ## 人字段命名与名称拼装约定
 
 凡指向 `sys_user` 的引用字段（创建人、更新人、审批人、申请人等）统一遵循：
@@ -139,6 +157,11 @@ repo / service / task / middleware 的依赖方向与跨域访问规则：
   破坏回滚隔离。它们的测试仍用 `test_db()` 真连接 + 手写清理（函数注释有标注）；
   调用它们的 service 上游函数（`create/update/delete_user|role|api`、`delete_menu`）
   同为例外。升级 sea-orm 或将事务边界上移 service 后可取消例外。
+- **并发用例（例外）**：需要两个事务真实提交 / 多连接才能复现的用例（写偏斜、锁互斥），
+  用 `test_db()` + 真实 `commit()` + 手工清理，无法用 `test_txn()` 回滚隔离。要点：
+  优先用**确定性交错**（一方先固定快照 → 另一方完整提交 → 前者再继续），不靠 sleep
+  竞态；真并发冒烟只断言与调度无关的不变量。清理必须在**结束事务之后**再做——
+  加锁读持有的行锁 / 间隙锁会挡住自己的清理语句（表现为 50s 锁等待超时）
 - 测试数据唯一命名（`<prefix>_<pid>_<seq>`）仍保留：防止撞真实库的唯一键
   （如 `sys_user.username`、`sys_dictionary.type`）
 - 命名格式：`<行为>_<场景>`，如 `find_page_filters_by_keyword_and_status_excludes_deleted`

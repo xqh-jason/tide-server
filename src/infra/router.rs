@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
+use crate::middleware::request_timeout::{self, DEFAULT_REQUEST_TIMEOUT_SECS, RequestTimeout};
 use crate::middleware::{
     InjectState, api_permission::ApiPermission, auth::AuthRequired, op_log::OperationLog,
 };
@@ -38,5 +41,11 @@ fn mount_domains(api: Router) -> Router {
 pub fn build(state: AppState) -> Router {
     Router::new()
         .hoop(InjectState(state))
+        // 请求超时兜底：预算内无害，超时渲染契约体（不产生 4xx/5xx）；文件收发是流式
+        // 大对象传输，慢网下天然可能超过预算，按路径豁免
+        .hoop_when(
+            RequestTimeout::new(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)),
+            |req, _| !request_timeout::is_exempt(req),
+        )
         .push(mount_domains(Router::with_path("api/v1")))
 }
