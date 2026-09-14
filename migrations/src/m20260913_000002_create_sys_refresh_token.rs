@@ -4,7 +4,9 @@
 //! - refresh token 只存 SHA-256 哈希（char(64)），明文仅存在于 HttpOnly Cookie；
 //! - 会话是时效数据，不套软删 `deleted_at`（按日志类处理），过期由
 //!   `cleanup_user_sessions` 定时任务物理清理；
-//! - `revoked_by` 遵循人字段约定：`0` = 本人登出/系统，`> 0` = 管理员 user_id。
+//! - `revoked_by` 遵循人字段约定：恒为真实操作人 user_id（本人登出 = 本人 id，
+//!   管理员强制下线 = 管理员 id，由 `revoked_by == user_id` 即可判出自助登出）；
+//!   `0` 仅留给系统写入（无操作人）。
 
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_orm::Statement;
@@ -22,7 +24,7 @@ const CREATE_TABLE: &str = r#"CREATE TABLE `sys_refresh_token` (
   `last_active_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '最后活跃时间（60s 节流回写；5 分钟内视为在线）',
   `expires_at` datetime NOT NULL COMMENT '会话过期时间（登录时刻 + jwt.refresh_ttl_seconds）',
   `revoked_at` datetime DEFAULT NULL COMMENT '吊销时间；NULL 表示会话有效',
-  `revoked_by` bigint unsigned NOT NULL DEFAULT '0' COMMENT '吊销操作人（0=本人登出/系统，>0=管理员 user_id）',
+  `revoked_by` bigint unsigned NOT NULL DEFAULT '0' COMMENT '吊销操作人 user_id（本人登出=本人 id；0=系统写入）',
   `revoke_reason` varchar(255) NOT NULL DEFAULT '' COMMENT '吊销原因（用户登出/管理员强制下线）',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '登录时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间；MySQL 自动刷新',

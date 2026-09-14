@@ -130,7 +130,7 @@ pub async fn refresh(depot: &mut Depot, req: &Request, res: &mut Response) {
     }
 }
 
-/// 登出：吊销当前会话（`revoked_by=0`，reason=「用户登出」）+ 清除 refreshToken Cookie。
+/// 登出：吊销当前会话（`revoked_by` = 本人 user_id，reason=「用户登出」）+ 清除 refreshToken Cookie。
 /// 挂在本路由上的 `AuthRequired` 已确认会话有效；黑名单已随会话表落地退役
 /// （spec §4.3），吊销即时生效、重启不丢。
 #[endpoint]
@@ -140,7 +140,7 @@ pub async fn logout(depot: &mut Depot, res: &mut Response) -> ApiResult<()> {
     if let Err(err) = refresh_token_service::force_logout_refresh_token(
         &state.db,
         actor.refresh_token_id,
-        0,
+        actor.user_id,
         "用户登出",
     )
     .await

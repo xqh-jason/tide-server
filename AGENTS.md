@@ -116,8 +116,8 @@ repo / service / task / middleware 的依赖方向与跨域访问规则：
   - 新增人字段 = 实体 impl 加一个 id + Resp 加一对字段，协议与管道零改动。
 - **写入口径**：审计字段由 repo 层统一盖章（create 双写 `created_by`/`updated_by`、
   update 只刷 `updated_by`），service 只透传 `actor_id`；请求体不接受人字段，防伪造。
-- 现状：`created_by` / `updated_by` 已落地；名称拼装协议已实现（`utils/user_ref.rs`），
-  本节为唯一事实来源。
+- 现状：`created_by` / `updated_by` / `revoked_by`（会话吊销操作人，本人登出即本人 id）
+  已落地；名称拼装协议已实现（`utils/user_ref.rs`），本节为唯一事实来源。
 
 ## 测试规范
 

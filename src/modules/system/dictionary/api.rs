@@ -94,7 +94,8 @@ pub async fn get_dictionary(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResu
 pub async fn delete_dictionary(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<u64> {
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
-    let removed = dict_service::delete_dictionary(&state.db, req.id).await?;
+    let auth = AuthUser::from_depot(depot)?;
+    let removed = dict_service::delete_dictionary(&state.db, req.id, auth.user_id).await?;
     Ok(ApiResponse::ok(removed))
 }
 

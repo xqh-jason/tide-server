@@ -7,6 +7,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
+use sea_orm::{DatabaseTransaction, TransactionTrait};
 
 use crate::entity::{sys_dictionary, sys_dictionary_detail};
 use crate::modules::system::dictionary::dto::{
@@ -147,21 +148,38 @@ pub async fn get_dictionary(
     Ok(model)
 }
 
+pub async fn delete_dictionary(
+    db: &DatabaseConnection,
+    id: u64,
+    actor_id: u64,
+) -> Result<u64, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = delete_dictionary_in_tx(&txn, id, actor_id).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
 /// 删除类型：判存在 → 软删类型 → 级联软删其下字典项，返回字典项删除数量。
 ///
 /// 返回级联删除的字典项行数（而非是否成功），供前端提示「已删除 N 项」；
 /// 类型本体软删而非物理删，让 type 唯一键占位延续，避免历史数据引用悬空。
-pub async fn delete_dictionary(db: &impl ConnectionTrait, id: u64) -> Result<u64, AppError> {
+pub async fn delete_dictionary_in_tx(
+    txn: &DatabaseTransaction,
+    id: u64,
+    actor_id: u64,
+) -> Result<u64, AppError> {
     // 1) 目标必须存在（软删视为不存在）
-    if dict_repo::find_dictionary_by_id(db, id).await?.is_none() {
+    if dict_repo::find_dictionary_by_id(txn, id).await?.is_none() {
         return Err(AppError::Biz(format!("字典类型不存在：{}", id)));
     }
 
     // 2) 软删类型本体
-    dict_repo::soft_delete_dictionary(db, id).await?;
+    dict_repo::soft_delete_dictionary(txn, id, actor_id).await?;
 
     // 3) 级联软删其下全部活字典项，返回受影响行数
-    let removed = dict_repo::soft_delete_details_by_dictionary_id(db, id).await?;
+    let removed = dict_repo::soft_delete_details_by_dictionary_id(txn, id).await?;
     Ok(removed)
 }
 
@@ -371,7 +389,9 @@ mod tests {
     use crate::modules::system::dictionary::dto::{
         CreateDictionaryDetailReq, CreateDictionaryReq, UpdateDictionaryReq,
     };
-    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
 
     // 模块内自增序号。注意：repo.rs 测试也有同名同起点的独立 SEQ，
@@ -450,6 +470,25 @@ mod tests {
         .unwrap()
     }
 
+    /// 测后清理：先物理删字典项，再删字典类型。
+    ///
+    /// 供自管事务的对外入口（`delete_dictionary`）测试使用——它内部 `begin()` 已提交，
+    /// 外层事务无法回滚回收，只能真连接 + 手写清理。
+    async fn cleanup(db: &impl ConnectionTrait, dictionary_ids: &[u64]) {
+        sys_dictionary_detail::Entity::delete_many()
+            .filter(
+                sys_dictionary_detail::Column::DictionaryId.is_in(dictionary_ids.iter().copied()),
+            )
+            .exec(db)
+            .await
+            .unwrap();
+        sys_dictionary::Entity::delete_many()
+            .filter(sys_dictionary::Column::Id.is_in(dictionary_ids.iter().copied()))
+            .exec(db)
+            .await
+            .unwrap();
+    }
+
     fn create_req(r#type: String) -> CreateDictionaryReq {
         CreateDictionaryReq {
             name: unique("nm"),
@@ -516,15 +555,19 @@ mod tests {
         keep_self.expect("保留自身 type 应更新成功");
     }
 
+    /// 对外入口 `delete_dictionary`（自管事务）级联软删：类型与其下字典项一并失效。
+    /// 走真实连接而非外层事务：自管事务无法被回滚隔离，故测后手写清理。
     #[tokio::test]
     async fn delete_dictionary_cascade_soft_deletes_its_details() {
-        let db = test_txn().await;
+        let db = test_db().await;
         let d = seed_dictionary(&db, &unique("nm"), &unique("t"), 1, None).await;
         let _x = seed_detail(&db, d.id, &unique("v"), "lb", 1, 1, None).await;
         let _y = seed_detail(&db, d.id, &unique("v"), "lb", 2, 1, None).await;
 
-        let removed = delete_dictionary(&db, d.id).await.unwrap();
+        let removed = delete_dictionary(&db, d.id, ACTOR_ID).await.unwrap();
         let left = dict_repo::find_enabled_details(&db, d.id).await.unwrap();
+
+        cleanup(&db, &[d.id]).await;
 
         assert_eq!(removed, 2, "应返回级联软删的字典项数量");
         assert!(left.is_empty(), "删类型后其下字典项不应再可见");

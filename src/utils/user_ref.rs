@@ -9,7 +9,7 @@
 
 use crate::entity::{
     sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job, sys_menu,
-    sys_operation_log, sys_position, sys_role, sys_site_config, sys_user,
+    sys_operation_log, sys_position, sys_refresh_token, sys_role, sys_site_config, sys_user,
 };
 use std::collections::HashMap;
 
@@ -140,6 +140,12 @@ impl UserRefIds for sys_position::Model {
 impl UserRefIds for sys_operation_log::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         vec![self.user_id]
+    }
+}
+
+impl UserRefIds for sys_refresh_token::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.revoked_by]
     }
 }
 

@@ -3,6 +3,7 @@ pub use sea_orm_migration::prelude::*;
 mod legacy;
 mod m20260913_000001_baseline;
 mod m20260913_000002_create_sys_refresh_token;
+mod m20260914_000001_fix_sys_refresh_token_revoked_by_comment;
 
 pub struct Migrator;
 
@@ -38,6 +39,7 @@ impl MigratorTrait for Migrator {
             // 基线迁移必须排在占位之后：新库先空跑占位，再由 baseline 一次性建表
             Box::new(m20260913_000001_baseline::Migration),
             Box::new(m20260913_000002_create_sys_refresh_token::Migration),
+            Box::new(m20260914_000001_fix_sys_refresh_token_revoked_by_comment::Migration),
         ]
     }
 }

@@ -127,13 +127,18 @@ pub async fn update_dictionary(
 }
 
 /// 类型：软删单条，返回是否实际删除（不存在或已软删返回 false）。
-pub async fn soft_delete_dictionary(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<bool> {
+pub async fn soft_delete_dictionary(
+    db: &impl ConnectionTrait,
+    id: u64,
+    actor_id: u64,
+) -> anyhow::Result<bool> {
     // 先查询是否存在，再软删
     let Some(model) = find_dictionary_by_id(db, id).await? else {
         return Ok(false);
     };
     let mut model: sys_dictionary::ActiveModel = model.into();
     model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
+    model.updated_by = Set(actor_id);
     model.update(db).await?;
     Ok(true)
 }

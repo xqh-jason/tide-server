@@ -9,6 +9,7 @@ pub mod page;
 pub mod request;
 pub mod response;
 pub mod serde_format;
+pub mod text;
 pub mod user_ref;
 
 pub use id_req::IdReq;

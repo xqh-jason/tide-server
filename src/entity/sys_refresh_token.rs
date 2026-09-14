@@ -24,7 +24,7 @@ pub struct Model {
     pub expires_at: DateTime,
     /// 吊销时间；NULL 表示凭证有效
     pub revoked_at: Option<DateTime>,
-    /// 吊销操作人（0=本人登出/系统，>0=管理员 user_id）
+    /// 吊销操作人 user_id（本人登出 = 本人 id；`0` = 系统写入，无操作人）
     pub revoked_by: u64,
     /// 吊销原因（用户登出/管理员强制下线）
     pub revoke_reason: String,

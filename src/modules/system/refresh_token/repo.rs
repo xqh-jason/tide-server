@@ -115,6 +115,35 @@ pub async fn revoke(
     Ok(result.rows_affected > 0)
 }
 
+/// 按用户批量吊销：只处理仍未吊销且未过期的会话，返回受影响行数。
+///
+/// 已过期会话不在范围内——它本就无法通过认证，盖「被下线」章只会把自然过期
+/// 记成管理员操作，污染审计；已吊销会话同理不参与更新，保留首次操作人。
+pub async fn revoke_all_by_user_id(
+    db: &impl ConnectionTrait,
+    user_id: u64,
+    revoked_by: u64,
+    reason: &str,
+) -> anyhow::Result<u64> {
+    let now = chrono::Local::now().naive_local();
+    let result = sys_refresh_token::Entity::update_many()
+        .filter(sys_refresh_token::Column::UserId.eq(user_id))
+        .filter(sys_refresh_token::Column::RevokedAt.is_null())
+        .filter(sys_refresh_token::Column::ExpiresAt.gt(now))
+        .col_expr(sys_refresh_token::Column::RevokedAt, Expr::value(Some(now)))
+        .col_expr(
+            sys_refresh_token::Column::RevokedBy,
+            Expr::value(revoked_by),
+        )
+        .col_expr(
+            sys_refresh_token::Column::RevokeReason,
+            Expr::value(reason.to_string()),
+        )
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected)
+}
+
 /// 回写最后活跃时间（认证中间件 60s 节流后调用）。
 pub async fn touch_last_active_at(
     db: &impl ConnectionTrait,
@@ -258,6 +287,35 @@ mod tests {
         .insert(db)
         .await
         .unwrap()
+    }
+
+    /// 造一条「已被某人吊销」的记录：用于验证批量吊销不覆盖首次操作人。
+    async fn seed_revoked_by(
+        db: &impl ConnectionTrait,
+        user_id: u64,
+        username: &str,
+        revoked_by: u64,
+    ) -> Model {
+        let record = seed_record(
+            db,
+            user_id,
+            username,
+            unique("h"),
+            chrono::Duration::days(7),
+            chrono::Duration::zero(),
+            true,
+        )
+        .await;
+        sys_refresh_token::Entity::update_many()
+            .filter(sys_refresh_token::Column::Id.eq(record.id))
+            .col_expr(
+                sys_refresh_token::Column::RevokedBy,
+                Expr::value(revoked_by),
+            )
+            .exec(db)
+            .await
+            .unwrap();
+        find_by_id(db, record.id).await.unwrap().unwrap()
     }
 
     #[tokio::test]
@@ -509,6 +567,114 @@ mod tests {
         assert!(!second, "已吊销会话不应重复计入");
         let after2 = find_by_id(&db, record.id).await.unwrap().unwrap();
         assert_eq!(after2.revoked_by, 42, "首次吊销的操作人不被覆盖");
+    }
+
+    /// 按用户批量吊销的范围：目标用户 ∩ 未吊销 ∩ 未过期。
+    /// 他人会话、已吊销会话（保留首次操作人）、已过期会话都不得被波及。
+    #[tokio::test]
+    async fn revoke_all_by_user_id_only_hits_alive_sessions_of_target_user() {
+        let db = test_txn().await;
+        let (uid, username) = seed_user(&db).await;
+        let (other_id, other_username) = seed_user(&db).await;
+
+        let alive_a = seed_record(
+            &db,
+            uid,
+            &username,
+            unique("h"),
+            chrono::Duration::days(7),
+            chrono::Duration::zero(),
+            false,
+        )
+        .await;
+        let alive_b = seed_record(
+            &db,
+            uid,
+            &username,
+            unique("h"),
+            chrono::Duration::days(1),
+            chrono::Duration::zero(),
+            false,
+        )
+        .await;
+        let already = seed_revoked_by(&db, uid, &username, 777).await;
+        let expired = seed_record(
+            &db,
+            uid,
+            &username,
+            unique("h"),
+            chrono::Duration::seconds(-1),
+            chrono::Duration::zero(),
+            false,
+        )
+        .await;
+        let others = seed_record(
+            &db,
+            other_id,
+            &other_username,
+            unique("h"),
+            chrono::Duration::days(7),
+            chrono::Duration::zero(),
+            false,
+        )
+        .await;
+
+        let affected = revoke_all_by_user_id(&db, uid, 42, "管理员强制下线")
+            .await
+            .unwrap();
+
+        assert_eq!(affected, 2, "只应命中目标用户的两条存活会话");
+        for id in [alive_a.id, alive_b.id] {
+            let after = find_by_id(&db, id).await.unwrap().unwrap();
+            assert!(after.revoked_at.is_some(), "存活会话应盖吊销时间");
+            assert_eq!(after.revoked_by, 42, "应盖吊销操作人");
+            assert_eq!(after.revoke_reason, "管理员强制下线");
+        }
+
+        let untouched_expired = find_by_id(&db, expired.id).await.unwrap().unwrap();
+        assert!(
+            untouched_expired.revoked_at.is_none(),
+            "已过期会话不在范围内：它本就无法通过认证，盖章会污染审计"
+        );
+        let untouched_others = find_by_id(&db, others.id).await.unwrap().unwrap();
+        assert!(untouched_others.revoked_at.is_none(), "他人会话不应被波及");
+        let untouched_already = find_by_id(&db, already.id).await.unwrap().unwrap();
+        assert_eq!(
+            untouched_already.revoked_by, 777,
+            "已吊销会话不参与更新，首次操作人不被覆盖"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_all_by_user_id_returns_zero_when_no_alive_session() {
+        let db = test_txn().await;
+        let (uid, username) = seed_user(&db).await;
+        seed_record(
+            &db,
+            uid,
+            &username,
+            unique("h"),
+            chrono::Duration::seconds(-1),
+            chrono::Duration::zero(),
+            false,
+        )
+        .await;
+        seed_record(
+            &db,
+            uid,
+            &username,
+            unique("h"),
+            chrono::Duration::days(7),
+            chrono::Duration::zero(),
+            true,
+        )
+        .await;
+
+        let affected = revoke_all_by_user_id(&db, uid, 42, "管理员强制下线")
+            .await
+            .unwrap();
+
+        assert_eq!(affected, 0, "无存活会话返回 0，由调用方决定如何提示");
     }
 
     #[tokio::test]

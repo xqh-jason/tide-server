@@ -584,7 +584,7 @@ const fn api(
     }
 }
 
-/// 全部管理端点登记（85 条）。刻意排除：
+/// 全部管理端点登记（86 条）。刻意排除：
 /// - 公开接口：/health、/captcha/generate、/auth/{login,logout}、GET /site-config/get；
 /// - 登录后每个用户必调的契约端点：POST /user/{info,access-codes,menus}
 ///   （登记即 fail-closed，会把所有非超管用户挡在登录态之外）。
@@ -827,6 +827,12 @@ const API_SEEDS: &[ApiSeed] = &[
         "/api/v1/refresh-token/force-logout",
         "POST",
         "会话强制下线",
+        "刷新凭证",
+    ),
+    api(
+        "/api/v1/refresh-token/force-logout-user",
+        "POST",
+        "按用户强制下线全部会话",
         "刷新凭证",
     ),
 ];

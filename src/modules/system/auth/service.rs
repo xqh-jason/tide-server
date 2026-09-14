@@ -12,6 +12,7 @@ use crate::modules::system::refresh_token::service as refresh_token_service;
 use crate::modules::system::user::repo as user_repo;
 use crate::utils::cache::Cache;
 use crate::utils::error::AppError;
+use crate::utils::text::truncate_chars;
 use crate::utils::{crypt, jwt};
 
 /// 登录：验证码 → 查用户 → 校验密码与状态 → 取角色 → 创建凭证记录 → 签发 JWT，
@@ -172,11 +173,6 @@ async fn record_login(
     if let Err(err) = crate::modules::system::login_log::repo::create_login_log(db, model).await {
         tracing::error!(%err, "login log 落库失败");
     }
-}
-
-/// 按字符数截断，避免超长触发 DB 报错。
-fn truncate_chars(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
 }
 
 #[cfg(test)]
@@ -358,6 +354,45 @@ mod tests {
         );
         let claims = jwt::verify(&resp.token, "test-secret").unwrap();
         assert_eq!(claims.refresh_token_id, record.id, "JWT 应携带会话 id");
+    }
+
+    /// 回归：超长 User-Agent 不应让登录整体失败——凭证表 agent 列 varchar(255)，
+    /// 登录日志链路已截断，凭证创建曾漏截，导致携带超长 UA 的客户端每次登录必失败。
+    #[tokio::test]
+    async fn login_succeeds_with_overlong_user_agent() {
+        let db = test_txn().await;
+        let (uid, _rid, username, _role_key) = seed_user(&db).await;
+        let cache = MemoryCache::new();
+
+        let (resp, _refresh_token) = login(
+            &db,
+            &test_jwt_cfg(),
+            &cache,
+            login_req_with_captcha(&cache, &username, "pass123"),
+            LoginMeta {
+                ip: "127.0.0.1".into(),
+                agent: "Mozilla/5.0 ".repeat(40), // 480 字符 > 255
+            },
+        )
+        .await
+        .expect("超长 UA 不应导致登录失败");
+
+        assert_eq!(
+            jwt::verify(&resp.token, "test-secret").unwrap().user_id,
+            uid
+        );
+
+        let record = sys_refresh_token::Entity::find()
+            .filter(sys_refresh_token::Column::UserId.eq(uid))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("登录成功应创建凭证记录");
+        assert_eq!(
+            record.agent.chars().count(),
+            255,
+            "超长 UA 落库前应截断到列宽"
+        );
     }
 
     #[tokio::test]

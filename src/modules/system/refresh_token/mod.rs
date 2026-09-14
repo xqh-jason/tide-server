@@ -10,7 +10,8 @@ pub mod dto;
 pub mod repo;
 pub mod service;
 
-/// 刷新凭证端点：`POST /api/v1/refresh-token/{list,delete,delete-batch,force-logout}`。
+/// 刷新凭证端点：`POST /api/v1/refresh-token/{list,delete,delete-batch,force-logout,force-logout-user}`。
+/// 后两者是特殊契约端点：前者按会话 id（单条），后者按用户 id（该用户全部有效会话）。
 pub fn routes() -> Router {
     Router::new()
         .oapi_tags(["刷新凭证"])
@@ -18,4 +19,5 @@ pub fn routes() -> Router {
         .push(Router::with_path("delete").post(api::delete_refresh_token))
         .push(Router::with_path("delete-batch").post(api::delete_refresh_token_batch))
         .push(Router::with_path("force-logout").post(api::force_logout_refresh_token))
+        .push(Router::with_path("force-logout-user").post(api::force_logout_user))
 }

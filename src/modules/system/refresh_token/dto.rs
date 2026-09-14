@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::entity::sys_refresh_token;
 use crate::utils::PageQuery;
+use crate::utils::user_ref::UserRefNames;
 
 /// 「在线」判定窗口：`last_active_at` 距今不超过该分钟数即视为在线。
 pub const ONLINE_WINDOW_MINUTES: i64 = 5;
@@ -33,8 +34,10 @@ pub struct RefreshTokenResp {
     pub online: bool,
     /// 吊销时间；NULL 表示会话有效
     pub revoked_at: Option<String>,
-    /// 吊销操作人（0=本人登出/系统，>0=管理员 user_id）
+    /// 吊销操作人 user_id（本人登出 = 本人 id；`0` = 系统写入，无操作人）
     pub revoked_by: u64,
+    /// 吊销操作人名称（由 `fill_user_names` 拼装；未吊销或系统写入为空串）
+    pub revoked_by_name: String,
     /// 吊销原因
     pub revoke_reason: String,
 }
@@ -56,8 +59,16 @@ impl From<sys_refresh_token::Model> for RefreshTokenResp {
                 .revoked_at
                 .map(crate::utils::serde_format::format_datetime),
             revoked_by: m.revoked_by,
+            revoked_by_name: String::new(),
             revoke_reason: m.revoke_reason,
         }
+    }
+}
+
+/// `revoked_by` 是人字段：由 `fill_user_names` 批量补齐 `revoked_by_name`。
+impl UserRefNames for RefreshTokenResp {
+    fn set_user_ref_names(&mut self, names: &std::collections::HashMap<u64, String>) {
+        self.revoked_by_name = names.get(&self.revoked_by).cloned().unwrap_or_default();
     }
 }
 
@@ -97,4 +108,12 @@ pub struct CreateRefreshTokenParams {
 pub struct DeleteBatchReq {
     /// 要删除的记录 id 列表（仅死记录被删除；活跃记录与不存在的 id 静默跳过）
     pub ids: Vec<u64>,
+}
+
+/// 按用户强制下线请求。
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoutUserReq {
+    /// 目标用户 id（该用户全部仍然有效的会话将被吊销）
+    pub user_id: u64,
 }
