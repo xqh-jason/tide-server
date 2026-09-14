@@ -568,8 +568,11 @@ pub async fn update_user_status(
         return Err(AppError::Biz("系统内置管理员不允许修改状态".into()));
     }
 
-    let mut user: sys_user::ActiveModel = user.into();
-    user.status = Set(status);
+    let user = sys_user::ActiveModel {
+        id: Set(user_id),
+        status: Set(status),
+        ..Default::default()
+    };
     user_repo::update_user(txn, user, actor_id).await?;
     Ok(true)
 }
