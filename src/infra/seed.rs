@@ -21,6 +21,20 @@ pub const SEED_ADMIN_USERNAME: &str = "admin";
 /// 超级管理员角色键（与 `permission::SUPER_ROLE_KEY` 同值，避免依赖方向循环）。
 const SEED_SUPER_ROLE_KEY: &str = "super";
 
+/// 接口登记路径规范化：与 `middleware::api_permission::canonical_path` 同一规则。
+///
+/// 判定面查 `sys_api` 前会把请求路径规范化（逐段 decode + 丢弃空段 + 去尾斜杠），
+/// 故登记侧必须同步规范化，否则登记成含尾斜杠/重复斜杠/转义的形式会永远匹配不上，
+/// 该接口会落回 fail-open。返回 `Err` 时该条登记跳过并记日志（不阻止启动）。
+fn canonical_api_path(path: &str) -> anyhow::Result<String> {
+    let normalized = crate::middleware::api_permission::canonical_path(path);
+    anyhow::ensure!(
+        normalized.starts_with("/api/"),
+        "接口路径必须形如 /api/...，实际登记为 {path:?}"
+    );
+    Ok(normalized)
+}
+
 /// 播种互斥锁：ensure_seed 的"先查后插"在并发下不幂等（TOCTOU），
 /// 启动初始化与测试并发调用时通过进程内锁串行化。
 static SEED_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -561,8 +575,10 @@ const MENU_SEEDS: &[MenuSeed] = &[
     },
 ];
 
-/// API 种子定义：`path` 必须带 `/api/v1` 前缀（与 ApiPermission 中间件
-/// `req.uri().path()` 全路径精确匹配的口径一致），`method` 用大写。
+/// API 种子定义：`path` 必须带 `/api/v1` 前缀且**写成规范化形式**（无尾斜杠、无重复
+/// 斜杠、无转义），与 `middleware::api_permission::canonical_path` 的规范化结果
+/// 一致——判定面查 `sys_api` 前会先规范化请求路径，登记侧写法必须与之对齐；
+/// `method` 用大写。
 struct ApiSeed {
     path: &'static str,
     method: &'static str,
@@ -710,6 +726,12 @@ const API_SEEDS: &[ApiSeed] = &[
     api("/api/v1/sys-api/update", "POST", "API 修改", "接口管理"),
     api("/api/v1/sys-api/get", "POST", "API 详情", "接口管理"),
     api("/api/v1/sys-api/delete", "POST", "API 删除", "接口管理"),
+    api(
+        "/api/v1/sys-api/list-all",
+        "POST",
+        "全量 API 列表",
+        "接口管理",
+    ),
     // 操作日志
     api(
         "/api/v1/operation-log/list",
@@ -1169,19 +1191,29 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     //    status（禁用即放行）不会被启动重置；命中软删行仅告警跳过（不复活），
     //    既尊重删除意图，也避开 uk_api_path_method 唯一索引冲突。
     for seed in API_SEEDS {
+        // 登记侧规范化：与判定面 canonical_path 同一规则，防止种子里写含尾斜杠/
+        // 重复斜杠/转义的非规范形式而永远匹配不上（那会让该接口静默退回 fail-open）。
+        let path = match canonical_api_path(seed.path) {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::error!(%err, "API 种子路径非法，跳过登记");
+                continue;
+            }
+        };
+        debug_assert_eq!(path, seed.path, "API 种子路径应已写成规范化形式");
         let existing = sys_api::Entity::find()
-            .filter(sys_api::Column::Path.eq(seed.path))
+            .filter(sys_api::Column::Path.eq(path.as_str()))
             .filter(sys_api::Column::Method.eq(seed.method))
             .one(db)
             .await?;
         match existing {
             Some(api) if api.deleted_at.is_some() => {
-                tracing::warn!("API 种子跳过软删占位行：{} {}", seed.method, seed.path);
+                tracing::warn!("API 种子跳过软删占位行：{} {}", seed.method, path);
             }
             Some(_) => {}
             None => {
                 sys_api::ActiveModel {
-                    path: Set(seed.path.to_string()),
+                    path: Set(path.clone()),
                     method: Set(seed.method.to_string()),
                     description: Set(seed.description.to_string()),
                     api_group: Set(seed.api_group.to_string()),
@@ -1613,6 +1645,39 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(leaked, 0, "{contract_path} 不应登记");
+        }
+    }
+
+    /// API 种子路径必须是规范化写法：判定面查 `sys_api` 前会把请求路径规范化
+    /// （逐段 decode + 丢弃空段 + 去尾斜杠），登记成含尾斜杠/重复斜杠/转义的
+    /// 形式会永远匹配不上，该接口会静默退回 fail-open（2026-09-17 修）。
+    #[test]
+    fn api_seeds_use_canonical_paths() {
+        for seed in API_SEEDS {
+            assert!(
+                !seed.path.contains('%'),
+                "种子路径不得含转义：{} {}",
+                seed.method,
+                seed.path
+            );
+            assert!(
+                !seed.path.contains("//"),
+                "种子路径不得含重复斜杠：{} {}",
+                seed.method,
+                seed.path
+            );
+            assert!(
+                !seed.path.ends_with('/'),
+                "种子路径不得带尾斜杠：{} {}",
+                seed.method,
+                seed.path
+            );
+            assert!(
+                seed.path.starts_with("/api/v1/"),
+                "种子路径应形如 /api/v1/...：{} {}",
+                seed.method,
+                seed.path
+            );
         }
     }
 
