@@ -4,6 +4,7 @@ mod legacy;
 mod m20260913_000001_baseline;
 mod m20260913_000002_create_sys_refresh_token;
 mod m20260914_000001_fix_sys_refresh_token_revoked_by_comment;
+mod m20260917_000001_fix_sys_menu_permission_comment;
 
 pub struct Migrator;
 
@@ -40,6 +41,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260913_000001_baseline::Migration),
             Box::new(m20260913_000002_create_sys_refresh_token::Migration),
             Box::new(m20260914_000001_fix_sys_refresh_token_revoked_by_comment::Migration),
+            Box::new(m20260917_000001_fix_sys_menu_permission_comment::Migration),
         ]
     }
 }

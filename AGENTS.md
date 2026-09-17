@@ -78,7 +78,7 @@ refs = 实测 `grep -ro` 次数 / 文件数；Location 相对 `src/`。
   `deny`；`clippy.toml` 只放行测试代码
 - 注释用简体中文、中英文之间留空格；标识符用英文命名
 - handler 返回 `ApiResult<T>`，业务错误用 `AppError`，repo 一律 `?` 传播 → `src/utils/AGENTS.md`
-- 权限码、超管角色键等魔法字符串集中为常量（`SYSTEM_USER_CREATE`、`SUPER_ROLE_KEY`）
+- 超管角色键等魔法字符串集中为常量（`SUPER_ROLE_KEY`、`ADMIN_USERNAME`）；按钮权限码不再有后端常量（判定面只消费接口通道，2026-09-17 起）
 - 契约例外：`file/upload` 走 multipart，`file/download` 与 `site-config/get` 是 GET；OpenAPI 在
   `/api-doc/openapi.json` + `/swagger-ui`，只收 `#[endpoint]`；vben v5 默认 `successCode=0`，前端
   `request.ts` 必须显式改为 `code === 1`
@@ -98,7 +98,7 @@ refs = 实测 `grep -ro` 次数 / 文件数；Location 相对 `src/`。
 - 展示类查询（列表 / 详情 / 名称拼装）一律普通读，不要顺手加锁
 - 请求体不接受人字段（防伪造），审计字段由 repo 层统一盖章
 - `skills/` 是 Salvo 0.94 外部语料，禁止照抄其 API 到本项目的 0.95
-- README 的数字已过时（`#[test]` 实为 489、`API_SEEDS` 实为 86），勿以 README 为准
+- README 的数字已过时（`#[test]` 实为 489、`API_SEEDS` 实为 87），勿以 README 为准
 
 ## UNIQUE STYLES
 
