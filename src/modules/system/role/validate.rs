@@ -37,8 +37,11 @@ fn join_errors(errors: Vec<String>) -> Result<(), String> {
 }
 
 /// 角色写请求通用字段校验（create/update 共用，不含 id）。
-fn check_common_fields(req: (&str, &str, &str, i8, &[i8]), errors: &mut Vec<String>) {
-    let (role_name, role_key, remark, status, status_allowed) = req;
+fn check_common_fields(
+    req: (&str, &str, &str, i8, Vec<u64>, Vec<u64>, &[i8]),
+    errors: &mut Vec<String>,
+) {
+    let (role_name, role_key, remark, status, mut menu_ids, api_ids, status_allowed) = req;
     check_required_name(role_name, "角色名称", errors);
     check_required_name(role_key, "角色键", errors);
     // 保留字：任何角色（含新建）不得使用内置超管键。
@@ -51,6 +54,20 @@ fn check_common_fields(req: (&str, &str, &str, i8, &[i8]), errors: &mut Vec<Stri
     check::check_status(status, status_allowed)
         .map_err(|e| errors.push(e))
         .ok();
+
+    let menu_ids_len = menu_ids.len();
+    if menu_ids_len > 0 {
+        menu_ids.sort();
+        menu_ids.dedup();
+        if menu_ids_len != menu_ids.len() {
+            errors.push("菜单重复".to_string());
+        }
+    }
+
+    let duplicates = crate::utils::check::duplicate_ids(&api_ids);
+    if !duplicates.is_empty() {
+        errors.push("接口重复".to_string());
+    }
 }
 
 /// 创建角色请求校验。
@@ -62,6 +79,8 @@ pub fn validate_create_role(req: &CreateRoleReq, status_allowed: &[i8]) -> Resul
             &req.role_key,
             &req.remark,
             req.status,
+            req.menu_ids.clone(),
+            req.api_ids.clone(),
             status_allowed,
         ),
         &mut errors,
@@ -81,6 +100,8 @@ pub fn validate_update_role(req: &UpdateRoleReq, status_allowed: &[i8]) -> Resul
             &req.role_key,
             &req.remark,
             req.status,
+            req.menu_ids.clone(),
+            req.api_ids.clone(),
             status_allowed,
         ),
         &mut errors,
@@ -190,5 +211,32 @@ mod tests {
         let req = UpdateRoleStatusReq { id: 0, status: 1 };
         let err = validate_update_role_status(&req, &[0, 1]).unwrap_err();
         assert!(err.contains("角色 ID 必须大于 0"), "实际: {err}");
+    }
+
+    /// 菜单绑定重复：入参会撞 `uk(role_id, menu_id)`，必须在 validate 层拦住。
+    #[test]
+    fn create_duplicate_menu_ids_reports_message() {
+        let mut req = create_req();
+        req.menu_ids = vec![3, 3];
+        let err = validate_create_role(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("菜单重复"), "实际: {err}");
+    }
+
+    /// 接口绑定重复：同上，撞 `uk(role_id, api_id)`。
+    #[test]
+    fn update_duplicate_api_ids_reports_message() {
+        let mut req = update_req();
+        req.api_ids = vec![5, 7, 5];
+        let err = validate_update_role(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("接口重复"), "实际: {err}");
+    }
+
+    /// 去重检查不得误伤不重复列表（含乱序）。
+    #[test]
+    fn distinct_menu_and_api_ids_pass() {
+        let mut req = create_req();
+        req.menu_ids = vec![3, 1, 2];
+        req.api_ids = vec![7, 5, 6];
+        assert!(validate_create_role(&req, &[0, 1]).is_ok());
     }
 }

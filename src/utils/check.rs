@@ -4,6 +4,8 @@
 //! 由调用方从数据字典（`sys_dictionary`，`type="status"`）的启用项读取后传入——
 //! 读取入口见 `modules::dictionary::service::enabled_int_values`。
 
+use std::collections::HashSet;
+
 /// 状态值是否在允许集合内；合法返回 `Ok(())`，否则给出「仅允许：…」的中文错误。
 pub fn check_status(status: i8, allowed: &[i8]) -> Result<(), String> {
     if allowed.contains(&status) {
@@ -20,9 +22,44 @@ pub fn check_status(status: i8, allowed: &[i8]) -> Result<(), String> {
     }
 }
 
+pub fn duplicate_ids(ids: &[u64]) -> Vec<u64> {
+    let mut sorted = ids.to_vec();
+    sorted.sort_unstable();
+
+    let mut dup_ids = Vec::new();
+    for w in sorted.windows(2) {
+        let id = w[0];
+        if id == w[1] && dup_ids.last().copied() != Some(id) {
+            dup_ids.push(id);
+        }
+    }
+    dup_ids
+}
+
+/// 求「请求里的 id」减去「查到的 id」的差集，保持请求顺序。
+///
+/// 用于「请求携带的 id 集合」与「数据库实际查到（含存在性判定）的 id 集合」的比对，
+/// 差集即失效 id，由调用方拼入错误文案。
+pub fn collect_missing_ids(requested: &[u64], found: impl Iterator<Item = u64>) -> Vec<u64> {
+    let found: HashSet<u64> = found.collect();
+    requested
+        .iter()
+        .copied()
+        .filter(|id| !found.contains(id))
+        .collect()
+}
+
+/// 拼错误文案里的 id 列表（`1, 2, 3` 形式）。
+pub fn format_ids(ids: &[u64]) -> String {
+    ids.iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::check_status;
+    use super::{check_status, collect_missing_ids, format_ids};
 
     #[test]
     fn allowed_value_passes() {
@@ -39,5 +76,28 @@ mod tests {
     fn empty_allowed_reports_generic() {
         let err = check_status(0, &[]).unwrap_err();
         assert_eq!(err, "状态取值不合法");
+    }
+
+    #[test]
+    fn collect_missing_ids_keeps_request_order() {
+        assert_eq!(
+            collect_missing_ids(&[3, 1, 4], [1, 2].into_iter()),
+            vec![3, 4]
+        );
+    }
+
+    #[test]
+    fn collect_missing_ids_empty_when_all_found() {
+        assert!(collect_missing_ids(&[1, 2], [1, 2].into_iter()).is_empty());
+    }
+
+    #[test]
+    fn collect_missing_ids_empty_requested() {
+        assert!(collect_missing_ids(&[], [1].into_iter()).is_empty());
+    }
+
+    #[test]
+    fn format_ids_joins_with_comma() {
+        assert_eq!(format_ids(&[1, 22, 333]), "1, 22, 333");
     }
 }

@@ -4,6 +4,7 @@ use sea_orm::{
     ActiveValue::Set, ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait,
 };
 
+use crate::modules::system::role::service as role_service;
 use crate::modules::system::sys_api::dto::{ApiFilter, ApiListReq, UpdateApiReq};
 use crate::modules::system::sys_api::repo as api_repo;
 use crate::utils::PageData;
@@ -81,6 +82,9 @@ pub(crate) async fn create_api_in_tx(
         )));
     }
 
+    // 角色绑定查重
+    role_service::ensure_roles_exist(txn, &req.role_ids).await?;
+
     let model = sys_api::ActiveModel {
         path: Set(req.path.clone()),
         method: Set(req.method.clone()),
@@ -100,6 +104,7 @@ pub async fn update_api(
     req: &UpdateApiReq,
 ) -> Result<sys_api::Model, AppError> {
     let txn = db.begin().await.map_err(anyhow::Error::from)?;
+
     let result = update_api_in_tx(&txn, actor_id, req).await;
     if result.is_ok() {
         txn.commit().await.map_err(anyhow::Error::from)?;
@@ -114,10 +119,9 @@ pub(crate) async fn update_api_in_tx(
     actor_id: u64,
     req: &UpdateApiReq,
 ) -> Result<sys_api::Model, AppError> {
-    // 检查 API 是否存在
-    let Some(_) = api_repo::find_by_id(txn, req.id).await? else {
-        return Err(AppError::Biz(format!("API 不存在：{}", req.id)));
-    };
+    // 角色绑定查重
+    role_service::ensure_roles_exist(txn, &req.role_ids).await?;
+
     // path + method 查重（含软删），排除自身
     let dup =
         api_repo::find_by_path_method_include_deleted(txn, req.path.as_str(), req.method.as_str())
@@ -126,6 +130,11 @@ pub(crate) async fn update_api_in_tx(
     if dup {
         return Err(AppError::Biz("API 路径与方法已存在".to_string()));
     }
+
+    // 检查 API 是否存在
+    let Some(_) = api_repo::find_by_id(txn, req.id).await? else {
+        return Err(AppError::Biz(format!("API 不存在：{}", req.id)));
+    };
 
     let model = sys_api::ActiveModel {
         id: Set(req.id),
@@ -196,7 +205,8 @@ mod tests {
     use crate::modules::system::sys_api::dto::{CreateApiReq, UpdateApiReq};
     use crate::utils::error::AppError;
     use sea_orm::{
-        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+        ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, PaginatorTrait,
+        QueryFilter, Set,
     };
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -261,6 +271,35 @@ mod tests {
         .insert(db)
         .await
         .unwrap()
+    }
+
+    /// 带软删标记的角色：`sys_role.deleted_at` 直写，主表查询会把它当作不存在。
+    async fn seed_soft_deleted_role(db: &impl ConnectionTrait) -> sys_role::Model {
+        let role = seed_role(db).await;
+        let mut model: sys_role::ActiveModel = role.clone().into();
+        model.deleted_at = Set(Some(chrono::Local::now().naive_local()));
+        model.update(db).await.unwrap()
+    }
+
+    fn update_req(id: u64, path: String, role_ids: Vec<u64>) -> UpdateApiReq {
+        UpdateApiReq {
+            id,
+            path,
+            method: "POST".to_string(),
+            description: unique("update_desc"),
+            api_group: "service_test".to_string(),
+            status: 1,
+            role_ids,
+        }
+    }
+
+    /// 统计某 API 的授权关联行数（`sys_role_api` 硬删表，有行即授权）。
+    async fn link_count(db: &impl ConnectionTrait, api_id: u64) -> u64 {
+        sys_role_api::Entity::find()
+            .filter(sys_role_api::Column::ApiId.eq(api_id))
+            .count(db)
+            .await
+            .unwrap()
     }
 
     /// 创建时 path + method 重复（含软删占位）应被业务层拒绝。
@@ -441,5 +480,135 @@ mod tests {
         assert_eq!(updated.description, "替换授权");
         assert_eq!(links.len(), 1, "旧授权应被清空，只剩新授权");
         assert_eq!(links[0].role_id, role_new.id);
+    }
+
+    /// 授权角色 id 重复时应在写关联前被拒（DB 侧 `uk(role_id, api_id)` 会撞成 Internal）。
+    #[tokio::test]
+    async fn create_api_rejects_duplicate_role_ids() {
+        let txn = test_txn().await;
+        let role = seed_role(&txn).await;
+        let path = format!("/api/v1/{}/dup_role", unique("create"));
+
+        let result = create_api_in_tx(
+            &txn,
+            ACTOR_ID,
+            &create_req(path.clone(), "POST".to_string(), vec![role.id, role.id]),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("角色重复")),
+            "重复授权同一角色应被业务层拒绝，实际：{result:?}"
+        );
+    }
+
+    /// 更新时授权角色 id 重复同样应被拒（此时全量替换关联已删旧行，若不拦则写入必撞主键）。
+    #[tokio::test]
+    async fn update_api_rejects_duplicate_role_ids() {
+        let txn = test_txn().await;
+        let role = seed_role(&txn).await;
+        let path = format!("/api/v1/{}/upd_dup_role", unique("update"));
+        let created = create_api_in_tx(
+            &txn,
+            ACTOR_ID,
+            &create_req(path.clone(), "POST".to_string(), vec![role.id]),
+        )
+        .await
+        .expect("前置：创建带授权 API 应成功");
+
+        let result = update_api_in_tx(
+            &txn,
+            ACTOR_ID,
+            &update_req(created.id, path, vec![role.id, role.id]),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("角色重复")),
+            "重复授权同一角色应被业务层拒绝，实际：{result:?}"
+        );
+    }
+
+    /// 授权给不存在的角色应被拒，且不留下指向该角色的孤儿关联行。
+    #[tokio::test]
+    async fn create_api_rejects_missing_role() {
+        let txn = test_txn().await;
+        let missing_role_id = 9_999_999_997;
+        let path = format!("/api/v1/{}/miss_role", unique("create"));
+
+        let result = create_api_in_tx(
+            &txn,
+            ACTOR_ID,
+            &create_req(path, "POST".to_string(), vec![missing_role_id]),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("角色不存在")),
+            "授权不存在的角色应被业务层拒绝，实际：{result:?}"
+        );
+        let orphans = sys_role_api::Entity::find()
+            .filter(sys_role_api::Column::RoleId.eq(missing_role_id))
+            .count(&txn)
+            .await
+            .unwrap();
+        assert_eq!(orphans, 0, "拒绝后不应留下孤儿授权行");
+    }
+
+    /// 更新时授权给不存在的角色应被拒，且不留下孤儿关联行。
+    #[tokio::test]
+    async fn update_api_rejects_missing_role() {
+        let txn = test_txn().await;
+        let path = format!("/api/v1/{}/upd_miss_role", unique("update"));
+        let created = create_api_in_tx(
+            &txn,
+            ACTOR_ID,
+            &create_req(path.clone(), "POST".to_string(), vec![]),
+        )
+        .await
+        .expect("前置：创建无授权 API 应成功");
+        let missing_role_id = 9_999_999_996;
+
+        let result = update_api_in_tx(
+            &txn,
+            ACTOR_ID,
+            &update_req(created.id, path, vec![missing_role_id]),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("角色不存在")),
+            "授权不存在的角色应被业务层拒绝，实际：{result:?}"
+        );
+        assert_eq!(
+            link_count(&txn, created.id).await,
+            0,
+            "拒绝后不应留下孤儿授权行"
+        );
+    }
+
+    /// 已软删角色视为不存在：授权应被拒（与菜单 / 接口侧的软删语义一致）。
+    #[tokio::test]
+    async fn create_api_rejects_soft_deleted_role() {
+        let txn = test_txn().await;
+        let role = seed_soft_deleted_role(&txn).await;
+        let path = format!("/api/v1/{}/soft_role", unique("create"));
+
+        let result = create_api_in_tx(
+            &txn,
+            ACTOR_ID,
+            &create_req(path, "POST".to_string(), vec![role.id]),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(AppError::Biz(ref m)) if m.contains("角色不存在")),
+            "授权已软删角色应被业务层拒绝，实际：{result:?}"
+        );
+        assert_eq!(
+            link_count(&txn, result.map(|api| api.id).unwrap_or(0)).await,
+            0,
+            "拒绝后不应留下孤儿授权行"
+        );
     }
 }

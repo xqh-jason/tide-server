@@ -18,6 +18,23 @@ pub async fn find_by_id(
     Ok(role)
 }
 
+pub async fn find_by_ids_for_update(
+    db: &impl ConnectionTrait,
+    ids: &[u64],
+) -> anyhow::Result<Vec<sys_role::Model>> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let roles = sys_role::Entity::find()
+        .filter(sys_role::Column::Id.is_in(ids.iter().copied()))
+        .filter(sys_role::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .all(db)
+        .await?;
+    Ok(roles)
+}
+
 /// 查重辅助：role_key 唯一（含软删占位）。
 pub async fn find_by_role_key_include_deleted(
     db: &impl ConnectionTrait,

@@ -1,6 +1,7 @@
 use crate::modules::system::permission::SUPER_ROLE_KEY;
 use crate::modules::system::role::dto::UpdateRoleStatusReq;
 use crate::utils::PageData;
+use crate::utils::check::duplicate_ids;
 use crate::{
     modules::system::{
         menu::service as menu_service,
@@ -10,6 +11,7 @@ use crate::{
         },
         sys_api::service as api_service,
     },
+    utils::check::{collect_missing_ids, format_ids},
     utils::error::AppError,
 };
 use sea_orm::{
@@ -33,6 +35,11 @@ async fn ensure_menus_and_apis_exist(
     api_ids: &[u64],
 ) -> Result<(), AppError> {
     if !menu_ids.is_empty() {
+        let duplicates = duplicate_ids(menu_ids);
+        if !duplicates.is_empty() {
+            return Err(AppError::Biz("菜单重复".to_string()));
+        }
+
         let found = menu_service::find_by_ids_for_update(txn, menu_ids).await?;
         let missing = collect_missing_ids(menu_ids, found.iter().map(|menu| menu.id));
         if !missing.is_empty() {
@@ -44,6 +51,11 @@ async fn ensure_menus_and_apis_exist(
     }
 
     if !api_ids.is_empty() {
+        let duplicates = duplicate_ids(api_ids);
+        if !duplicates.is_empty() {
+            return Err(AppError::Biz("接口重复".to_string()));
+        }
+
         let found = api_service::find_by_ids_for_update(txn, api_ids).await?;
         let missing = collect_missing_ids(api_ids, found.iter().map(|api| api.id));
         if !missing.is_empty() {
@@ -55,20 +67,6 @@ async fn ensure_menus_and_apis_exist(
     }
 
     Ok(())
-}
-
-/// 求「请求里的 id」减去「查到的 id」的差集，保持请求顺序。
-fn collect_missing_ids(requested: &[u64], found: impl Iterator<Item = u64>) -> Vec<&u64> {
-    let found = found.collect::<Vec<_>>();
-    requested.iter().filter(|id| !found.contains(id)).collect()
-}
-
-/// 拼错误文案里的 id 列表。
-fn format_ids(ids: &[&u64]) -> String {
-    ids.iter()
-        .map(|id| id.to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// 分页查询角色（keyword 模糊匹配 role_name / role_key，status 精确，审计过滤），排除软删除。
@@ -118,6 +116,28 @@ pub async fn find_by_ids(
 ) -> Result<Vec<sys_role::Model>, AppError> {
     let roles = role_repo::find_by_ids(db, ids).await?;
     Ok(roles)
+}
+
+pub async fn ensure_roles_exist(
+    txn: &DatabaseTransaction,
+    role_ids: &[u64],
+) -> Result<(), AppError> {
+    if role_ids.is_empty() {
+        return Ok(());
+    }
+    let duplicates = duplicate_ids(role_ids);
+    if !duplicates.is_empty() {
+        return Err(AppError::Biz("角色重复".to_string()));
+    }
+    let roles = role_repo::find_by_ids_for_update(txn, role_ids).await?;
+    let missing = collect_missing_ids(role_ids, roles.iter().map(|role| role.id));
+    if !missing.is_empty() {
+        return Err(AppError::Biz(format!(
+            "角色不存在：{}",
+            format_ids(&missing)
+        )));
+    }
+    Ok(())
 }
 
 /// 对外入口：开事务后委托 `create_role_in_tx`，成功后提交。
@@ -450,6 +470,70 @@ mod tests {
         .insert(db)
         .await
         .unwrap()
+    }
+
+    /// 创建时 role_ids 含重复 id 应在写关联前被拒。
+    ///
+    /// 输出端口（`role/validate.rs`）已拦重复，但 `*_in_tx` 是事务内不变量守卫的所在地，
+    /// 调用方绕过 validate 时不能把 `uk(role_id, menu_id)` 冲突漏成 `internal error`。
+    #[tokio::test]
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
+    async fn create_role_rejects_duplicate_menu_and_api_ids() {
+        let txn = test_txn().await;
+        let menu = seed_menu(&txn).await;
+        let api = seed_api(&txn).await;
+
+        let mut dup_menu = create_req(unique("dup_menu_name"), unique("dup_menu_key"));
+        dup_menu.menu_ids = vec![menu.id, menu.id];
+        let menu_result = create_role_in_tx(&txn, ACTOR_ID, &dup_menu).await;
+
+        let mut dup_api = create_req(unique("dup_api_name"), unique("dup_api_key"));
+        dup_api.api_ids = vec![api.id, api.id];
+        let api_result = create_role_in_tx(&txn, ACTOR_ID, &dup_api).await;
+
+        assert!(
+            matches!(menu_result, Err(AppError::Biz(ref m)) if m.contains("菜单重复")),
+            "重复绑定同一菜单应被业务层拒绝，实际：{menu_result:?}"
+        );
+        assert!(
+            matches!(api_result, Err(AppError::Biz(ref m)) if m.contains("接口重复")),
+            "重复绑定同一接口应被业务层拒绝，实际：{api_result:?}"
+        );
+    }
+
+    /// 更新时 menu_ids / api_ids 含重复 id 同样应被拒（全量替换链路）。
+    #[tokio::test]
+    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
+    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
+    async fn update_role_rejects_duplicate_menu_and_api_ids() {
+        let txn = test_txn().await;
+        let role = seed_role(
+            &txn,
+            &unique("dup_upd_role"),
+            &unique("dup_upd_key"),
+            1,
+            None,
+        )
+        .await;
+        let menu = seed_menu(&txn).await;
+        let api = seed_api(&txn).await;
+
+        let dup_menu = bind_menu_req(&role, vec![menu.id, menu.id]);
+        let menu_result = update_role_in_tx(&txn, ACTOR_ID, &dup_menu).await;
+
+        let mut dup_api = bind_menu_req(&role, Vec::new());
+        dup_api.api_ids = vec![api.id, api.id];
+        let api_result = update_role_in_tx(&txn, ACTOR_ID, &dup_api).await;
+
+        assert!(
+            matches!(menu_result, Err(AppError::Biz(ref m)) if m.contains("菜单重复")),
+            "重复绑定同一菜单应被业务层拒绝，实际：{menu_result:?}"
+        );
+        assert!(
+            matches!(api_result, Err(AppError::Biz(ref m)) if m.contains("接口重复")),
+            "重复绑定同一接口应被业务层拒绝，实际：{api_result:?}"
+        );
     }
 
     /// 硬删角色及其关联（真连接用例必须真实提交，无法用事务回滚隔离，只能手工清理）。

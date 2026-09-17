@@ -45,6 +45,14 @@ fn join_errors(errors: Vec<String>) -> Result<(), String> {
     }
 }
 
+/// 授权角色 id 去重校验：重复入参会撞 `sys_role_api` 的 `uk(role_id, api_id)`，
+/// 必须在写库前拦住（否则只能拿到 internal error）。
+fn check_duplicate_role_ids(role_ids: &[u64], errors: &mut Vec<String>) {
+    if !check::duplicate_ids(role_ids).is_empty() {
+        errors.push("角色重复".to_string());
+    }
+}
+
 /// API 写请求通用字段校验（create/update 共用，不含 id）。
 fn check_common_fields(
     path: &str,
@@ -85,6 +93,7 @@ pub fn validate_create_api(req: &CreateApiReq, status_allowed: &[i8]) -> Result<
         status_allowed,
         &mut errors,
     );
+    check_duplicate_role_ids(&req.role_ids, &mut errors);
     join_errors(errors)
 }
 
@@ -103,6 +112,7 @@ pub fn validate_update_api(req: &UpdateApiReq, status_allowed: &[i8]) -> Result<
         status_allowed,
         &mut errors,
     );
+    check_duplicate_role_ids(&req.role_ids, &mut errors);
     join_errors(errors)
 }
 
@@ -186,5 +196,30 @@ mod tests {
         let req = to_update_req(create_req(), 0);
         let err = validate_update_api(&req, &[0, 1]).unwrap_err();
         assert!(err.contains("API ID 必须大于 0"), "实际: {err}");
+    }
+
+    /// 授权角色重复：入参重复会在关系表撞 `uk(role_id, api_id)`，必须在 validate 层拦住。
+    #[test]
+    fn create_duplicate_role_ids_reports_message() {
+        let mut req = create_req();
+        req.role_ids = vec![3, 3];
+        let err = validate_create_api(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("角色重复"), "实际: {err}");
+    }
+
+    #[test]
+    fn update_duplicate_role_ids_reports_message() {
+        let mut req = to_update_req(create_req(), 1);
+        req.role_ids = vec![5, 7, 5];
+        let err = validate_update_api(&req, &[0, 1]).unwrap_err();
+        assert!(err.contains("角色重复"), "实际: {err}");
+    }
+
+    /// 不重复的授权列表照旧放行（去重检查不得误伤）。
+    #[test]
+    fn distinct_role_ids_pass() {
+        let mut req = create_req();
+        req.role_ids = vec![1, 2, 3];
+        assert!(validate_create_api(&req, &[0, 1]).is_ok());
     }
 }
