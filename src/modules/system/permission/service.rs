@@ -1,4 +1,4 @@
-//! 权限业务规则层。
+//! 权限业务规则层（后端授权判定的唯一内核）。
 
 use crate::modules::system::permission::SUPER_ROLE_KEY;
 use crate::modules::system::permission::repo as permission_repo;
@@ -6,36 +6,16 @@ use crate::modules::system::user::repo as user_repo;
 use crate::utils::error::AppError;
 use sea_orm::ConnectionTrait;
 
-/// 判断用户是否拥有指定操作权限。
-///
-/// `super` 角色作为项目当前约定拥有全部权限。
-pub async fn has_permission(
-    db: &impl ConnectionTrait,
-    user_id: u64,
-    permission_code: &str,
-) -> Result<bool, AppError> {
-    let roles = user_repo::find_roles_by_user_id(db, user_id).await?;
-    if roles.iter().any(|role| role.role_key == SUPER_ROLE_KEY) {
-        return Ok(true);
-    }
-
-    let role_ids: Vec<u64> = roles.iter().map(|role| role.id).collect();
-    let permission_codes =
-        permission_repo::find_permission_codes_by_role_ids(db, &role_ids).await?;
-    Ok(permission_codes.iter().any(|code| code == permission_code))
-}
-
 /// 接口级授权判定：请求 `path + method` 已登记 `sys_api` 时校验角色授权，否则放行。
 ///
-/// 与 [`has_permission`]（按钮权限码）互为双通道：按钮码管「前端按钮显隐 +
-/// service 显式校验」，本函数管「接口资源集中拦截」，共同构成
-/// 「看得到按钮但调接口被拒」的双保险。
+/// 后端授权只有这一条通道（按钮权限码只控前端按钮显隐，判定面不消费它，
+/// 见 `permission/mod.rs` 域文档），由 `middleware/api_permission.rs` 在每个
+/// 受保护请求上调用。
 ///
 /// 判定顺序：
 /// 1. 未登记（无生效 API，含软删/禁用）→ 放行（fail-open：`sys_api` 空表与
 ///    新增接口零影响，按域逐步登记接管）；
-/// 2. 用户实时有效角色含 `super` → 放行（不信任 JWT 角色快照，与 `has_permission`
-///    同一短路口径）；
+/// 2. 用户实时有效角色含 `super` → 放行（不信任 JWT 角色快照）；
 /// 3. 用户角色与该 API 的 `sys_role_api` 授权有交集 → 放行，否则拒绝。
 pub async fn has_api_permission(
     db: &impl ConnectionTrait,
@@ -56,10 +36,9 @@ pub async fn has_api_permission(
     }
 
     let role_ids = roles.into_iter().map(|role| role.id).collect::<Vec<_>>();
-    let has_permission =
-        permission_repo::exists_role_api(db, api_model.id, role_ids.as_slice()).await?;
+    let allowed = permission_repo::exists_role_api(db, api_model.id, role_ids.as_slice()).await?;
 
-    Ok(has_permission)
+    Ok(allowed)
 }
 
 #[cfg(test)]
@@ -249,5 +228,49 @@ mod tests {
 
         assert!(deleted_result.unwrap(), "软删 API 等同未登记，应放行");
         assert!(disabled_result.unwrap(), "禁用 API 等同未登记，应放行");
+    }
+
+    /// 授权只看库内实时角色状态：角色被禁用 / 软删后，关系表残留的授权不生效。
+    #[tokio::test]
+    async fn has_api_permission_rejects_actor_whose_roles_are_disabled_or_deleted() {
+        let db = test_txn().await;
+        let api = seed_api(&db, 1, None).await;
+        let user = seed_user(&db).await;
+
+        let disabled_role = sys_role::ActiveModel {
+            role_name: Set(unique("apisvc_disabled_role")),
+            role_key: Set(unique("apisvc_disabled_key")),
+            sort: Set(0),
+            status: Set(0),
+            remark: Set(String::new()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let deleted_role = sys_role::ActiveModel {
+            role_name: Set(unique("apisvc_deleted_role")),
+            role_key: Set(unique("apisvc_deleted_key")),
+            sort: Set(0),
+            status: Set(1),
+            remark: Set(String::new()),
+            deleted_at: Set(Some(chrono::Local::now().naive_local())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        bind_user_role(&db, user.id, disabled_role.id).await;
+        bind_user_role(&db, user.id, deleted_role.id).await;
+        bind_role_api(&db, disabled_role.id, api.id).await;
+        bind_role_api(&db, deleted_role.id, api.id).await;
+
+        let result = has_api_permission(&db, user.id, &api.path, &api.method).await;
+
+        assert!(
+            !result.unwrap(),
+            "角色已禁用/软删时，残留的角色-接口授权不应生效"
+        );
     }
 }

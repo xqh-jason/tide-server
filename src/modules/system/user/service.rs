@@ -7,10 +7,7 @@ use crate::entity::sys_user;
 use crate::entity::{sys_role, sys_user_dept, sys_user_position};
 use crate::modules::system::dept::service as dept_service;
 use crate::modules::system::permission::repo as permission_repo;
-use crate::modules::system::permission::{
-    ADMIN_USERNAME, SUPER_ROLE_KEY, SYSTEM_USER_CREATE, SYSTEM_USER_UPDATE,
-    service as permission_service,
-};
+use crate::modules::system::permission::{ADMIN_USERNAME, SUPER_ROLE_KEY};
 use crate::modules::system::position::service as position_service;
 use crate::modules::system::role::service as role_service;
 use crate::modules::system::user::dto::{
@@ -99,7 +96,7 @@ pub async fn get_access_codes(
 }
 
 /// super 角色分配保护：非 super 操作者不得把内置超管角色绑定到目标用户，
-/// 防止拥有 `system:user:create/update` 权限码的普通管理员自我提权。
+/// 防止能创建/更新用户的普通管理员自我提权。
 async fn ensure_no_super_assignment(
     txn: &impl ConnectionTrait,
     actor_id: u64,
@@ -118,7 +115,8 @@ async fn ensure_no_super_assignment(
     Err(AppError::Biz("不允许分配系统内置超级管理员角色".into()))
 }
 
-/// 创建用户（发起人 `actor_id` 需拥有 `system:user:create` 权限）。
+/// 创建用户（授权在接口边界完成：`ApiPermission` 中间件按 `sys_api` 判定，
+/// service 层不再自带按钮码闸）。
 /// 对外入口：开事务后委托 `create_user_in_tx`，成功后提交。
 pub async fn create_user(
     db: &DatabaseConnection,
@@ -133,7 +131,7 @@ pub async fn create_user(
     result
 }
 
-/// 事务内完整业务（权限校验 + 查重 + 角色校验 + 写入），不管理事务边界。
+/// 事务内完整业务（查重 + 角色校验 + 写入），不管理事务边界。
 ///
 /// 供对外入口（本文件 `create_user`）与测试外层事务调用。
 pub(crate) async fn create_user_in_tx(
@@ -141,10 +139,6 @@ pub(crate) async fn create_user_in_tx(
     actor_id: u64,
     req: CreateUserReq,
 ) -> Result<sys_user::Model, AppError> {
-    if !permission_service::has_permission(txn, actor_id, SYSTEM_USER_CREATE).await? {
-        return Err(AppError::Biz("用户没有创建用户权限".into()));
-    }
-
     // username唯一性检测
     if user_repo::find_by_username_include_deleted(txn, &req.username)
         .await?
@@ -308,7 +302,7 @@ pub async fn get_user(
     Ok(user)
 }
 
-/// 更新用户（发起人 `actor_id` 需拥有 `system:user:update` 权限）。
+/// 更新用户（授权同上：接口边界由 `ApiPermission` 判定）。
 ///
 /// 内置超管 admin（`ADMIN_USERNAME`）不允许被编辑：其密码由启动 seed 统一重置，
 /// 编辑入口拦截，防止账号被禁用或角色被改导致系统失守。
@@ -327,7 +321,7 @@ pub async fn update_user_with_links(
     result
 }
 
-/// 事务内完整业务（权限校验 + 目标/重名校验 + 角色校验 + 写入），不管理事务边界。
+/// 事务内完整业务（目标/重名校验 + 角色校验 + 写入），不管理事务边界。
 ///
 /// 供对外入口（本文件 `update_user_with_links`）与测试外层事务调用。
 pub(crate) async fn update_user_in_tx(
@@ -335,10 +329,6 @@ pub(crate) async fn update_user_in_tx(
     actor_id: u64,
     req: UpdateUserReq,
 ) -> Result<sys_user::Model, AppError> {
-    if !permission_service::has_permission(txn, actor_id, SYSTEM_USER_UPDATE).await? {
-        return Err(AppError::Biz("用户没有更新用户权限".into()));
-    }
-
     let Some(user) = user_repo::find_by_id(txn, req.id).await? else {
         return Err(AppError::Biz("用户不存在".into()));
     };
@@ -705,9 +695,7 @@ mod tests {
         sys_user_role,
     };
     use crate::modules::system::dept::repo as dept_repo;
-    use crate::modules::system::permission::{
-        ADMIN_USERNAME, SUPER_ROLE_KEY, SYSTEM_USER_CREATE, SYSTEM_USER_UPDATE,
-    };
+    use crate::modules::system::permission::{ADMIN_USERNAME, SUPER_ROLE_KEY};
     use crate::modules::system::position::repo as position_repo;
     use crate::modules::system::user::dto::UserDeptReq;
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter};
@@ -903,42 +891,17 @@ mod tests {
         .unwrap();
     }
 
+    /// service 层不做按钮码授权判断：无任何权限码的操作者也能走到写入逻辑
+    /// （授权在 HTTP 边界由 `ApiPermission` 中间件按 `sys_api` 判定）。
+    /// 本测试防止按钮码闸被重新塞回 service（2026-09-17 已连根删除）。
     #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
-    async fn create_user_denies_actor_without_permission_and_saves_nothing() {
+    async fn create_user_does_not_gate_on_button_permission_codes() {
         let txn = test_txn().await;
         let actor = seed_actor(&txn, None).await;
-        let role = seed_role(&txn, 1, None).await;
-        bind_user_role(&txn, actor.id, role.id).await;
 
-        let target = unique_name("no_perm_target");
-        let result = create_user_in_tx(&txn, actor.id, request(target.clone(), vec![])).await;
-        assert!(
-            result.is_err(),
-            "无 system:user:create 权限应被拒绝: {result:?}"
-        );
-        assert!(
-            user_repo::find_by_username_include_deleted(&txn, &target)
-                .await
-                .unwrap()
-                .is_none(),
-            "无权限时不应创建目标用户"
-        );
-    }
-
-    #[tokio::test]
-    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
-    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
-    async fn create_user_allows_actor_with_button_permission() {
-        let txn = test_txn().await;
-        let actor = seed_actor(&txn, None).await;
-        let role = seed_role(&txn, 1, None).await;
-        let menu = seed_button(&txn, SYSTEM_USER_CREATE).await;
-        bind_user_role(&txn, actor.id, role.id).await;
-        bind_role_menu(&txn, role.id, menu.id).await;
-
-        let target = unique_name("perm_ok_target");
+        let target = unique_name("no_button_code_target");
         let result = create_user_in_tx(&txn, actor.id, request(target.clone(), vec![])).await;
 
         // 先捕获断言所需事实；断言失败由外层事务自动回滚，无需手工清理。
@@ -952,60 +915,9 @@ mod tests {
         };
         assert!(
             result.is_ok(),
-            "拥有 system:user:create 的普通用户应创建成功: {result:?}"
+            "service 层不应有按钮码闸（授权在 HTTP 边界）: {result:?}"
         );
         assert_eq!(saved_name.as_deref(), Some(target.as_str()));
-    }
-
-    #[tokio::test]
-    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
-    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
-    async fn create_user_allows_super_actor() {
-        let txn = test_txn().await;
-        let actor = seed_actor(&txn, None).await;
-        let super_fixture = load_super_role(&txn).await;
-        bind_user_role(&txn, actor.id, super_fixture.role.id).await;
-
-        let target = unique_name("super_target");
-        let result = create_user_in_tx(&txn, actor.id, request(target.clone(), vec![])).await;
-
-        // 先捕获断言所需事实；断言失败由外层事务自动回滚，无需手工清理。
-        let saved_name = match &result {
-            Ok(user) => user_repo::find_by_id(&txn, user.id)
-                .await
-                .ok()
-                .flatten()
-                .map(|user| user.username),
-            Err(_) => None,
-        };
-        assert!(result.is_ok(), "有效 super 角色应创建成功: {result:?}");
-        assert_eq!(saved_name.as_deref(), Some(target.as_str()));
-    }
-
-    #[tokio::test]
-    // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
-    // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
-    async fn create_user_denies_actor_whose_roles_are_disabled_or_deleted() {
-        let txn = test_txn().await;
-        let actor = seed_actor(&txn, None).await;
-        let disabled_role = seed_role(&txn, 0, None).await;
-        let deleted_role = seed_role(&txn, 1, Some(chrono::Local::now().naive_local())).await;
-        bind_user_role(&txn, actor.id, disabled_role.id).await;
-        bind_user_role(&txn, actor.id, deleted_role.id).await;
-
-        // JWT 里可能还保留旧角色（如 super），但授权只看数据库实时状态。
-        let target = unique_name("stale_role_target");
-        let result = create_user_in_tx(&txn, actor.id, request(target.clone(), vec![])).await;
-        assert!(
-            result.is_err(),
-            "库中角色已禁用/删除时即使 JWT 保留旧角色也应拒绝: {result:?}"
-        );
-        assert!(
-            user_repo::find_by_username_include_deleted(&txn, &target)
-                .await
-                .unwrap()
-                .is_none()
-        );
     }
 
     #[tokio::test]
@@ -1301,53 +1213,39 @@ mod tests {
 
     // ---- update_user（admin 保护 + 权限校验）----
 
-    /// 无权限操作者调用 update 被拒，且目标用户数据不变。
+    /// service 层不做按钮码授权判断：无角色的操作者也能走到更新逻辑
+    /// （授权在 HTTP 边界由 `ApiPermission` 中间件按 `sys_api` 判定）。
+    /// 本测试防止按钮码闸被重新塞回 service（2026-09-17 已连根删除）。
     #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
-    async fn update_user_denies_actor_without_permission_and_saves_nothing() {
+    async fn update_user_does_not_gate_on_button_permission_codes() {
         let txn = test_txn().await;
-        let target = seed_target_user(&txn, unique_name("no_perm_update")).await;
+        let target = seed_target_user(&txn, unique_name("no_button_code_update")).await;
+        let actor = seed_actor(&txn, None).await;
 
-        // 无权限操作者：普通角色，无 system:user:update 按钮。
-        let no_perm_actor = seed_actor(&txn, None).await;
-        let no_perm_role = seed_role(&txn, 1, None).await;
-        bind_user_role(&txn, no_perm_actor.id, no_perm_role.id).await;
+        let mut req = update_request(target.id, target.username.clone(), vec![]);
+        req.nickname = "无按钮码也更新".to_string();
+        let result = update_user_in_tx(&txn, actor.id, req).await;
 
-        let nickname_before = target.nickname.clone();
-        let result = update_user_in_tx(
-            &txn,
-            no_perm_actor.id,
-            update_request(target.id, target.username.clone(), vec![]),
-        )
-        .await;
-
-        let untouched = user_repo::find_by_id(&txn, target.id)
+        let saved = user_repo::find_by_id(&txn, target.id)
             .await
             .unwrap()
             .expect("目标用户仍应存在");
-
         assert!(
-            result.is_err(),
-            "无 system:user:update 权限应被拒绝: {result:?}"
+            result.is_ok(),
+            "service 层不应有按钮码闸（授权在 HTTP 边界）: {result:?}"
         );
-        assert_eq!(
-            untouched.nickname, nickname_before,
-            "无权限更新时目标用户不应被修改"
-        );
+        assert_eq!(saved.nickname, "无按钮码也更新");
     }
 
-    /// 拥有 system:user:update 按钮权限的操作者可更新普通用户（含角色重绑与密码更新）。
+    /// 更新普通用户：昵称 / 密码 / 角色关联一并落库（授权由接口通道负责）。
     #[tokio::test]
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
-    async fn update_user_allows_actor_with_button_permission() {
+    async fn update_user_updates_nickname_password_and_rebinds_roles() {
         let txn = test_txn().await;
         let actor = seed_actor(&txn, None).await;
-        let role = seed_role(&txn, 1, None).await;
-        let menu = seed_button(&txn, SYSTEM_USER_UPDATE).await;
-        bind_user_role(&txn, actor.id, role.id).await;
-        bind_role_menu(&txn, role.id, menu.id).await;
 
         let assign_role = sys_role::ActiveModel {
             role_name: Set("更新后分配角色".to_string()),
@@ -1666,10 +1564,6 @@ mod tests {
     async fn create_user_rejects_super_role_assignment_by_non_super_actor() {
         let txn = test_txn().await;
         let actor = seed_actor(&txn, None).await;
-        let role = seed_role(&txn, 1, None).await;
-        let menu = seed_button(&txn, SYSTEM_USER_CREATE).await;
-        bind_user_role(&txn, actor.id, role.id).await;
-        bind_role_menu(&txn, role.id, menu.id).await;
         let super_fixture = load_super_role(&txn).await;
 
         let target = unique_name("elevate_create_target");
@@ -1686,10 +1580,6 @@ mod tests {
     async fn update_user_rejects_super_role_assignment_by_non_super_actor() {
         let txn = test_txn().await;
         let actor = seed_actor(&txn, None).await;
-        let role = seed_role(&txn, 1, None).await;
-        let menu = seed_button(&txn, SYSTEM_USER_UPDATE).await;
-        bind_user_role(&txn, actor.id, role.id).await;
-        bind_role_menu(&txn, role.id, menu.id).await;
         let super_fixture = load_super_role(&txn).await;
         let target = seed_target_user(&txn, unique_name("elevate_update_target")).await;
 

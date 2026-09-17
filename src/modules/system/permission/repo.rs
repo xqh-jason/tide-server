@@ -101,27 +101,16 @@ pub async fn exists_role_api(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{
-        sys_api, sys_menu, sys_role, sys_role_api, sys_role_menu, sys_user, sys_user_role,
-    };
-    use crate::modules::system::permission::SUPER_ROLE_KEY;
+    use crate::entity::{sys_api, sys_menu, sys_role, sys_role_api, sys_role_menu};
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    /// 已存在的 `super` 是全局唯一角色，测试只能复用；只有新创建时才物理清理。
-    struct SuperRoleFixture {
-        role: sys_role::Model,
-        owned_by_test: bool,
-    }
-
     #[derive(Default)]
     struct Fixture {
-        user: Option<sys_user::Model>,
         roles: Vec<sys_role::Model>,
         menus: Vec<sys_menu::Model>,
-        super_role: Option<SuperRoleFixture>,
     }
 
     fn unique(prefix: &str) -> String {
@@ -141,56 +130,6 @@ mod tests {
     async fn test_txn() -> sea_orm::DatabaseTransaction {
         use sea_orm::TransactionTrait;
         test_db().await.begin().await.unwrap()
-    }
-
-    async fn load_super_role(db: &impl ConnectionTrait) -> SuperRoleFixture {
-        let existing = sys_role::Entity::find()
-            .filter(sys_role::Column::RoleKey.eq(SUPER_ROLE_KEY))
-            .one(db)
-            .await
-            .unwrap();
-
-        if let Some(role) = existing {
-            return SuperRoleFixture {
-                role,
-                owned_by_test: false,
-            };
-        }
-
-        let role = sys_role::ActiveModel {
-            role_name: Set("超级管理员".to_string()),
-            role_key: Set(SUPER_ROLE_KEY.to_string()),
-            sort: Set(0),
-            status: Set(1),
-            remark: Set("权限测试创建".to_string()),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap();
-
-        SuperRoleFixture {
-            role,
-            owned_by_test: true,
-        }
-    }
-
-    async fn seed_user(
-        db: &impl ConnectionTrait,
-        status: i8,
-        deleted_at: Option<chrono::NaiveDateTime>,
-    ) -> sys_user::Model {
-        sys_user::ActiveModel {
-            username: Set(unique("perm_user")),
-            password: Set("x".to_string()),
-            nickname: Set("权限测试用户".to_string()),
-            status: Set(status),
-            deleted_at: Set(deleted_at),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
     }
 
     async fn seed_role(
@@ -243,16 +182,6 @@ mod tests {
         .unwrap()
     }
 
-    async fn bind_user_role(db: &impl ConnectionTrait, user_id: u64, role_id: u64) {
-        sys_user_role::ActiveModel {
-            user_id: Set(user_id),
-            role_id: Set(role_id),
-        }
-        .insert(db)
-        .await
-        .unwrap();
-    }
-
     async fn bind_role_menu(db: &impl ConnectionTrait, role_id: u64, menu_id: u64) {
         sys_role_menu::ActiveModel {
             role_id: Set(role_id),
@@ -294,18 +223,6 @@ mod tests {
     }
 
     async fn cleanup(db: &impl ConnectionTrait, fixture: Fixture) {
-        if let Some(user) = fixture.user.as_ref() {
-            sys_user_role::Entity::delete_many()
-                .filter(sys_user_role::Column::UserId.eq(user.id))
-                .exec(db)
-                .await
-                .unwrap();
-            sys_user::Entity::delete_by_id(user.id)
-                .exec(db)
-                .await
-                .unwrap();
-        }
-
         for role in &fixture.roles {
             sys_role_menu::Entity::delete_many()
                 .filter(sys_role_menu::Column::RoleId.eq(role.id))
@@ -320,18 +237,6 @@ mod tests {
 
         for menu in &fixture.menus {
             sys_menu::Entity::delete_by_id(menu.id)
-                .exec(db)
-                .await
-                .unwrap();
-        }
-
-        if let Some(super_role) = fixture.super_role.filter(|item| item.owned_by_test) {
-            sys_role_menu::Entity::delete_many()
-                .filter(sys_role_menu::Column::RoleId.eq(super_role.role.id))
-                .exec(db)
-                .await
-                .unwrap();
-            sys_role::Entity::delete_by_id(super_role.role.id)
                 .exec(db)
                 .await
                 .unwrap();
@@ -352,7 +257,6 @@ mod tests {
             Fixture {
                 roles: vec![role],
                 menus: vec![menu],
-                ..Default::default()
             },
         )
         .await;
@@ -384,7 +288,6 @@ mod tests {
             Fixture {
                 roles: vec![role_a, role_b],
                 menus: vec![menu_a, menu_b],
-                ..Default::default()
             },
         )
         .await;
@@ -433,7 +336,6 @@ mod tests {
                     deleted_menu,
                     empty_permission_menu,
                 ],
-                ..Default::default()
             },
         )
         .await;
@@ -459,7 +361,6 @@ mod tests {
             Fixture {
                 roles: vec![role],
                 menus: vec![button, directory],
-                ..Default::default()
             },
         )
         .await;
@@ -472,32 +373,6 @@ mod tests {
                 .count(),
             1
         );
-    }
-
-    #[tokio::test]
-    async fn super_owner_has_permission_without_binding_a_button() {
-        let db = test_txn().await;
-        let super_role_fixture = load_super_role(&db).await;
-        let user = seed_user(&db, 1, None).await;
-        bind_user_role(&db, user.id, super_role_fixture.role.id).await;
-
-        let result =
-            super::super::service::has_permission(&db, user.id, "anything:not:listed").await;
-
-        cleanup(
-            &db,
-            Fixture {
-                user: Some(user),
-                super_role: Some(SuperRoleFixture {
-                    role: super_role_fixture.role,
-                    owned_by_test: super_role_fixture.owned_by_test,
-                }),
-                ..Default::default()
-            },
-        )
-        .await;
-
-        assert!(result.unwrap());
     }
 
     #[tokio::test]
