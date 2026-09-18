@@ -54,7 +54,13 @@ allows = [
   "zip",
 ]
 
-[operation_log]
-# 操作日志保留天数；0 = 永久保留（清理任务直接跳过，不删任何日志）。
-# 可用环境变量覆盖：TIDE_OPERATION_LOG__RETENTION_DAYS=365
-retention_days = 90
+[log_retention]
+# 四个清理任务各自的保留天数；0 = 永久保留（对应任务跳过清理，不删任何记录）。
+# 环境变量覆盖：TIDE_LOG_RETENTION__LOGIN_LOG_DAYS=365 等。
+#
+# 为什么分开配置：它们的审计价值与体量增长不同——过期会话过期即不可用
+# （保留仅供审计「谁被何时下线」），而审计日志是合规证据，往往需要更长窗口。
+operation_log_days = 90
+login_log_days = 90
+job_log_days = 90
+refresh_token_days = 30

@@ -15,11 +15,11 @@ pub const HANDLER_LABEL: &str = "清理操作日志";
 
 /// 任务入口。
 ///
-/// 保留期由 `config.operation_log.retention_days` 控制（缺省 90 天）：
+/// 保留期由 `config.log_retention.operation_log_days` 控制（缺省 90 天）：
 /// 硬编码保留期无法应对合规要求差异，且一旦需要延长保留，
 /// 旧日志早已被清理——审计窗口必须可配。
 pub async fn run(state: &AppState) -> anyhow::Result<()> {
-    let days = state.config.operation_log.retention_days;
+    let days = state.config.log_retention.operation_log_days;
 
     // 0 = 永久保留：显式跳过。
     // ★ 不加这个分支的话，`Duration::days(0)` 会得到「当前时刻」作 cutoff，
@@ -44,7 +44,7 @@ mod tests {
 
     async fn state_with_retention(days: u64) -> AppState {
         let mut config = crate::infra::config::Config::load().unwrap();
-        config.operation_log.retention_days = days;
+        config.log_retention.operation_log_days = days;
         let db = Database::connect(&config.database.url).await.unwrap();
         let scheduler = Arc::new(tokio_cron_scheduler::JobScheduler::new().await.unwrap());
         AppState::new(config, db, Arc::new(MemoryCache::new()), scheduler)

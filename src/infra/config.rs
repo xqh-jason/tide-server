@@ -25,30 +25,60 @@ pub struct Config {
     /// 跨域访问控制（CORS）。缺省为拒绝所有跨源（allow_origins 为空）。
     #[serde(default)]
     pub cors: Cors,
-    /// 操作日志相关策略（保留期等）。缺省 90 天。
+    /// 日志与会话的保留策略（四个清理任务各自的天数）。
     #[serde(default)]
-    pub operation_log: OperationLog,
+    pub log_retention: LogRetention,
 }
 
-/// 操作日志保留策略（消费方：`task::operation_log_cleanup`）。
+/// 日志与会话保留策略（消费方：`task::*_cleanup`）。
+///
+/// 四个清理任务各有独立天数：它们的审计价值与体量增长不同
+/// （过期会话过期即不可用，保留仅供审计；审计日志则是合规证据）。
+/// 所有字段均支持 `0` 表示**永久保留**（对应任务直接跳过）。
+///
+/// 环境变量覆盖示例：`TIDE_LOG_RETENTION__LOGIN_LOG_DAYS=365`。
 #[derive(Debug, Clone, Deserialize)]
-pub struct OperationLog {
-    /// 保留天数；`0` 表示**永久保留**（清理任务直接跳过）。默认 90 天。
-    /// 可用环境变量覆盖：`TIDE_OPERATION_LOG__RETENTION_DAYS=365`。
-    #[serde(default = "default_operation_log_retention_days")]
-    pub retention_days: u64,
+pub struct LogRetention {
+    /// 操作日志（`sys_operation_log`）保留天数；默认 90。
+    #[serde(default = "default_operation_log_days")]
+    pub operation_log_days: u64,
+    /// 登录日志（`sys_login_log`）保留天数；默认 90。
+    #[serde(default = "default_login_log_days")]
+    pub login_log_days: u64,
+    /// 调度日志（`sys_job_log`）保留天数；默认 90。
+    #[serde(default = "default_job_log_days")]
+    pub job_log_days: u64,
+    /// 已过期会话（`sys_refresh_token`）保留天数；默认 30。
+    /// 注意：过期会话本就无法通过认证，保留仅为审计「谁在何时被下线」。
+    #[serde(default = "default_refresh_token_days")]
+    pub refresh_token_days: u64,
 }
 
-impl Default for OperationLog {
+impl Default for LogRetention {
     fn default() -> Self {
         Self {
-            retention_days: default_operation_log_retention_days(),
+            operation_log_days: default_operation_log_days(),
+            login_log_days: default_login_log_days(),
+            job_log_days: default_job_log_days(),
+            refresh_token_days: default_refresh_token_days(),
         }
     }
 }
 
-fn default_operation_log_retention_days() -> u64 {
+fn default_operation_log_days() -> u64 {
     90
+}
+
+fn default_login_log_days() -> u64 {
+    90
+}
+
+fn default_job_log_days() -> u64 {
+    90
+}
+
+fn default_refresh_token_days() -> u64 {
+    30
 }
 
 /// 启动种子开关（见 [`Config::seed`]）。
@@ -352,5 +382,31 @@ mod tests {
     #[test]
     fn development_with_dev_secret_is_accepted() {
         ensure_production_secret("development", "dev-secret-change-me").unwrap();
+    }
+    /// `log_retention` 四个字段能被环境变量覆盖（`TIDE_LOG_RETENTION__*_DAYS`）。
+    ///
+    /// 回归价值：这些拼写是「配置层字符串 → 结构体字段」的隐式映射，
+    /// 打错一个字母不会编译报错，只会在生产静默失效。
+    #[test]
+    fn log_retention_fields_are_env_overridable() {
+        // 注意：本仓 env 测试需快照还原（见同模块 EnvGuard 的注释）
+        let _guard = lock_env();
+        let _env = EnvGuard::snapshot([
+            "TIDE_LOG_RETENTION__OPERATION_LOG_DAYS",
+            "TIDE_LOG_RETENTION__LOGIN_LOG_DAYS",
+            "TIDE_LOG_RETENTION__JOB_LOG_DAYS",
+            "TIDE_LOG_RETENTION__REFRESH_TOKEN_DAYS",
+        ]);
+        unsafe {
+            std::env::set_var("TIDE_LOG_RETENTION__OPERATION_LOG_DAYS", "11");
+            std::env::set_var("TIDE_LOG_RETENTION__LOGIN_LOG_DAYS", "22");
+            std::env::set_var("TIDE_LOG_RETENTION__JOB_LOG_DAYS", "33");
+            std::env::set_var("TIDE_LOG_RETENTION__REFRESH_TOKEN_DAYS", "44");
+        }
+        let cfg = Config::load().unwrap();
+        assert_eq!(cfg.log_retention.operation_log_days, 11);
+        assert_eq!(cfg.log_retention.login_log_days, 22);
+        assert_eq!(cfg.log_retention.job_log_days, 33);
+        assert_eq!(cfg.log_retention.refresh_token_days, 44);
     }
 }
