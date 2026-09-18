@@ -1,6 +1,11 @@
 ## OVERVIEW
 
-`migrations/` — 独立 crate `migration`（edition 2021、`publish = false`、非 workspace）：20 张表 DDL 的唯一事实来源，sea-orm-migration 1.1.0。
+`migrations/` — 独立 crate `migration`（edition 2021、非 workspace）：20 张表 DDL 的唯一事实来源，sea-orm-migration 1.1.0。
+
+**它也是对外可依赖的库**（2026-09-18 实测）：包名 `migration`，暴露 `Migrator`，
+外部业务系统可用 `git + tag` 依赖它，链式拼接「基座平台表 + 自己的业务表」，
+一次 `up` 建出完整业务库。用法见 README「建库」一节。
+（`publish = false` 只表示不发布到 crates.io，不影响 git 依赖。）
 
 **建档理由**：得分 9（独立 crate + 独立构建路径；`Migrator` 是 schema 演进的单一入口，与主 crate 完全不同的执行方式）。
 
@@ -32,5 +37,6 @@
 - 不修改 `m20260913_000001_baseline.rs`（文件头即写明「不要修改本文件」）：后续 schema 变更一律追加新迁移文件。
 - 不删除 `legacy.rs`（「本文件不可删除」）：除非所有环境的 `seaql_migrations` 已清理旧版本号，否则升级会报 `migration file is missing` 拒绝启动；旧版本号残留无害。
 - 不把迁移写进主 crate：根 crate 与 `migrations` 是两个独立包（非 workspace），Dockerfile 分两次构建。
+  （注意：这是**代码组织**约束，不意味着迁移不可被依赖——外部业务系统依赖本 crate 是被支持的用法。）
 - 不加物理外键约束（与全库约定一致，`src/entity/AGENTS.md` 同源）。
 - 不在迁移里塞业务数据种子（除单行表 `sys_site_config`）——业务种子走应用层幂等填充。

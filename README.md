@@ -267,6 +267,79 @@ async fn main() -> anyhow::Result<()> {
 - 配置仍从**进程工作目录**的 `config.toml` 读（`TIDE_*` 环境变量可覆盖全部项）；
 - 基座升级 = 改 tag；基座当前**不承诺跨 tag 的 API 兼容**，升版时预期需小改。
 
+#### 建库：让你的库既有平台表、也有自己的业务表
+
+**每个业务系统用独立数据库**。数据库由连接串决定（`config.toml` 的 `database.url`），
+代码不假设库名。业务库里会有完整的平台表（认证 / RBAC / 字典 / 日志 / 任务 / 组织）
+**加上**你自己的业务表——每个业务系统是一套可独立运行的部署，自己的 admin、自己的 RBAC 数据。
+
+基座的迁移 crate 已可作为依赖使用（包名 `migration`），在你自己的迁移 crate 里**链式拼接**：
+
+```toml
+# <你的仓库>/migrations/Cargo.toml
+[dependencies]
+migration = { git = "https://github.com/<owner>/tide-server", tag = "vX.Y.Z" }
+sea-orm-migration = { version = "1.1.0", features = ["runtime-tokio", "sqlx-mysql"] }
+```
+
+```rust
+// <你的仓库>/migrations/src/lib.rs —— 先基座、后自己
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;   // 你的建表迁移（写法见基座 migrations/src/m20260913_000001_baseline.rs）
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager.get_connection().execute(Statement::from_string(
+            manager.get_database_backend(),
+            r#"CREATE TABLE `<业务前缀>_xxx` ( ... ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"#.to_string(),
+        )).await?;
+        Ok(())
+    }
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> { Ok(()) }
+}
+
+pub struct HrMigrator;
+
+#[async_trait::async_trait]
+impl MigratorTrait for HrMigrator {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        let mut m = migration::Migrator::migrations(); // ← 基座：全部平台表迁移
+        m.push(Box::new(Migration));                  // ← 自己：业务表迁移（追加在末尾）
+        m
+    }
+}
+```
+
+一条命令建库（建出平台表 + 业务表）：
+
+```bash
+# 先建空库（业务库名随意，如 tide_<业务>）
+mysql -h127.0.0.1 -P3307 -uroot -p -e "CREATE DATABASE tide_mybiz CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
+# 跑迁移
+cd <你的仓库>/migrations
+DATABASE_URL='mysql://root:root@127.0.0.1:3307/tide_mybiz?charset=utf8mb4&timezone=%2B08:00' cargo run -- up
+```
+
+实测结果（2026-09-18，全新库）：`sys_=21 hr_=1 total=22` —— 21 张平台表（20 张在 baseline +
+`sys_refresh_token` 单独一条）由基座迁移建出，业务表由自己的迁移建出，两者在同一次 `up` 里按顺序执行。
+基座迁移共 30 条（含 25 条历史版本占位），条数会随基座演进增长，以代码为准。
+
+注意事项：
+
+- **基座迁移顺序不能改**（占位在前、baseline 在后）：`migration::Migrator::migrations()` 已排好，
+  自己的迁移**追加在后面**即可。
+- 业务表引用 `sys_user.id` 时用**逻辑外键**（全库约定：不加物理外键），
+  审计字段（`created_by` / `updated_by`，`0` = 种子）由 repo 层盖章。
+- 启动种子（admin / super / 菜单 / 接口登记）由 `TIDE_SEED__ENABLED=true` 在**首次部署**时跑一次，
+  之后关掉；它建的是你自己库里的那份 RBAC 数据。
+- **多业务共用一套 RBAC 的形态（基础系统一个库 + 各业务一个库）本仓当前不内置**：
+  那需要跨库方案（同一实例内的跨 schema 查询，或把鉴权做成服务调用），
+  而基座现在的认证热路径有一条 `sys_refresh_token` LEFT JOIN `sys_user` 的单条 SQL，
+  跨实例直接不成立。当前支持的是「每个业务系统一个自洽的库」（上面这种）。
+
 #### 前端仓
 
 从 [tide-admin](https://github.com/xqh-jason/tide-admin) fork 一份（它的 `apps/web-ele`
