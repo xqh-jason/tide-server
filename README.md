@@ -210,15 +210,22 @@ cargo test              # 需本地 MySQL（docker compose up -d mysql 后即可
 CI（`.github/workflows/ci.yml`，`push/PR → main` 触发）：lint job
 （fmt + clippy `-D warnings` 双 crate）与 test job（MySQL service container 跑全量真库测试）。
 
+当前全仓 520 个 `#[test]`（均在 `src/`，migrations 与 codegen 无测试），全部连真库、无 mock。
+条数会随切片增长，改代码时请同步这里。
+
 ## 🤝 贡献
 
 欢迎 Issue 与 PR：提交信息遵循 Conventional Commits（中文描述），PR 需附
 `cargo test` 结果；契约变更需同步说明响应体与端点，并更新前端对接说明。
 
+完整流程与本地开发环境（MySQL 3307、真库测试、双 crate 门禁）见
+[CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请勿开公开 Issue，见 [SECURITY.md](SECURITY.md)。
+
 ## 🙏 致谢
 
 - [Salvo](https://github.com/salvo-rs/salvo) / [SeaORM](https://github.com/SeaQL/sea-orm) — 后端框架
-- [Vue Vben Admin](https://github.com/vbenjs/vue-vben-admin) — 配套前端 [tide-admin](../tide-admin) 的脚手架基座（该仓库为 Vue Vben Admin 的二次开发）
+- [Vue Vben Admin](https://github.com/vbenjs/vue-vben-admin) — 配套前端
+  [tide-admin](https://github.com/xqh-jason/tide-admin) 的脚手架基座（该仓库为 Vue Vben Admin 的二次开发）
 
 ## 📄 License
 
