@@ -22,6 +22,43 @@ const SENSITIVE_KEYS: &[&str] = &[
     "authorization",
     "secret",
 ];
+
+/// 只读语义的路径后缀：这些端点不写操作日志。
+///
+/// 用后缀匹配是因为各域路径前缀不同（`/api/v1/user/list`、`/api/v1/role/list` ...）。
+/// 操作日志的价值是「审计谁**改**了什么」，只读查询不改变状态，落库只是噪音 + 写压力。
+const READ_ONLY_SUFFIXES: &[&str] = &[
+    "/list",
+    "/get",
+    "/info",
+    "/menus",
+    "/access-codes",
+    "/list-all",
+    "/list-all-includes-soft-deleted",
+    "/by-username",
+    "/get-depts",
+    "/get-positions",
+    "/get-by-type",
+    "/handlers",
+    "/download",
+];
+
+/// 是否需要落操作日志：只记「可能改变状态」的请求。
+///
+/// 抽成纯函数（不碰 `Request` / `Depot`）是为了可单测——中间件本身难构造。
+fn should_log(method: &str, path: &str) -> bool {
+    // 非 POST 一律不记：本项目 GET 只有 file/download 与 site-config/get，均为只读；
+    // 将来新增 GET 端点也天然被排除。
+    if method != "POST" {
+        return false;
+    }
+    // 去掉查询串后再判后缀（下载接口形如 /file/download?id=3）
+    let path = path.split('?').next().unwrap_or(path);
+    !READ_ONLY_SUFFIXES
+        .iter()
+        .any(|suffix| path.ends_with(suffix))
+}
+
 pub struct OperationLog;
 
 #[async_trait]
@@ -38,6 +75,19 @@ impl Handler for OperationLog {
         // 先拷贝请求元数据：call_next 需要 &mut req，之后不能再借用 req
         let path = req.uri().path().to_string();
         let method = req.method().as_str().to_string();
+
+        // 只读请求（list/get/info 等）与所有非 POST：放行业务后直接返回，不落日志。
+        //
+        // 写放大背景：本中间件挂在所有受保护路由上，若不做此判定，
+        // 用户每翻一页（只读）也会产生一条 sys_operation_log，且该表被
+        // 90 天清理任务物理删除，属无效占用。
+        //
+        // ⚠️ 关键：必须**先 call_next 放行业务**再 return。直接 return 会让请求
+        // 得不到任何业务处理（客户端收到空响应）。
+        if !should_log(&method, &path) {
+            ctrl.call_next(req, depot, res).await;
+            return;
+        }
         let ip = req
             .remote_addr()
             .ip()
@@ -243,6 +293,110 @@ mod tests {
         let text = "plain ".repeat(1000);
         let out = sanitize_and_truncate(&text);
         assert!(out.ends_with("...(截断)"));
+    }
+
+    /// `should_log` 判定矩阵：只读端点/非 POST 不记，写端点要记。
+    ///
+    /// 这是写放大修复的回归守卫：若有人把只读端点加回记录范围，此用例会失败。
+    #[test]
+    fn should_log_excludes_read_only_and_non_post() {
+        // —— 只读端点：不记 ——
+        for path in [
+            "/api/v1/user/list",
+            "/api/v1/user/get",
+            "/api/v1/user/info",
+            "/api/v1/user/menus",
+            "/api/v1/user/access-codes",
+            "/api/v1/user/list-all",
+            "/api/v1/user/list-all-includes-soft-deleted",
+            "/api/v1/user/by-username",
+            "/api/v1/user/get-depts",
+            "/api/v1/user/get-positions",
+            "/api/v1/dictionary/get-by-type",
+            "/api/v1/job/handlers",
+            "/api/v1/file/download?id=3",
+        ] {
+            assert!(!should_log("POST", path), "只读端点不应落操作日志：{path}");
+        }
+
+        // —— 写端点：要记 ——
+        for path in [
+            "/api/v1/user/create",
+            "/api/v1/user/update",
+            "/api/v1/user/update-status",
+            "/api/v1/user/delete",
+            "/api/v1/role/create",
+            "/api/v1/file/upload",
+        ] {
+            assert!(should_log("POST", path), "写端点应落操作日志：{path}");
+        }
+    }
+
+    /// 非 POST 一律不记；查询串不影响后缀判定。
+    #[test]
+    fn should_log_ignores_non_post_and_query_string() {
+        assert!(!should_log("GET", "/api/v1/file/download"));
+        assert!(!should_log("GET", "/api/v1/site-config/get"));
+        assert!(!should_log("OPTIONS", "/api/v1/user/create"));
+        assert!(!should_log("HEAD", "/api/v1/user/create"));
+        assert!(
+            should_log("POST", "/api/v1/user/create?x=1"),
+            "写端点带查询串仍要记"
+        );
+    }
+
+    /// ★ 关键回归：只读请求不落日志，**但必须仍然被业务处理**。
+    ///
+    /// 这是本修改最容易踩的坑：早退分支若漏了 `call_next`，
+    /// 所有 list/get 请求会得到空响应（业务完全失效）。
+    #[tokio::test]
+    async fn read_only_request_skips_log_but_still_reaches_handler() {
+        let db = test_db().await;
+        let config = crate::infra::config::Config::load().unwrap();
+        let scheduler = Arc::new(tokio_cron_scheduler::JobScheduler::new().await.unwrap());
+        let state = AppState::new(
+            config,
+            db.clone(),
+            Arc::new(crate::utils::cache::MemoryCache::new()),
+            scheduler,
+        );
+
+        // 路径必须以只读后缀结尾（should_log 按后缀判定）
+        let path = format!("/api/v1/test/{}/list", unique("readonly"));
+        let mut req = Request::new();
+        *req.uri_mut() = path.parse().unwrap();
+        *req.method_mut() = salvo::http::Method::POST;
+
+        let mut depot = Depot::new();
+        depot.insert_typed(state);
+        depot.insert_typed(AuthUser {
+            user_id: 1,
+            roles: vec![],
+            refresh_token_id: 0,
+        });
+        depot.insert_typed(CapturedBody("{\"page\":1}".to_string()));
+
+        let mut res = Response::new();
+        let mut ctrl = FlowCtrl::new(vec![Arc::new(OperationLog), Arc::new(EchoHandler)]);
+        ctrl.call_next(&mut req, &mut depot, &mut res).await;
+
+        // ① 业务必须被处理（本用例路径以 /list 结尾才能命中只读判定）
+        let resp = capture_response(&mut res).0;
+        assert!(
+            resp.contains("\"ok\":true"),
+            "只读请求必须仍然到达业务 handler，实际响应：{resp}"
+        );
+
+        // ② 不应落操作日志
+        let row = sys_operation_log::Entity::find()
+            .filter(sys_operation_log::Column::Path.eq(path.clone()))
+            .one(&db)
+            .await
+            .unwrap();
+        if let Some(ref row) = row {
+            cleanup(&db, row.id).await;
+        }
+        assert!(row.is_none(), "只读端点不应写入操作日志：{path}");
     }
 
     struct EchoHandler;
