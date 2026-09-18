@@ -59,6 +59,16 @@ impl MemoryCache {
         self.inner.len()
     }
 
+    /// 是否为空。
+    ///
+    /// 与 [`Self::len`] 成对存在：拆出 lib target 后 `utils` 成为公开 API 面，
+    /// 只有 `len` 没有 `is_empty` 会被 `clippy::len_without_is_empty` 判为
+    /// 不完整的公开接口（CI 是 `-D warnings`，必须消掉）。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     /// 满容量时驱逐：先清已过期条目；清完仍满则驱逐 `expires_at` 最早的一条
     /// （≈ 最早写入）。只在满时触发，单次 O(n) 但 n 受容量上限约束。
     fn evict_if_full(&self) {
