@@ -20,7 +20,6 @@ src/graphify-out/
 .agents/
 .opencode/
 .claude/
-skills/
 .vscode/
 .idea/
 *.iml

@@ -29,7 +29,7 @@
 
 - 用户 / 角色 / 菜单 / API 四大管理，接口·菜单·按钮权限码统一在种子中登记（按钮码只控前端显隐）
 - 两级鉴权：认证中间件（会话合并查询，禁用/软删用户即时 401）+
-  接口级授权（`sys_api` path+method 精确匹配 + 角色绑定，未登记放行、超管短路）
+  接口级授权（路径规范化后按 `sys_api` path+method 精确匹配 + 角色绑定，未登记放行、超管短路）
 
 **系统管理**
 
@@ -49,7 +49,7 @@
   API 权限点 87 条 / 默认定时任务）
 - 分页统一按主键降序（`ORDER BY id DESC`）：无排序时 LIMIT/OFFSET 行序由执行计划决定，
   会出现跨页重复与漏项
-- 517 个真库集成测试（事务回滚隔离，无孤儿数据）；clippy 对 unwrap / expect / todo /
+- 真库集成测试内联在各域（事务回滚隔离，无孤儿数据）；clippy 对 unwrap / expect / todo /
   unsafe 全量 deny
 
 ## 🖼 界面预览
@@ -192,7 +192,6 @@ src/
 └── task/                                     # 四类保留期清理任务（job 域注册，天数读配置）
 migrations/          # sea-orm-migration（独立 crate，包名 `migration`，含列表查询复合索引）
 codegen/             # 代码生成器（entity / 四件套骨架）
-skills/              # vendored：Salvo 官方 Agent Skills 语料（第三方，MIT，与本项目版本不同步）
 docker/              # 容器入口脚本
 ```
 
@@ -219,14 +218,10 @@ CI（`.github/workflows/ci.yml`，`push/PR → main` 触发）：lint job
 ## 🙏 致谢
 
 - [Salvo](https://github.com/salvo-rs/salvo) / [SeaORM](https://github.com/SeaQL/sea-orm) — 后端框架
-- [Vue Vben Admin](https://github.com/vbenjs/vue-vben-admin) — 配套前端脚手架
-- [Salvo AI Agent Skills（salvo-skills）](https://github.com/salvo-rs/salvo-skills) — `skills/` 目录下的 Agent 语料（属于 Salvo 项目，随 Salvo 采用 MIT，vendored 快照）
+- [Vue Vben Admin](https://github.com/vbenjs/vue-vben-admin) — 配套前端 [tide-admin](../tide-admin) 的脚手架基座（该仓库为 Vue Vben Admin 的二次开发）
 
 ## 📄 License
 
-本项目基于 [MIT](LICENSE) 协议开源；配套前端 tide-admin 同为 MIT。
-
-`skills/` 目录为 [salvo-rs/salvo-skills](https://github.com/salvo-rs/salvo-skills) 的 vendored 快照，
-属 Salvo 项目并按 Salvo 的 MIT 许可分发；本项目不对其内容作维护与保证
-（语料钉 Salvo 0.94 / Rust 1.94，本项目为 Salvo 0.95 / Rust 1.96）。
+本项目基于 [MIT](LICENSE) 协议开源；配套前端 tide-admin 同为 MIT，其内部
+`packages/` / `internal/` / `scripts/` 保留上游 Vue Vben Admin 的版权声明。
 

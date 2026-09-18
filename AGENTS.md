@@ -24,7 +24,6 @@ tide-server/
 │   └── utils/            # AppError、响应体、JWT、密码、缓存、分页、人字段拼装
 ├── codegen/              # 独立 crate：def JSON → entity + 四件套骨架
 ├── migrations/           # 独立 crate：sea-orm-migration，20 表 DDL 事实来源
-├── skills/               # vendored Salvo 0.94 语料（外部参考，勿照抄）
 ├── docker/entrypoint.sh  # 容器内迁移 + 启动
 ├── uploads/              # gitignored，运行时上传产物
 └── graphify-out/         # gitignored，生成产物
@@ -45,7 +44,6 @@ tide-server/
 | 表结构与实体来源 | `src/entity/AGENTS.md` | 21 表、三种生成来源、无物理外键 |
 | 生成新域骨架 | `codegen/AGENTS.md` | def JSON → entity + 四件套 |
 | 建表与迁移 | `migrations/AGENTS.md` | 占位在前 + baseline 建 20 表 |
-| Salvo API 用法查询 | `skills/AGENTS.md` | 0.94 语料 vs 项目 0.95 |
 
 ## CODE MAP
 
@@ -97,8 +95,7 @@ refs = 实测 `grep -ro` 次数 / 文件数；Location 相对 `src/`。
 - 业务层新增函数禁止新增 `db.begin()`：需要多表原子性先把事务边界上移 service
 - 展示类查询（列表 / 详情 / 名称拼装）一律普通读，不要顺手加锁
 - 请求体不接受人字段（防伪造），审计字段由 repo 层统一盖章
-- `skills/` 是 Salvo 0.94 外部语料，禁止照抄其 API 到本项目的 0.95
-- README 的数字已过时（`#[test]` 实为 489、`API_SEEDS` 实为 87），勿以 README 为准
+- README 的数字已过时（`API_SEEDS` 实为 87），勿以 README 为准
 
 ## UNIQUE STYLES
 
@@ -142,4 +139,4 @@ cargo run           # 启动服务，监听 0.0.0.0:8080
 - 已下移到子档、root 只留指针：分层依赖与 repo「只拼 SQL」边界（含 2026-09-10 三类反例）、
   并发一致性加锁读（2026-09-14）、软删除、切片内命名与顺序、测试规范 →
   `src/modules/system/AGENTS.md`；人字段命名与名称拼装协议、1213/1205 映射 →
-  `src/utils/AGENTS.md`；目录细节与 skills 语料风险 → 各目录档
+  `src/utils/AGENTS.md`；目录细节风险 → 各目录档
