@@ -1,8 +1,6 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-09-16 11:59 +0800
-**Commit:** eb90c3d
-**Branch:** main
+**Updated:** 2026-09-18（基座化：lib + bin 双 target、域装配可扩展）
 
 ## OVERVIEW
 
@@ -14,7 +12,9 @@ HTTP 恒 200，唯一例外认证失败 401。
 
 ```
 tide-server/
-├── src/                  # binary-only 根 crate（无 lib.rs）
+├── src/                  # lib + bin 双 target（lib.rs 是业务仓依赖的公开面）
+│   ├── lib.rs            # 基座公开面：6 个 pub mod（2026-09-18 起）
+│   ├── main.rs           # 进程入口：tracing + Config::load → infra::app::run
 │   ├── modules/system/   # 18 个平台域切片，四件套 api/service/repo/dto
 │   ├── modules/biz/      # 业务域容器，当前仅 mod.rs（业务从这里生长）
 │   ├── infra/            # 启动管线、Config、AppState、路由组装、seed
@@ -31,12 +31,15 @@ tide-server/
 
 三个独立包、非 workspace：根 crate / `migrations/` / `codegen/`。
 
+**两层模型的基座**（2026-09-18 起）：本仓是可被独立业务仓（tide-hr 等）以
+**git 依赖 + 版本 tag** 消费的基座；业务表不在本仓，见 README「作为基座」一节。
+
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
 |------|----------|-------|
-| 服务入口 `src/main.rs`、mod 声明、依赖方向 | `src/AGENTS.md` | binary-only，6 私有 mod，`task/` 注册表规则 |
-| 新增业务域、路由装配 | `src/modules/AGENTS.md` | `DOMAINS` 登记表 + `MountGuard`，三步装配 |
+| 服务入口 `src/main.rs`、mod 声明、依赖方向 | `src/AGENTS.md` | lib + bin 双 target，`task/` 注册表规则 |
+| 新增业务域、路由装配 | `src/modules/AGENTS.md` | `DOMAINS` 登记表 + `MountGuard`，本仓三步装配；业务仓走 `all_domains` |
 | 平台域切片：分层 / repo 边界 / 加锁读 / 软删除 / 命名 / 测试 | `src/modules/system/AGENTS.md` | 18 域硬规则表 |
 | 启动顺序、配置、全局状态、种子 | `src/infra/AGENTS.md` | `Config` fail-fast、`AppState`、catcher |
 | 错误码、响应体、分页、人字段拼装 | `src/utils/AGENTS.md` | 拼装协议唯一实现 |
@@ -61,7 +64,8 @@ refs = 实测 `grep -ro` 次数 / 文件数；Location 相对 `src/`。
 | `PageQuery`/`PageResult`/`paginate` | struct+fn | `utils/page.rs:13/39/91` | 56 / 46 / 15 | 分页三件，`clamp(1,1000)` |
 | `SUPER_ROLE_KEY` | const | `modules/system/permission/mod.rs` | 44 / 9 | 超管保留字：短路 + 改名保护 |
 | `enabled_int_values` | fn | `modules/system/dictionary/service.rs:214` | 31 / 18 | `status` 允许值唯一来源 |
-| `DOMAINS` | const 表 | `modules/mod.rs:78` | 9 / 5（仅 router 消费） | 19 行路由装配入口 |
+| `DOMAINS` | const 表 | `modules/mod.rs` | 22 / 6 | 19 行内置路由装配入口 |
+| `all_domains` | fn | `modules/mod.rs` | 7 / 2 | 合并内置 + 业务仓注册域（2026-09-18 新增） |
 
 ## CONVENTIONS
 
@@ -100,7 +104,8 @@ refs = 实测 `grep -ro` 次数 / 文件数；Location 相对 `src/`。
 
 ## UNIQUE STYLES
 
-- 垂直切片 + `DOMAINS` 登记表装配，新增域三步走 → `src/modules/AGENTS.md`
+- 垂直切片 + `DOMAINS` 登记表装配：本仓新增域三步走 → `src/modules/AGENTS.md`；
+  业务仓的新增域走 `modules::all_domains` + `app::run_with_domains`（不 fork 基座）
 - 单信封契约：HTTP 恒 200，业务成败只看 `code`
 - Conventional Commits + 中文描述，如 `feat(rbac): 完善软删除过滤与用户创建校验`；类型
   `feat` / `fix` / `refactor` / `chore` / `docs` / `test`
@@ -108,14 +113,15 @@ refs = 实测 `grep -ro` 次数 / 文件数；Location 相对 `src/`。
 - 固定分工：AI 编写失败测试并做最终 review，用户手动实现业务代码
 - 新功能先建设计文档（`docs/superpowers/specs/`），按测试红 → 实现 → 验证推进
 - 全仓 `#[test]` 全连真库、无 mock；数量会随切片增长，别把条数当事实写进文档
-  （2026-09-18：文档里写 489，实测已 520）
+  （2026-09-18：文档里写 489 → 实测 520 → 基座化后 522）
 
 ## COMMANDS
 
 ```bash
 cargo fmt --check   # 格式校验（rustfmt）
 cargo check         # 只做编译检查，不产出二进制
-cargo test          # 全量测试，需本地 MySQL：docker compose up -d
+cargo test          # 全量测试（522 条），需本地 MySQL：docker compose up -d
+cargo test --lib    # 仅 lib target 的测试（基座化后可用；之前会报 no library targets）
 cargo test role     # 运行单个模块
 cd migrations && DATABASE_URL='mysql://root:root@localhost:3307/tide_server' cargo run -- up
 cargo run           # 启动服务，监听 0.0.0.0:8080

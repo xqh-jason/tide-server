@@ -262,6 +262,27 @@ async fn main() -> anyhow::Result<()> {
 - 若菜单种子在业务仓而不在基座：把页面路径写进你后端仓的种子实现里即可，
   前端只需保证文件路径可被归一化匹配。
 
+### 基座发版（tag 流程）
+
+业务仓靠 tag 固定基座版本，所以 tag 就是发布点。**先过门禁、再打 tag**：
+
+```bash
+# 1. 三道门禁全绿（CI 对 tag 也会跑，但本地先跑一轮能省一个来回）
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test                      # 需本地 MySQL
+
+# 2. 打 tag（推送到远端后业务仓才能解析）
+git tag v0.2.0
+git push origin main --tags
+```
+
+业务仓升级 = 改 `Cargo.toml` 的 `tag` 后 `cargo update -p tide-server`。
+
+**为什么强调“先过门禁”**：2026-09-18 实际踩过——tag 已打好、业务仓也拉到了，
+才发现该提交在 `-D warnings` 下不干净（一个 clippy 告警），只能 `git tag -d` 重打。
+现在 CI 监听 `tags: ["v*"]`，tag 自身也有校验，但 CI 是事后发现，本地门禁是事前。
+
 ### 部署
 
 `docker-compose.yml` 的 `frontend.build.context` 已改为可配置：
@@ -287,7 +308,10 @@ cargo test              # 需本地 MySQL（docker compose up -d mysql 后即可
 CI（`.github/workflows/ci.yml`，`push/PR → main` 触发）：lint job
 （fmt + clippy `-D warnings` 双 crate）与 test job（MySQL service container 跑全量真库测试）。
 
-当前全仓 520 个 `#[test]`（均在 `src/`，migrations 与 codegen 无测试），全部连真库、无 mock。
+当前全仓 522 个 `#[test]`（均在 `src/`，migrations 与 codegen 无测试），全部连真库、无 mock。
+
+拆出 lib target 后可用 `cargo test --lib` 只跑库侧测试（改造前该命令报
+`no library targets found`，因为本仓曾是 binary-only crate）。
 条数会随切片增长，改代码时请同步这里。
 
 ## 🤝 贡献

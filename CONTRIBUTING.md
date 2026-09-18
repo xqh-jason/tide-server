@@ -25,6 +25,31 @@ cargo test
 
 默认账号 `admin / admin123`（development 档位每次启动重置，仅限本地）。
 
+## 作为基座开发（两个仓库）
+
+本仓是**基座**，不包含业务表。两种贡献场景不要搞混：
+
+| 改造目标 | 改哪里 | 说明 |
+|---|---|---|
+| 平台能力（RBAC / 认证 / 字典 / 日志 / 任务 / 文件 / 组织） | **本仓** | 改完要走下面的发版流程 |
+| 具体业务（人事 / ERP / …） | **业务仓**（如 tide-hr） | 不在本仓提 PR |
+
+本仓对外接口就是 `src/lib.rs` 里的 6 个 `pub mod`。**改动公开面（新增/修改 pub 项、
+改变函数签名）属于破坏性变更**：业务仓以 git 依赖 + 版本 tag 消费本仓，签名一改它们
+就编不过。这类改动请同时说明升级影响。
+
+### 发版（tag）
+
+业务仓靠 tag 固定版本，所以 tag 即发布点。**门禁全绿后再打 tag**：
+
+```bash
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+git tag v0.2.1 && git push origin main --tags
+```
+
+CI 已监听 `tags: ["v*"]`；但 CI 是事后发现，本地先跑一轮能省一个来回
+（2026-09-18 实际踩过：tag 打好后才发现该提交有 clippy 告警，只能删 tag 重打）。
+
 ## 提交前必跑
 
 CI 会跑同样的命令，本地先过一遍可以省一个来回：
@@ -42,6 +67,7 @@ cargo test
 - **测试连真库、无 mock**，夹具用 `test_txn()` 事务回滚隔离。不要在测试里写死 sleep 或依赖
   执行顺序。
 - **同时跑两个 `cargo test` 会互相干扰**（共享种子行），全量请串行。
+- **全量 `cargo test` 会同时跑 lib 与 bin 两个 target 的测试**；只关心库侧时用 `cargo test --lib`。
 
 ## 代码约定（摘要）
 
