@@ -55,7 +55,10 @@ pub async fn find_page(
 
     let select = sys_job::Entity::find()
         .filter(cond)
-        .filter(sys_job::Column::DeletedAt.is_null());
+        .filter(sys_job::Column::DeletedAt.is_null())
+        // 分页必须有确定性排序：无 ORDER BY 时行序由执行计划决定，
+        // LIMIT/OFFSET 会出现跨页重复或永久漏项。统一按主键降序（新数据在前）。
+        .order_by_desc(sys_job::Column::Id);
     crate::utils::paginate(select, db, page_index, page_size).await
 }
 

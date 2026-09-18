@@ -52,7 +52,9 @@ pub async fn find_page(
     let select = sys_file::Entity::find()
         .filter(cond)
         .filter(sys_file::Column::DeletedAt.is_null())
-        .order_by_desc(sys_file::Column::CreatedAt);
+        // 统一按主键降序：与其余分页域一致，且 id 唯一且稳定，分页边界确定。
+        // （原按 CreatedAt 倒序：同一秒内多行时顺序仍不确定，且无索引时更慢）
+        .order_by_desc(sys_file::Column::Id);
 
     let page = crate::utils::paginate(select, db, page_index, page_size).await?;
     Ok(page)
@@ -185,10 +187,13 @@ mod tests {
             "keyword 应只命中 3 条活记录，软删与他名记录不进分页"
         );
         let ids: Vec<u64> = page.items.iter().map(|m| m.id).collect();
+        // 统一口径：分页按主键降序（不再按 created_at）。
+        // 本用例 fixture 刻意让 created_at 序与 id 序相反（a 最新但 id 最小），
+        // 因此该断言能区分两种实现：按 created_at 会得到 [a,b,c]。
         assert_eq!(
             ids,
-            vec![a.id, b.id, c.id],
-            "应按 created_at 倒序（a 最新 id 最小，按 id 倒序的错误实现会得到 c,b,a）"
+            vec![c.id, b.id, a.id],
+            "分页应统一按 id 降序（按 created_at 的错误实现会得到 a,b,c）"
         );
     }
 

@@ -102,7 +102,10 @@ pub async fn find_page(
     }
     let select = sys_user::Entity::find()
         .filter(cond)
-        .filter(sys_user::Column::DeletedAt.is_null());
+        .filter(sys_user::Column::DeletedAt.is_null())
+        // 分页必须有确定性排序：无 ORDER BY 时行序由执行计划决定，
+        // LIMIT/OFFSET 会出现跨页重复或永久漏项。统一按主键降序（新数据在前）。
+        .order_by_desc(sys_user::Column::Id);
     crate::utils::paginate(select, db, page_index, page_size).await
 }
 
@@ -1334,6 +1337,65 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "空入参应短路返回空数组"
+        );
+    }
+
+    /// 分页必须有确定性排序：同一批数据分两页取，必须无重复、无遗漏。
+    ///
+    /// 背景：`LIMIT/OFFSET` 在无 `ORDER BY` 时行序由**执行计划**决定，
+    /// 会出现「第 2 页重复第 1 页的行」与「某些行永远翻不到」。
+    ///
+    /// 本用例让「id 降序」与「索引自然顺序」相反：
+    /// username 的字母序与插入次序（=id 升序）相反——
+    /// 若查询走 `uk_sys_user_username` 索引（或用其它手段改变了计划），
+    /// 无 `ORDER BY` 时会按 username 升序返回，与 id 降序不同。
+    /// 断言最终顺序为 id 降序（确定性排序的唯一可观察证据）。
+    #[tokio::test]
+    async fn find_page_orders_by_id_desc_deterministically() {
+        let db = test_txn().await;
+        let kw = unique_name("order_page");
+
+        // 造 5 条：username 字母序刻意与 id 升序相反
+        // 用 z→a 的字母顺序插入，使 id 递增而 username 递减
+        let mut created = Vec::new();
+        for (idx, letter) in ["z", "y", "x", "w", "v"].iter().enumerate() {
+            let model = sys_user::ActiveModel {
+                username: Set(format!("{letter}_{kw}_{idx}")),
+                password: Set("x".to_string()),
+                nickname: Set(format!("分页排序测试 {idx}")),
+                ..Default::default()
+            };
+            created.push(model.insert(&db).await.unwrap().id);
+        }
+        // 期望的 id 降序（新→旧）
+        let mut expected_desc = created.clone();
+        expected_desc.sort_unstable_by(|a, b| b.cmp(a));
+
+        let filter = UserFilter {
+            keyword: Some(kw.clone()),
+            ..Default::default()
+        };
+
+        // 一页取全部：直接验证排序（分页正确性由「顺序确定」保证）
+        let page = find_page(&db, &filter, 0, 10).await.unwrap();
+        assert_eq!(page.total, 5, "关键字应命中 5 条");
+        let actual: Vec<u64> = page.items.iter().map(|m| m.id).collect();
+
+        assert_eq!(
+            actual, expected_desc,
+            "分页必须按 id 降序（确定性排序）；实际：{actual:?}，期望：{expected_desc:?}。\n\
+             若此处失败：说明查询无 ORDER BY，行序由执行计划决定（本例中 username 索引顺序与 id 序相反）"
+        );
+
+        // 分页覆盖：page_size=2 逐页取完，恰好覆盖全部 5 条且不重复
+        let mut seen: Vec<u64> = Vec::new();
+        for page_index in 0..3u64 {
+            let p = find_page(&db, &filter, page_index, 2).await.unwrap();
+            seen.extend(p.items.iter().map(|m| m.id));
+        }
+        assert_eq!(
+            seen, expected_desc,
+            "逐页拼接结果应与单页一致（无重复/无遗漏）；实际：{seen:?}"
         );
     }
 }

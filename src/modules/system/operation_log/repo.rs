@@ -48,7 +48,9 @@ pub async fn find_page(
     let select = sys_operation_log::Entity::find()
         .filter(cond)
         .filter(sys_operation_log::Column::DeletedAt.is_null())
-        .order_by_desc(sys_operation_log::Column::CreatedAt);
+        // 统一按主键降序：与其余分页域一致，且 id 唯一且稳定，分页边界确定。
+        // （原按 CreatedAt 倒序：同一秒内多行时顺序仍不确定，且无索引时更慢）
+        .order_by_desc(sys_operation_log::Column::Id);
     crate::utils::paginate(select, db, page_index, page_size).await
 }
 

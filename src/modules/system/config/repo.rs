@@ -63,7 +63,9 @@ pub async fn find_config_page(
     let select = sys_config::Entity::find()
         .filter(cond)
         .filter(sys_config::Column::DeletedAt.is_null())
-        .order_by_desc(sys_config::Column::CreatedAt);
+        // 统一按主键降序：与其余分页域一致，且 id 唯一且稳定，分页边界确定。
+        // （原按 CreatedAt 倒序：同一秒内多行时顺序仍不确定）
+        .order_by_desc(sys_config::Column::Id);
 
     let page = crate::utils::paginate(select, db, page_index, page_size).await?;
     Ok(page)
@@ -241,10 +243,12 @@ mod tests {
 
         assert_eq!(page.total, 3, "keyword 应命中 3 条活记录，软删不进分页");
         let ids: Vec<u64> = page.items.iter().map(|m| m.id).collect();
+        // 统一口径：分页按主键降序（不再按 created_at）。
+        // fixture 刻意让 created_at 序与 id 序相反（a 最新但 id 最小）。
         assert_eq!(
             ids,
-            vec![a.id, b.id, c.id],
-            "应按 created_at 倒序（a 最新 id 最小）"
+            vec![c.id, b.id, a.id],
+            "分页应统一按 id 降序（按 created_at 的错误实现会得到 a,b,c）"
         );
     }
 
