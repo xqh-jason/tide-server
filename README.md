@@ -52,6 +52,24 @@
 - 517 个真库集成测试（事务回滚隔离，无孤儿数据）；clippy 对 unwrap / expect / todo /
   unsafe 全量 deny
 
+## 🖼 界面预览
+
+点击缩略图查看原图（支持键盘操作与全屏查看）。
+
+| 登录页 | 角色管理 |
+| :---: | :---: |
+| [![登录页](screenshots/01-login.png)](screenshots/01-login.png) | [![角色管理](screenshots/02-role.png)](screenshots/02-role.png) |
+| 账号密码 + 图形验证码登录 | 角色列表，内置 `super` 超管角色不可编辑 |
+
+| 菜单管理 | 定时任务 |
+| :---: | :---: |
+| [![菜单管理](screenshots/03-menu.png)](screenshots/03-menu.png) | [![定时任务](screenshots/04-job.png)](screenshots/04-job.png) |
+| 菜单树与按钮权限码登记（只控前端显隐） | Cron 调度，支持立即执行与执行日志 |
+
+| API 管理（接口权限点登记，种子 87 条，鉴权判定的数据源） | |
+| :---: | :---: |
+| [![API 管理](screenshots/05-api.png)](screenshots/05-api.png) | |
+
 ## 🧱 技术栈
 
 | 层 | 选型 |
