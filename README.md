@@ -183,6 +183,8 @@ docker compose up -d backend                                  # 改回默认后�
 
 ```
 src/
+├── lib.rs                                    # 基座公开面（业务仓依赖的入口，2026-09-18 起）
+├── main.rs                                   # 进程入口：tracing + Config::load → infra::app::run
 ├── modules/system/<域>/                      # 平台能力域（垂直切片契约驱动四件套，18 个）
 ├── modules/biz/<域>/                         # 业务域容器（具体业务功能从这里生长）
 ├── infra/                                    # 启动管线、配置、AppState、路由登记表
@@ -194,6 +196,81 @@ migrations/          # sea-orm-migration（独立 crate，包名 `migration`，�
 codegen/             # 代码生成器（entity / 四件套骨架）
 docker/              # 容器入口脚本
 ```
+
+## 🧩 作为基座：派生你自己的业务系统
+
+本仓是**两层模型的下层**：平台能力（认证 / RBAC / 字典 / 日志 / 定时任务 / 文件 / 组织）
+留在这里保持稳定；具体业务（人事 / ERP / 合同 …）在**独立的仓库**里生长，以
+**git 依赖 + 版本 tag** 引用本仓。
+
+为什么分仓而不在本仓 `biz/` 里写：本仓要同时服务多个业务系统（HR、ERP、…），
+业务表混进来会让基座无法干净地 clone 使用；且各业务系统需要独立的发版节奏。
+
+### 业务后端仓（例：`tide-hr`）
+
+```toml
+# tide-hr/Cargo.toml
+[dependencies]
+tide-server = { git = "https://github.com/<you>/tide-server", tag = "v0.2.0" }
+salvo = { version = "0.95", features = ["oapi"] }
+sea-orm = { version = "1", features = ["sqlx-mysql", "runtime-tokio", "macros", "with-chrono", "with-json"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+```
+
+```rust
+// tide-hr/src/main.rs —— 用自己的业务域启动基座
+use salvo::prelude::Router;
+use tide_server::infra;
+use tide_server::modules::{DomainMount, MountGuard};
+
+mod employee; // 本仓自己的业务域（四件套，写法与基座内置域一致）
+
+/// 本仓自己的域：`Protected` 自动获得鉴权 / 操作日志 / 接口授权三件套。
+const HR_DOMAINS: &[DomainMount] = &[DomainMount {
+    path: "employee",
+    guard: MountGuard::Protected,
+    routers: &[employee::routes],
+}];
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().init();
+    let config = infra::config::Config::load()?;
+    infra::app::run_with_domains(config, HR_DOMAINS).await
+}
+```
+
+要点：
+
+- **不必接鉴权**：业务域走完 `Protected` 后与平台域同权，中间件、超时豁免、统一错误体都自动生效；
+- **别忘了登记接口权限点**：新端点要进 `sys_api`（未登记接口按 fail-open 放行）；
+- 配置仍从**进程工作目录**的 `config.toml` 读（`TIDE_*` 环境变量可覆盖全部项）；
+- 基座升级 = 改 tag；基座当前**不承诺跨 tag 的 API 兼容**，升版时预期需小改。
+
+### 业务前端仓（例：`tide-hr-admin`）
+
+从 [tide-admin](https://github.com/xqh-jason/tide-admin) fork 一份（它的 `apps/web-ele`
+是基座管理界面），然后把新页面放进 `apps/web-ele/src/views/biz/<域>/`：
+
+- 页面三件：`index.vue`（页面 + vxe-table）+ `data.ts`(列 / 搜索 / 表单 schema)
+  + `modules/form.vue`（新建 / 编辑抽屉）；
+- `apps/web-ele/src/api/<域>.ts` 一个资源一个文件；
+- **菜单由后端驱动**（`accessMode: backend`）：在基座的 `MENU_SEEDS` 里加页面行，
+  `component` 写 `#/views/biz/employee/index.vue`（会被 `normalizeComponent`
+  归一并命中 `import.meta.glob`）；
+- 若菜单种子在业务仓而不在基座：把页面路径写进你后端仓的种子实现里即可，
+  前端只需保证文件路径可被归一化匹配。
+
+### 部署
+
+`docker-compose.yml` 的 `frontend.build.context` 已改为可配置：
+
+```bash
+FRONTEND_DIR=../tide-hr-admin docker compose up -d --build
+```
+
+默认值 `../tide-admin` 即本仓自带前端。
 
 ## 🧪 测试与 CI
 

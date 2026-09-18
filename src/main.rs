@@ -1,9 +1,14 @@
-mod entity;
-mod infra;
-mod middleware;
-mod modules;
-mod task;
-mod utils;
+//! tide-server 可执行入口：初始化日志，装载配置，交给基座启动管线。
+//!
+//! 2026-09-18 起本 crate 同时有 lib target（见 `src/lib.rs`）：平台能力都在库里，
+//! 本文件只做「进程级」的事（日志订阅者、配置装载、启动）。
+//!
+//! 业务仓库（如 tide-hr）**不需要复制本文件**：在自己的 `main.rs` 里调用
+//! `tide_server::infra::app::run(config)`，并用
+//! `tide_server::modules::register_domain(...)` 注册自己的业务域即可。
+//! 需要自定义日志格式时照抄下面的 `LocalSeconds`（它是进程级策略，不属于基座）。
+
+use tide_server::infra;
 
 /// 日志时间戳：本地时间到秒。默认 fmt timer 输出 UTC RFC3339
 /// （如 2026-09-07T07:07:14.897536Z），可读性差，这里统一替换。
@@ -18,7 +23,8 @@ impl tracing_subscriber::fmt::time::FormatTime for LocalSeconds {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 日志初始化：可用 RUST_LOG 环境变量覆盖，默认 info 级别、本项目 debug。
+    // 日志初始化：可用 RUST_LOG 环境变量覆盖，默认 info 级别、本项目 debug。本项目实际为
+    // `tide_server=debug`，因为 lib target 的 crate 名即 `tide_server`，与拆分前一致。
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -27,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
         .with_timer(LocalSeconds)
         .init();
 
+    // 配置装载走基座（`config.toml` + `TIDE_*` 环境变量覆盖，含 fail-fast 校验）。
     let config = infra::config::Config::load()?;
     infra::app::run(config).await
 }

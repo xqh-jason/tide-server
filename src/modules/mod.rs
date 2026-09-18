@@ -65,15 +65,22 @@ pub enum MountGuard {
 /// 一条挂载记录：`path` 为 `api/v1` 下的前缀；空串表示直接挂 `api/v1`（出口自带 path，
 /// 如 `system::health::routes()` 自带 `/health`、`system::auth::routes()` 自带 `/auth`）。
 /// 同一前缀可并挂多个出口（如 `/user` 下 user CRUD 与 menu 域的菜单契约端点）。
+///
+/// `Clone` / `Debug` / `PartialEq` 是给外部业务仓用的：它们在自己的 `main.rs` 里
+/// 写 `const MY_DOMAINS: &[DomainMount]`，合并时需要 `Clone`，
+/// 测试里比较需要 `Debug` + `PartialEq`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DomainMount {
     pub path: &'static str,
     pub guard: MountGuard,
     pub routers: &'static [fn() -> Router],
 }
 
-/// 域挂载登记表（装配点收敛）：新增域在此追加一行，
+/// 基座内置域挂载登记表（装配点收敛）：新增平台域在此追加一行，
 /// `infra/router.rs` 据此循环挂载，不再逐域手写 push + 中间件三件套。
 /// 顺序贴合历史挂载顺序，便于 diff 对照。
+///
+/// **这不是全部**：外部业务仓库注册的域不在本表内，见 [`all_domains`]。
 pub const DOMAINS: &[DomainMount] = &[
     // 健康检查：出口自带 `/health`，公开
     DomainMount {
@@ -190,3 +197,111 @@ pub const DOMAINS: &[DomainMount] = &[
         routers: &[system::refresh_token::routes],
     },
 ];
+
+// ---------------------------------------------------------------------------
+// 外部业务域注册（2026-09-18 新增）
+// ---------------------------------------------------------------------------
+//
+// # 背景：为什么需要这个
+//
+// 在只交付一个二进制的年代，业务域跟平台域同处一仓，`DOMAINS` 直接改就行。
+// 但业务仓库（如 tide-hr）现在以 **git 依赖 + 版本 tag** 消费本 crate——
+// 它们改不了基座的源码，因此需要一个**运行时往装配表里追加行**的入口。
+//
+// # 设计取舍：为什么不用全局可变静态量
+//
+// 最直觉的做法是 `static EXTRA: Mutex<Vec<DomainMount>>` + `add_domain()`。
+// 那需要把 `DomainMount` 的字段改成 `'static` 之外的形态（或要求调用方
+// `Box::leak`），并且引入了「主线程先注册、否则漏挂」的隐式时序依赖，
+// 在测试并行时会变成随机失败。
+//
+// 本模块改用**显式传递**：路由组装收一个 `&[DomainMount]`。
+// - 基座自己的二进制（`main.rs`）不需要注册，行为与改造前完全一致；
+// - 业务仓库在自己的 `main.rs` 里写一个 `const MY_DOMAINS: &[DomainMount]`，
+//   然后把 `extra` 传给 `router::build_with`；
+// - 没有隐藏状态，测试可以各自传各自的行，并行安全。
+//
+// # 业务仓库怎么用
+//
+// ```ignore
+// // tide-hr/src/main.rs
+// use salvo::prelude::Router;
+// use tide_server::modules::{DomainMount, MountGuard};
+//
+// /// 本仓库自己的业务域：写法与基座内置行完全一致。
+// const HR_DOMAINS: &[DomainMount] = &[DomainMount {
+//     path: "employee",
+//     guard: MountGuard::Protected,
+//     routers: &[hr_employee::routes],
+// }];
+//
+// #[tokio::main]
+// async fn main() -> anyhow::Result<()> {
+//     let config = tide_server::infra::config::Config::load()?;
+//     tide_server::infra::app::run_with_domains(config, HR_DOMAINS).await
+// }
+// ```
+//
+// 业务仓的域同样得到 `AuthRequired` / `OperationLog` / `ApiPermission`
+// 三件套（选 `MountGuard::Protected` 时），**无需自己接鉴权**；
+// 别忘了把新接口登记进 `sys_api`（未登记接口按 fail-open 放行，见根 README）。
+
+/// 合并基座内置域与外部注册域，得到最终挂载顺序。
+///
+/// 顺序 = [`DOMAINS`] 在前、`extra` 在后。路由匹配是「先注册先命中」吗？
+/// 不是——Salvo 的路由树按完整路径匹配，基座内置的 19 条与业务域不同前缀，
+/// 不存在覆盖关系；但**同前缀**的两种情况要留意：
+/// - 业务域想复用一个**已存在的**前缀（如往 `/user` 下加端点）：
+///   应当改基座（属于平台能力），或在业务域用**自己的**前缀；
+/// - 业务域之间同前缀：由业务仓自己保证前缀唯一。
+pub fn all_domains(extra: &[DomainMount]) -> Vec<DomainMount> {
+    let mut all = Vec::with_capacity(DOMAINS.len() + extra.len());
+    all.extend_from_slice(DOMAINS);
+    all.extend_from_slice(extra);
+    all
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use salvo::prelude::Router;
+
+    /// 业务域出口：模拟外部仓库提供的 `routes()`。
+    fn hr_employee_routes() -> Router {
+        Router::with_path("list").goal(salvo::handler::empty())
+    }
+
+    /// **C3 扩展点回归**（2026-09-18）：外部业务仓能把自己的域追加到装配表，
+    /// 且基座内置的 19 条不被覆盖、顺序仍在前面。
+    ///
+    /// 改造前不可能写出本用例：`DOMAINS` 是 `const`，路由组装直接读它，
+    /// 外部 crate 没有追加入口。
+    #[test]
+    fn external_domains_are_appended_after_builtin() {
+        const EXTRA: &[DomainMount] = &[DomainMount {
+            path: "employee",
+            guard: MountGuard::Protected,
+            routers: &[hr_employee_routes],
+        }];
+
+        let merged = all_domains(EXTRA);
+
+        // 内置域一条不少、且都在前面（C4：行为不变）。
+        assert_eq!(merged.len(), DOMAINS.len() + 1);
+        assert_eq!(&merged[..DOMAINS.len()], DOMAINS);
+
+        // 外部域确实在尾部，且字段未被改写。
+        let last = merged.last().expect("合并结果不应为空");
+        assert_eq!(last.path, "employee");
+        assert_eq!(last.guard, MountGuard::Protected);
+        assert_eq!(last.routers.len(), 1);
+    }
+
+    /// 业务仓不注册任何域时与改造前完全一致（`build` 走的正是这条路径）。
+    #[test]
+    fn empty_extra_yields_builtin_only() {
+        let merged = all_domains(&[]);
+        assert_eq!(merged.len(), DOMAINS.len());
+        assert!(merged.iter().eq(DOMAINS.iter()));
+    }
+}
