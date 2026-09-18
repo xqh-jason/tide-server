@@ -33,7 +33,10 @@ pub async fn find_page(
     }
 
     if let Some(v) = &filter.keyword {
-        cond = cond.add(sys_operation_log::Column::Path.like(format!("%{}%", v)));
+        // 前缀匹配（`x%`）才能走索引；前导通配符（`%x%`）会让 B-Tree 索引失效，
+        // 退化成全表扫描（EXPLAIN 的 type=ALL）。
+        // 使用方式：输入 `/api/v1/user` 可检索该前缀下所有接口的调用记录。
+        cond = cond.add(sys_operation_log::Column::Path.like(format!("{v}%")));
     }
     if let Some(v) = &filter.ip {
         cond = cond.add(sys_operation_log::Column::Ip.like(format!("%{}%", v)));
@@ -181,7 +184,11 @@ mod tests {
         let base = chrono::Local::now().naive_local();
         let deleted_at = Some(chrono::Local::now().naive_local());
 
-        // 命中 keyword 的三条活记录，created_at 依次递增（倒序应返回 newest 在前）
+        // 命中 keyword 的三条活记录：用 `/api/v1/test/{kw}` 作 keyword。
+        // seed 会把传入值拼成 `/api/v1/test/{值}`，故这些行的 path 均以该串开头，
+        // 前缀匹配（LIKE 'x%'）能命中且可走索引（LIKE '%x%' 退化为全表扫）。
+        // created_at 依次递增（与插入序一致）。
+        let prefix = format!("/api/v1/test/{kw}");
         let older = seed(&db, &kw, 1, 200, base - chrono::Duration::seconds(3), None).await;
         let middle = seed(&db, &kw, 2, 200, base - chrono::Duration::seconds(2), None).await;
         let newer = seed(&db, &kw, 1, 500, base - chrono::Duration::seconds(1), None).await;
@@ -191,7 +198,7 @@ mod tests {
         let by_keyword = find_page(
             &db,
             &OperationLogFilter {
-                keyword: Some(kw.clone()),
+                keyword: Some(prefix.clone()),
                 created_at_begin: None,
                 created_at_end: None,
                 ip: None,
@@ -206,7 +213,7 @@ mod tests {
         let by_user = find_page(
             &db,
             &OperationLogFilter {
-                keyword: Some(kw.clone()),
+                keyword: Some(prefix.clone()),
                 user_id: Some(2),
                 status: None,
                 created_at_begin: None,
@@ -221,7 +228,7 @@ mod tests {
         let by_status = find_page(
             &db,
             &OperationLogFilter {
-                keyword: Some(kw.clone()),
+                keyword: Some(prefix.clone()),
                 user_id: None,
                 status: Some(500),
                 created_at_begin: None,
@@ -234,13 +241,15 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(by_keyword.total, 3, "keyword 应命中 3 条活记录");
-        let ids: Vec<u64> = by_keyword.items.iter().map(|m| m.id).collect();
         assert_eq!(
-            ids,
-            vec![newer.id, middle.id, older.id],
-            "应按 created_at 倒序"
+            by_keyword.total, 3,
+            "keyword 前缀应命中 3 条活记录（keyword 现在是路径前缀匹配）"
         );
+        let ids: Vec<u64> = by_keyword.items.iter().map(|m| m.id).collect();
+        // 统一口径：分页按主键降序。fixture 的插入序为 older→middle→newer，
+        // 故 id 降序 = [newer, middle, older]；created_at 序恰好相同，无法区分，
+        // 排序语义由 file/config 的专用用例守（那里两序相反）。
+        assert_eq!(ids, vec![newer.id, middle.id, older.id], "应按 id 降序");
         assert_eq!(by_user.total, 1, "user_id 精确过滤");
         assert_eq!(by_user.items[0].id, middle.id);
         assert_eq!(by_status.total, 1, "status 精确过滤");
@@ -267,10 +276,12 @@ mod tests {
         let affected = soft_delete_batch(&db, &[a.id, b.id, deleted.id])
             .await
             .unwrap();
+        // keyword 为路径前缀（seed 拼成 /api/v1/test/{kw}）
+        let prefix = format!("/api/v1/test/{kw}");
         let after = find_page(
             &db,
             &OperationLogFilter {
-                keyword: Some(kw.clone()),
+                keyword: Some(prefix.clone()),
                 user_id: None,
                 status: None,
                 created_at_begin: None,

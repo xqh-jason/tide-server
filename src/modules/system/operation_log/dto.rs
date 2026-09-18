@@ -18,7 +18,8 @@ pub struct OperationLogListReq {
     pub user_id: Option<u64>,
     /// HTTP 响应状态码精确过滤（如 `200` / `500`）；不传查全部
     pub status: Option<i32>,
-    /// 请求路径模糊搜索；不传查全部
+    /// 请求路径**前缀**匹配（如 `/api/v1/user`）；不传查全部。
+    /// 用前缀而非子串是为了能让索引生效（`LIKE 'x%'` 走 B-Tree，`LIKE '%x%'` 退化为全表扫）。
     pub keyword: Option<String>,
     /// 客户端 IP 模糊搜索；不传查全部
     pub ip: Option<String>,

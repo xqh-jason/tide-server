@@ -144,7 +144,11 @@ mod tests {
         let kw = unique("svc_page");
         let base = chrono::Local::now().naive_local();
         let deleted_at = Some(chrono::Local::now().naive_local());
+        // keyword 现在是**路径前缀**匹配：seed 会把值拼成 /api/v1/test/{值}，
+        // 故 keyword 用 `/api/v1/test/{kw}` 才能真正命中（且前缀才走索引）。
+        let prefix = format!("/api/v1/test/{kw}");
 
+        // keyword 现在是**路径前缀**匹配：把 kw 放在路径开头（/api/v1/test/{kw}）
         let _hit = seed(&db, &kw, 1, 200, base, None).await;
         let other_user = seed(&db, &kw, 2, 200, base - chrono::Duration::seconds(1), None).await;
         let other_status = seed(&db, &kw, 1, 500, base - chrono::Duration::seconds(2), None).await;
@@ -158,13 +162,13 @@ mod tests {
         )
         .await;
 
-        let by_keyword = page_operation_logs(&db, &list_req(Some(kw.clone()), None, None))
+        let by_keyword = page_operation_logs(&db, &list_req(Some(prefix.clone()), None, None))
             .await
             .unwrap();
-        let by_user = page_operation_logs(&db, &list_req(Some(kw.clone()), Some(2), None))
+        let by_user = page_operation_logs(&db, &list_req(Some(prefix.clone()), Some(2), None))
             .await
             .unwrap();
-        let by_status = page_operation_logs(&db, &list_req(Some(kw.clone()), None, Some(500)))
+        let by_status = page_operation_logs(&db, &list_req(Some(prefix.clone()), None, Some(500)))
             .await
             .unwrap();
 
