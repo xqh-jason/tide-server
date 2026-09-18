@@ -24,7 +24,9 @@ allow_credentials = false
 max_age = 3600
 
 [jwt]
-# 开发密钥；生产环境务必用 config.local.toml 或环境变量覆盖
+# 开发密钥；不要用于任何公网部署。
+# 覆盖方式：环境变量 TIDE_JWT__SECRET（部署环境用强随机串）。
+# 注意：非 development 档位仍用此默认值时，服务会拒绝启动（fail-fast）。
 secret = "dev-secret-change-me"
 # access token 2 小时；过期由前端静默调 /auth/refresh 续期
 ttl_seconds = 7200

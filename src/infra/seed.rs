@@ -600,7 +600,7 @@ const fn api(
     }
 }
 
-/// 全部管理端点登记（86 条）。刻意排除：
+/// 全部管理端点登记（87 条）。刻意排除：
 /// - 公开接口：/health、/captcha/generate、/auth/{login,logout}、GET /site-config/get；
 /// - 登录后每个用户必调的契约端点：POST /user/{info,access-codes,menus}
 ///   （登记即 fail-closed，会把所有非超管用户挡在登录态之外）。

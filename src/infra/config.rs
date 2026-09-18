@@ -8,8 +8,11 @@ use serde::Deserialize;
 /// 环境变量优先级高于 config.toml，未设置的字段仍取配置文件默认值。
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    /// 运行环境：`development` / `production`。开发种子数据（admin 弱口令重置）
-    /// 仅在 `development` 下执行，缺省视为开发环境。
+    /// 运行环境：`development` / `production`（缺省 `development`）。
+    ///
+    /// 档位影响两件事：开发种子（admin 弱口令重置）仅在 `development` 执行；
+    /// 非开发档位禁止沿用开发默认密钥 `jwt.secret`（fail-fast，见
+    /// [`ensure_production_secret`]）。
     #[serde(default = "default_env")]
     pub env: String,
     /// 启动种子开关（部署补充）：生产环境默认关闭；首次部署置
@@ -201,19 +204,30 @@ fn default_refresh_ttl_seconds() -> i64 {
     604_800
 }
 
-/// 已知开发默认密钥：production 下命中即拒绝启动。公开弱密钥意味着任何人
+/// 已知开发默认密钥：非开发档位命中即拒绝启动。公开弱密钥意味着任何人
 /// 可自签合法 token；发版漏设 `TIDE_JWT__SECRET` 时静默回退是真实事故路径
 /// （spec：2026-09-14-jwt-secret-production-guard-design.md）。
 const KNOWN_DEV_SECRETS: [&str; 1] = ["dev-secret-change-me"];
 
-/// production 环境禁用默认开发密钥（fail-fast）。抽成纯函数是为了可测性：
+/// 明确允许沿用开发默认密钥的档位（其余一律按生产处置）。
+///
+/// 为什么是白名单而不是 `env == "production"` 黑名单：`env` 是自由字符串，
+/// 既有「不写 env 就是 development」的缺省，也有手写 `prod` / `production ` /
+/// `Production` 的拼写空间。黑名单语义下，任何一次拼写偏差都让 fail-fast
+/// 静默失效——服务带着公开密钥启动，攻击者即可自签任意用户（含超管）的 token。
+/// 白名单语义把「忘配 / 拼错」一律判死：开发档位必须显式写出。
+const DEV_ENVS: [&str; 2] = ["development", "test"];
+
+/// 非开发档位禁用默认开发密钥（fail-fast）。抽成纯函数是为了可测性：
 /// std::env 是进程全局资源，测试篡改 `TIDE_ENV` 会污染并行用例的
 /// `Config::load()`（fail-fast 生效后连库测试会意外失败）。
 fn ensure_production_secret(env: &str, secret: &str) -> anyhow::Result<()> {
-    if env == "production" && KNOWN_DEV_SECRETS.contains(&secret) {
+    let is_dev = DEV_ENVS.contains(&env.trim());
+    if !is_dev && KNOWN_DEV_SECRETS.contains(&secret) {
         anyhow::bail!(
-            "production 环境禁止使用默认开发密钥 jwt.secret，\
-             请设置专用密钥（TIDE_JWT__SECRET 或 config 覆盖）"
+            "非开发环境（当前 env = {env:?}）禁止使用默认开发密钥 jwt.secret，\
+             请设置专用密钥（TIDE_JWT__SECRET 或 config 覆盖）；\
+             本地开发请显式设置 env = \"development\""
         );
     }
     Ok(())
@@ -247,6 +261,8 @@ impl Config {
         if cfg.upload.dir.trim().is_empty() {
             anyhow::bail!("config.upload.dir 不能为空");
         }
+        // 非开发档位禁用开发默认密钥（白名单语义：env 只能是 development/test，
+        // 其余含未配置、拼写偏差一律按生产处置）
         ensure_production_secret(&cfg.env, &cfg.jwt.secret)?;
         Ok(cfg)
     }
@@ -383,6 +399,38 @@ mod tests {
     fn development_with_dev_secret_is_accepted() {
         ensure_production_secret("development", "dev-secret-change-me").unwrap();
     }
+
+    /// 哨兵：未写 `env` 时不可静默放行开发密钥。
+    ///
+    /// 回归价值：白名单语义若被改回 `env == "production"` 黑名单，本用例即红
+    /// ——「env 忘配」是部署事故最常见的形态（本地 config.toml 是随仓提交的
+    /// 模板，绝大多数使用者直接沿用），此时服务会带着公开密钥监听。
+    #[test]
+    fn unknown_env_with_dev_secret_is_rejected() {
+        let err = ensure_production_secret("", "dev-secret-change-me").unwrap_err();
+        assert!(
+            err.to_string().contains("jwt.secret"),
+            "错误应提示设置专用密钥，实际：{err}"
+        );
+    }
+
+    /// 拼写偏差（如 `prod`、大小写不同、尾随空格）不得绕过 fail-fast。
+    #[test]
+    fn misspelled_env_with_dev_secret_is_rejected() {
+        for env in ["prod", "Production", "production ", "staging"] {
+            assert!(
+                ensure_production_secret(env, "dev-secret-change-me").is_err(),
+                "env = {env:?} 应被判为非开发档位"
+            );
+        }
+    }
+
+    /// test 档位与 development 同等：CI 与单元测试沿用默认密钥不受影响。
+    #[test]
+    fn test_env_with_dev_secret_is_accepted() {
+        ensure_production_secret("test", "dev-secret-change-me").unwrap();
+    }
+
     /// `log_retention` 四个字段能被环境变量覆盖（`TIDE_LOG_RETENTION__*_DAYS`）。
     ///
     /// 回归价值：这些拼写是「配置层字符串 → 结构体字段」的隐式映射，
