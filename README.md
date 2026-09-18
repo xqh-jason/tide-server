@@ -3,7 +3,7 @@
 # tide-server
 
 基于 **Rust · Salvo · SeaORM** 的 RBAC 中后台管理系统后端，
-配套前端 [tide-admin](https://github.com/xqh-jason/tide-admin)（Vue Vben Admin 5.x）
+配套前端 [tide-admin](https://github.com/xqh-jason/tide-admin)（其基座为 Vue Vben Admin 5.x）
 
 [![CI](https://github.com/xqh-jason/tide-server/actions/workflows/ci.yml/badge.svg)](https://github.com/xqh-jason/tide-server/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
