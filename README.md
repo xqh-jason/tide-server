@@ -183,7 +183,7 @@ docker compose up -d backend                                  # 改回默认后�
 
 ```
 src/
-├── lib.rs                                    # 基座公开面（业务仓依赖的入口，2026-09-18 起）
+├── lib.rs                                    # 基座公开面（外部项目可依赖的入口，2026-09-18 起）
 ├── main.rs                                   # 进程入口：tracing + Config::load → infra::app::run
 ├── modules/system/<域>/                      # 平台能力域（垂直切片契约驱动四件套，18 个）
 ├── modules/biz/<域>/                         # 业务域容器（具体业务功能从这里生长）
@@ -197,21 +197,40 @@ codegen/             # 代码生成器（entity / 四件套骨架）
 docker/              # 容器入口脚本
 ```
 
-## 🧩 作为基座：派生你自己的业务系统
+## 🧩 作为基座：在本仓开发，或派生你自己的系统
 
-本仓是**两层模型的下层**：平台能力（认证 / RBAC / 字典 / 日志 / 定时任务 / 文件 / 组织）
-留在这里保持稳定；具体业务（人事 / ERP / 合同 …）在**独立的仓库**里生长，以
-**git 依赖 + 版本 tag** 引用本仓。
+本仓是**平台能力基座**：认证 / RBAC / 字典 / 日志 / 定时任务 / 文件 / 组织都已就绪，
+且与具体业务无关。**两种用法都支持，按你的想法选**：
 
-为什么分仓而不在本仓 `biz/` 里写：本仓要同时服务多个业务系统（HR、ERP、…），
-业务表混进来会让基座无法干净地 clone 使用；且各业务系统需要独立的发版节奏。
+| 用法 | 适合 | 怎么做 |
+|---|---|---|
+| **A. 直接 clone 本仓开发** | 你只有一个业务系统；想要最少的仓库与配置 | clone 后把业务域写进 `src/modules/biz/<域>/`，在 `DOMAINS` 加一行 |
+| **B. 作为依赖（独立仓库）** | 你要同时养多个业务系统；需要各自的发版节奏 | 自己的仓库用 **git 依赖 + 版本 tag** 引用本仓，用 `run_with_domains` 注册自己的域 |
 
-### 业务后端仓（例：`tide-hr`）
+两者都不需要 fork 基座去改核心机制。**若你选 B，本仓保持业务中性**：业务表（前缀随你自定）
+属于你自己的 crate 与迁移，不回流本仓——这样一个基座可以同时服务多个业务系统。
+（选 A 则是你把这仓当成自己项目的起点，`biz/` 与 `DOMAINS` 都可以按需改。）
+
+### 用法 A：直接在本仓开发
+
+```
+src/modules/biz/<你的域>/    # 四件套 api/service/repo/dto，写法与 system/ 下的域完全一致
+src/entity/<你的表>.rs        # 实体（可用 codegen 生成）
+migrations/                   # 业务表迁移（追加新文件，不改 baseline）
+```
+
+接入三处：`src/entity/mod.rs` 加 `pub mod <表>;` → `src/modules/biz/mod.rs` 加
+`pub mod <域>;` → `src/modules/mod.rs` 的 `DOMAINS` 加一行。前端页面放
+`tide-admin` 的 `apps/web-ele/src/views/biz/<域>/`。
+
+### 用法 B：派生独立业务仓
+
+#### 后端仓
 
 ```toml
-# tide-hr/Cargo.toml
+# <你的仓库>/Cargo.toml
 [dependencies]
-tide-server = { git = "https://github.com/<you>/tide-server", tag = "v0.2.0" }
+tide-server = { git = "https://github.com/<owner>/tide-server", tag = "v0.2.0" }
 salvo = { version = "0.95", features = ["oapi"] }
 sea-orm = { version = "1", features = ["sqlx-mysql", "runtime-tokio", "macros", "with-chrono", "with-json"] }
 tokio = { version = "1", features = ["full"] }
@@ -219,25 +238,25 @@ anyhow = "1"
 ```
 
 ```rust
-// tide-hr/src/main.rs —— 用自己的业务域启动基座
+// <你的仓库>/src/main.rs —— 用自己的业务域启动基座
 use salvo::prelude::Router;
 use tide_server::infra;
 use tide_server::modules::{DomainMount, MountGuard};
 
-mod employee; // 本仓自己的业务域（四件套，写法与基座内置域一致）
+mod my_domain; // 你自己的业务域（四件套，写法与基座内置域一致）
 
-/// 本仓自己的域：`Protected` 自动获得鉴权 / 操作日志 / 接口授权三件套。
-const HR_DOMAINS: &[DomainMount] = &[DomainMount {
-    path: "employee",
+/// 你自己的域：`Protected` 自动获得鉴权 / 操作日志 / 接口授权三件套。
+const MY_DOMAINS: &[DomainMount] = &[DomainMount {
+    path: "<域前缀>",
     guard: MountGuard::Protected,
-    routers: &[employee::routes],
+    routers: &[my_domain::routes],
 }];
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().init();
     let config = infra::config::Config::load()?;
-    infra::app::run_with_domains(config, HR_DOMAINS).await
+    infra::app::run_with_domains(config, MY_DOMAINS).await
 }
 ```
 
@@ -248,23 +267,22 @@ async fn main() -> anyhow::Result<()> {
 - 配置仍从**进程工作目录**的 `config.toml` 读（`TIDE_*` 环境变量可覆盖全部项）；
 - 基座升级 = 改 tag；基座当前**不承诺跨 tag 的 API 兼容**，升版时预期需小改。
 
-### 业务前端仓（例：`tide-hr-admin`）
+#### 前端仓
 
 从 [tide-admin](https://github.com/xqh-jason/tide-admin) fork 一份（它的 `apps/web-ele`
-是基座管理界面），然后把新页面放进 `apps/web-ele/src/views/biz/<域>/`：
+是基座管理界面），然后把新页面放进 `apps/web-ele/src/views/<分组>/<域>/`：
 
 - 页面三件：`index.vue`（页面 + vxe-table）+ `data.ts`(列 / 搜索 / 表单 schema)
   + `modules/form.vue`（新建 / 编辑抽屉）；
 - `apps/web-ele/src/api/<域>.ts` 一个资源一个文件；
-- **菜单由后端驱动**（`accessMode: backend`）：在基座的 `MENU_SEEDS` 里加页面行，
-  `component` 写 `#/views/biz/employee/index.vue`（会被 `normalizeComponent`
+- **菜单由后端驱动**（`accessMode: backend`）：在 `MENU_SEEDS` 里加页面行，
+  `component` 写 `#/views/<分组>/<域>/index.vue`（会被 `normalizeComponent`
   归一并命中 `import.meta.glob`）；
-- 若菜单种子在业务仓而不在基座：把页面路径写进你后端仓的种子实现里即可，
-  前端只需保证文件路径可被归一化匹配。
+- 页面也可以直接放在基座的 `tide-admin` 里（用法 A），此时菜单种子同样在基座。
 
 ### 基座发版（tag 流程）
 
-业务仓靠 tag 固定基座版本，所以 tag 就是发布点。**先过门禁、再打 tag**：
+只要有人用 tag 引用本仓，tag 就是发布点（用法 A 不需要发版）。**先过门禁、再打 tag**：
 
 ```bash
 # 1. 三道门禁全绿（CI 对 tag 也会跑，但本地先跑一轮能省一个来回）
@@ -272,23 +290,23 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test                      # 需本地 MySQL
 
-# 2. 打 tag（推送到远端后业务仓才能解析）
-git tag v0.2.0
+# 2. 打 tag（推送到远端后消费方才能解析）
+git tag vX.Y.Z
 git push origin main --tags
 ```
 
-业务仓升级 = 改 `Cargo.toml` 的 `tag` 后 `cargo update -p tide-server`。
+消费方升级 = 改 `Cargo.toml` 的 `tag` 后 `cargo update -p tide-server`。
 
-**为什么强调“先过门禁”**：2026-09-18 实际踩过——tag 已打好、业务仓也拉到了，
+**为什么强调“先过门禁”**：2026-09-18 实际踩过——tag 已打好、消费方也拉到了，
 才发现该提交在 `-D warnings` 下不干净（一个 clippy 告警），只能 `git tag -d` 重打。
 现在 CI 监听 `tags: ["v*"]`，tag 自身也有校验，但 CI 是事后发现，本地门禁是事前。
 
 ### 部署
 
-`docker-compose.yml` 的 `frontend.build.context` 已改为可配置：
+`docker-compose.yml` 的 `frontend.build.context` 可配置（用法 A 用默认值即可）：
 
 ```bash
-FRONTEND_DIR=../tide-hr-admin docker compose up -d --build
+FRONTEND_DIR=<你的前端目录> docker compose up -d --build
 ```
 
 默认值 `../tide-admin` 即本仓自带前端。

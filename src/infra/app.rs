@@ -15,11 +15,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
 /// 启动完整服务，并额外挂载 `extra` 里的业务域。
 ///
-/// 业务仓库（以 git 依赖 + 版本 tag 消费本 crate）的入口写法：
+/// 外部项目（以 git 依赖 + 版本 tag 消费本 crate）的入口写法：
 ///
 /// ```ignore
 /// let config = tide_server::infra::config::Config::load()?;
-/// tide_server::infra::app::run_with_domains(config, HR_DOMAINS).await
+/// tide_server::infra::app::run_with_domains(config, MY_DOMAINS).await
 /// ```
 ///
 /// `extra` 里的域享受与平台域相同的中间件三件套、超时豁免、契约体与

@@ -31,8 +31,9 @@ tide-server/
 
 三个独立包、非 workspace：根 crate / `migrations/` / `codegen/`。
 
-**两层模型的基座**（2026-09-18 起）：本仓是可被独立业务仓（tide-hr 等）以
-**git 依赖 + 版本 tag** 消费的基座；业务表不在本仓，见 README「作为基座」一节。
+**平台能力基座**（2026-09-18 起）：本仓可被独立业务仓以 **git 依赖 + 版本 tag** 消费，
+也可直接 clone 后在本仓内开发业务；业务表属于业务系统自己的 crate 与迁移，不回流本仓。
+见 README「作为基座」一节。
 
 ## WHERE TO LOOK
 

@@ -25,26 +25,27 @@ cargo test
 
 默认账号 `admin / admin123`（development 档位每次启动重置，仅限本地）。
 
-## 作为基座开发（两个仓库）
+## 作为基座开发（两种用法）
 
-本仓是**基座**，不包含业务表。两种贡献场景不要搞混：
+本仓是**平台能力基座**，不包含具体业务表。两种用法都支持，按你的想法选：
 
-| 改造目标 | 改哪里 | 说明 |
-|---|---|---|
-| 平台能力（RBAC / 认证 / 字典 / 日志 / 任务 / 文件 / 组织） | **本仓** | 改完要走下面的发版流程 |
-| 具体业务（人事 / ERP / …） | **业务仓**（如 tide-hr） | 不在本仓提 PR |
+| 用法 | 怎么做 |
+|---|---|
+| **直接在本仓开发业务** | 业务域写进 `src/modules/biz/<域>/`，在 `DOMAINS` 加一行，前端页面放 `tide-admin` |
+| **独立仓库依赖本仓** | 你的 `Cargo.toml` 写 `git + tag`，`main.rs` 用 `run_with_domains` 注册自己的域 |
+
+两者的写法见 README「作为基座」一节。
 
 本仓对外接口就是 `src/lib.rs` 里的 6 个 `pub mod`。**改动公开面（新增/修改 pub 项、
-改变函数签名）属于破坏性变更**：业务仓以 git 依赖 + 版本 tag 消费本仓，签名一改它们
-就编不过。这类改动请同时说明升级影响。
+改变函数签名）属于破坏性变更**：以 tag 引用本仓的使用方会受影响。这类改动请同时说明升级影响。
 
 ### 发版（tag）
 
-业务仓靠 tag 固定版本，所以 tag 即发布点。**门禁全绿后再打 tag**：
+只要有人用 tag 引用，tag 就是发布点。**门禁全绿后再打 tag**：
 
 ```bash
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-git tag v0.2.1 && git push origin main --tags
+git tag vX.Y.Z && git push origin main --tags
 ```
 
 CI 已监听 `tags: ["v*"]`；但 CI 是事后发现，本地先跑一轮能省一个来回

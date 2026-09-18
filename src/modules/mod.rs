@@ -204,9 +204,11 @@ pub const DOMAINS: &[DomainMount] = &[
 //
 // # 背景：为什么需要这个
 //
-// 在只交付一个二进制的年代，业务域跟平台域同处一仓，`DOMAINS` 直接改就行。
-// 但业务仓库（如 tide-hr）现在以 **git 依赖 + 版本 tag** 消费本 crate——
-// 它们改不了基座的源码，因此需要一个**运行时往装配表里追加行**的入口。
+// 如果只交付一个二进制，业务域跟平台域同处一仓，`DOMAINS` 直接改就行。
+// 但本 crate 现在也可以被外部项目以 **git 依赖 + 版本 tag** 消费——
+// 它们改不了基座的源码，因此需要一个**往装配表里追加行**的入口。
+//
+// （另：直接 clone 本仓开发的项目不需要这些，改 `DOMAINS` 即可。）
 //
 // # 设计取舍：为什么不用全局可变静态量
 //
@@ -217,28 +219,28 @@ pub const DOMAINS: &[DomainMount] = &[
 //
 // 本模块改用**显式传递**：路由组装收一个 `&[DomainMount]`。
 // - 基座自己的二进制（`main.rs`）不需要注册，行为与改造前完全一致；
-// - 业务仓库在自己的 `main.rs` 里写一个 `const MY_DOMAINS: &[DomainMount]`，
+// - 外部项目在自己的 `main.rs` 里写一个 `const MY_DOMAINS: &[DomainMount]`，
 //   然后把 `extra` 传给 `router::build_with`；
 // - 没有隐藏状态，测试可以各自传各自的行，并行安全。
 //
-// # 业务仓库怎么用
+// # 外部项目怎么用
 //
 // ```ignore
-// // tide-hr/src/main.rs
+// // <你的项目>/src/main.rs
 // use salvo::prelude::Router;
 // use tide_server::modules::{DomainMount, MountGuard};
 //
-// /// 本仓库自己的业务域：写法与基座内置行完全一致。
-// const HR_DOMAINS: &[DomainMount] = &[DomainMount {
-//     path: "employee",
+// /// 你自己的域：写法与基座内置行完全一致。
+// const MY_DOMAINS: &[DomainMount] = &[DomainMount {
+//     path: "<域前缀>",
 //     guard: MountGuard::Protected,
-//     routers: &[hr_employee::routes],
+//     routers: &[my_domain::routes],
 // }];
 //
 // #[tokio::main]
 // async fn main() -> anyhow::Result<()> {
 //     let config = tide_server::infra::config::Config::load()?;
-//     tide_server::infra::app::run_with_domains(config, HR_DOMAINS).await
+//     tide_server::infra::app::run_with_domains(config, MY_DOMAINS).await
 // }
 // ```
 //
@@ -266,12 +268,12 @@ mod tests {
     use super::*;
     use salvo::prelude::Router;
 
-    /// 业务域出口：模拟外部仓库提供的 `routes()`。
-    fn hr_employee_routes() -> Router {
+    /// 业务域出口：模拟外部项目提供的 `routes()`。
+    fn external_routes() -> Router {
         Router::with_path("list").goal(salvo::handler::empty())
     }
 
-    /// **C3 扩展点回归**（2026-09-18）：外部业务仓能把自己的域追加到装配表，
+    /// **扩展点回归**（2026-09-18）：外部项目能把自己的域追加到装配表，
     /// 且基座内置的 19 条不被覆盖、顺序仍在前面。
     ///
     /// 改造前不可能写出本用例：`DOMAINS` 是 `const`，路由组装直接读它，
@@ -279,20 +281,20 @@ mod tests {
     #[test]
     fn external_domains_are_appended_after_builtin() {
         const EXTRA: &[DomainMount] = &[DomainMount {
-            path: "employee",
+            path: "my-domain",
             guard: MountGuard::Protected,
-            routers: &[hr_employee_routes],
+            routers: &[external_routes],
         }];
 
         let merged = all_domains(EXTRA);
 
-        // 内置域一条不少、且都在前面（C4：行为不变）。
+        // 内置域一条不少、且都在前面（行为不变）。
         assert_eq!(merged.len(), DOMAINS.len() + 1);
         assert_eq!(&merged[..DOMAINS.len()], DOMAINS);
 
         // 外部域确实在尾部，且字段未被改写。
         let last = merged.last().expect("合并结果不应为空");
-        assert_eq!(last.path, "employee");
+        assert_eq!(last.path, "my-domain");
         assert_eq!(last.guard, MountGuard::Protected);
         assert_eq!(last.routers.len(), 1);
     }
