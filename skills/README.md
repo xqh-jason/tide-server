@@ -17,6 +17,18 @@
 
 AI agent skills for the [Salvo](https://salvo.rs) web framework. These skills help AI assistants understand and generate Salvo code more effectively.
 
+> **Vendored snapshot（第三方语料，请先读）**
+>
+> 本目录是上游 **Salvo AI Agent Skills** 的只读快照（vendored），非本项目原创：
+> 来源 [salvo-rs/salvo-skills](https://github.com/salvo-rs/salvo-skills)（Salvo 项目官方 Agent Skills），
+> 遵循 agentskills.io 标准；上游声明「these skills are part of the Salvo project and follow
+> the same license」，即随 [Salvo](https://github.com/salvo-rs/salvo) 采用 **MIT**。
+>
+> 收录原因：给 AI 助手提供 Salvo API 语料。**与 tide-server 版本不同步**——
+> 语料钉 `salvo 0.94.0` / Rust 1.94，本项目是 `salvo 0.95` / Rust 1.96；示例中的
+> `.unwrap()` / `.expect()` 也不符合本项目的 clippy `deny` 基线。
+> 对外部使用者：本项目对语料内容不作维护与保证，需最新版本请从上游获取。
+
 ## What are Agent Skills?
 
 Agent Skills are specialized knowledge modules that AI assistants can load to perform specific tasks. They follow the [Agent Skills](https://agentskills.io) open standard and work with tools like GitHub Copilot, Claude Code, and other AI coding assistants.

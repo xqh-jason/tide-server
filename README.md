@@ -23,7 +23,7 @@
 - 静默刷新：`POST /auth/refresh` 凭 Cookie 换发新 access token（响应体为裸 token，
   失败真 HTTP 401）；角色随刷新从 DB 重查，权限变更最迟一个 token 周期生效
 - 服务端可吊销：登出 / 管理员强制下线 / 会话管理页，吊销即时生效、重启不丢
-- 过期凭证每日定时物理清理（保留 30 天供审计）
+- 过期凭证每日定时物理清理（保留 30 天供审计，天数可配、`0` = 永久保留）
 
 **权限（RBAC 三级同源）**
 
@@ -35,14 +35,21 @@
 
 - 部门（树表）/ 职位 / 数据字典（类型 + 字典项）/ 参数配置 / 文件上传 / 定时任务
 - 审计盖章（`created_by` / `updated_by`）与操作人名称批量拼装，请求体脱敏截断落操作日志
+- 操作日志**只记写请求**（非 POST 与读语义路径如 `/list`、`/get`、`/info`、`/download` 不落库），
+  消除只读翻页带来的写放大；授权失败的写请求仍留痕
+- 四类日志/会话保留期独立可配（操作日志 / 登录日志 / 调度日志 / 过期会话，`0` = 永久保留），
+  过期清理任务每日物理删除
 - 主表软删除、关系表硬删除约定贯穿全部查询
 
 **工程化**
 
 - 统一契约：`POST + JSON`，响应 `{ code, data, message }`（`code=1` 成功），
   HTTP 恒 200，仅认证失败 401；Swagger UI 开箱可用
-- SeaORM 迁移（独立 crate）+ 启动幂等种子（菜单树 / API 权限点 87 条 / 默认定时任务）
-- 438 个真库集成测试（事务回滚隔离，无孤儿数据）；clippy 对 unwrap / expect / todo /
+- SeaORM 迁移（独立 crate，含列表查询复合索引）+ 启动幂等种子（菜单树 46 条 /
+  API 权限点 87 条 / 默认定时任务）
+- 分页统一按主键降序（`ORDER BY id DESC`）：无排序时 LIMIT/OFFSET 行序由执行计划决定，
+  会出现跨页重复与漏项
+- 517 个真库集成测试（事务回滚隔离，无孤儿数据）；clippy 对 unwrap / expect / todo /
   unsafe 全量 deny
 
 ## 🧱 技术栈
@@ -50,7 +57,7 @@
 | 层 | 选型 |
 |---|---|
 | Web 框架 | Salvo 0.95（oapi OpenAPI 契约） |
-| ORM / 迁移 | SeaORM 1.x / sea-orm-migration（独立 crate `migration`） |
+| ORM / 迁移 | SeaORM 1.x / sea-orm-migration（独立 crate `migration`，目录 `migrations/`） |
 | 认证 | 双凭证 JWT（jsonwebtoken）+ 自研 RBAC |
 | 定时任务 | tokio-cron-scheduler + `sys_job` 调度注册表 |
 | 配置 | config-rs（`config.toml` + `TIDE_` 环境变量覆盖） |
@@ -109,6 +116,21 @@ docker compose up -d backend                                  # 改回默认后�
 
 随后**立即登录并修改 admin 密码**。
 
+### ⚠️ 上线前必做的三件事（安全部署须知）
+
+本项目默认值面向**本地开发**，直接上公网会失守。部署到生产前逐项确认：
+
+1. **关闭强口令重置种子**：保持 production 环境不设 `TIDE_SEED__ENABLED`（默认即关），
+   否则每次重启都会把 `admin` 密码重置为 `admin123`；bootstrap 完成后立即改密。
+2. **换掉 JWT 密钥**：`TIDE_JWT__SECRET` 必须是强随机串。`production` 环境下仍用内置
+   开发密钥，服务会**拒绝启动**（fail-fast，属于有意设计）。
+3. **确认上传目录与保留期**：`TIDE_UPLOAD__DIR` 指向的目录不要对外静态托管；
+   按合规要求设置 `TIDE_LOG_RETENTION__*_DAYS`（`0` = 永久保留）。
+
+另：接口鉴权对**未登记的 `path + method` 一律放行**（fail-open，便于逐域接管）。
+标准部署应保留种子数据中的 `API_SEEDS` 登记（87 条）；如果清空了 `sys_api` 表，
+所有已登录用户将可调用全部接口。
+
 ### 环境变量（`TIDE_` 前缀 + `__` 层级分隔）
 
 | 环境变量 | 对应配置 | 说明 |
@@ -119,16 +141,24 @@ docker compose up -d backend                                  # 改回默认后�
 | `TIDE_JWT__SECRET` | `jwt.secret` | JWT 签名密钥（compose 部署必设），生产替换为强随机串；production 下默认开发密钥会被拒绝启动 |
 | `TIDE_JWT__TTL_SECONDS` | `jwt.ttl_seconds` | access token 过期秒数（自动识别数字类型） |
 | `TIDE_JWT__REFRESH_TTL_SECONDS` | `jwt.refresh_ttl_seconds` | 刷新凭证有效期秒数 |
-| `TIDE_CORS__ALLOW_ORIGINS` | `cors.allow_origins` | 跨域白名单，逗号分隔（如 `a.com,b.com`） |
+| `TIDE_CORS__ALLOW_ORIGINS` | `cors.allow_origins` | 跨域白名单，逗号分隔（如 `a.com,b.com`）；配置文件内置的是 vben 默认的 5173，tide-admin 开发端口是 **5910**——经 Vite proxy 同源访问时不需改，若前端直连后端（非代理）则需把源站加进来 |
 | `TIDE_UPLOAD__DIR` | `upload.dir` | 上传落盘目录 |
+| `TIDE_LOG_RETENTION__OPERATION_LOG_DAYS` | `log_retention.operation_log_days` | 操作日志保留天数，默认 90；`0` = 永久保留 |
+| `TIDE_LOG_RETENTION__LOGIN_LOG_DAYS` | `log_retention.login_log_days` | 登录日志保留天数，默认 90；`0` = 永久保留 |
+| `TIDE_LOG_RETENTION__JOB_LOG_DAYS` | `log_retention.job_log_days` | 调度日志保留天数，默认 90；`0` = 永久保留 |
+| `TIDE_LOG_RETENTION__REFRESH_TOKEN_DAYS` | `log_retention.refresh_token_days` | 已过期会话保留天数，默认 30；`0` = 永久保留 |
 
 列表类字段统一逗号分隔；同源反代部署下无需配置 CORS。
+
+四类保留期分开配置而非共用一个天数：过期会话过期即不可用（保留仅供审计「谁被何时下线」），
+而审计日志是合规证据，通常需要更长窗口。
 
 ## 📡 接口契约
 
 - 所有端点 `POST + JSON body`（文件上传为 multipart），响应体统一
   `{ code: 1, data, message }`（`code=1` 成功 / `0` 失败），HTTP 恒 200，仅认证失败 401
-- 分页请求 `{ page, pageSize }`，响应 `{ total, totalPages, items }`
+- 分页请求 `{ page, pageSize }`，响应 `{ total, totalPages, items }`；结果统一按 `id` 降序
+- 操作日志的 `keyword` 为路径**前缀**匹配（如 `/api/v1/user`），前缀匹配才能利用 B-Tree 索引
 - Swagger UI：`/swagger-ui`（规范文件 `/api-doc/openapi.json`）
 
 ## 📁 目录结构
@@ -141,16 +171,18 @@ src/
 ├── middleware/                               # AuthRequired / OperationLog / ApiPermission
 ├── entity/                                   # SeaORM 实体（全局共享）
 ├── utils/                                    # 错误、响应体、JWT、密码、缓存、分页、人名字段拼装
-└── task/                                     # 定时清理任务（job 域注册）
-migrations/          # sea-orm-migration（独立 crate）
+└── task/                                     # 四类保留期清理任务（job 域注册，天数读配置）
+migrations/          # sea-orm-migration（独立 crate，包名 `migration`，含列表查询复合索引）
 codegen/             # 代码生成器（entity / 四件套骨架）
+skills/              # vendored：Salvo 官方 Agent Skills 语料（第三方，MIT，与本项目版本不同步）
 docker/              # 容器入口脚本
 ```
 
 ## 🧪 测试与 CI
 
 集成测试内联在各域 `repo.rs` / `service.rs`，直连本地 MySQL；测试夹具用事务回滚
-隔离（`test_txn()`），结束（含 panic）自动 ROLLBACK，不留孤儿数据。
+隔离（`test_txn()`），结束（含 panic）自动 ROLLBACK，不留孤儿数据；全量串行跑
+（同时跑两个 `cargo test` 会因共享种子行互相干扰）。
 
 ```bash
 cargo fmt --check && (cd migrations && cargo fmt --check)
@@ -170,8 +202,13 @@ CI（`.github/workflows/ci.yml`，`push/PR → main` 触发）：lint job
 
 - [Salvo](https://github.com/salvo-rs/salvo) / [SeaORM](https://github.com/SeaQL/sea-orm) — 后端框架
 - [Vue Vben Admin](https://github.com/vbenjs/vue-vben-admin) — 配套前端脚手架
+- [Salvo AI Agent Skills（salvo-skills）](https://github.com/salvo-rs/salvo-skills) — `skills/` 目录下的 Agent 语料（属于 Salvo 项目，随 Salvo 采用 MIT，vendored 快照）
 
 ## 📄 License
 
 本项目基于 [MIT](LICENSE) 协议开源；配套前端 tide-admin 同为 MIT。
+
+`skills/` 目录为 [salvo-rs/salvo-skills](https://github.com/salvo-rs/salvo-skills) 的 vendored 快照，
+属 Salvo 项目并按 Salvo 的 MIT 许可分发；本项目不对其内容作维护与保证
+（语料钉 Salvo 0.94 / Rust 1.94，本项目为 Salvo 0.95 / Rust 1.96）。
 
