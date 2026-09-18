@@ -13,6 +13,11 @@ mod validate;
 /// 用户端点：`POST /api/v1/user/{list,by-username,info,access-codes,create,update,get,
 /// get-depts,get-positions,update-status,delete,list-all,list-all-includes-soft-deleted}`。
 /// 菜单契约端点 `menus` 在 menu 域的 `user_routes()` 中注册。
+///
+/// 曾并存过一条指向同一 handler 的重复路由 `get-depts-by-user-id`（与 `get-depts` 同
+/// handler 不同 path）：`get-depts` 已登记 `sys_api` 而它未登记，于是该路径落在
+/// fail-open 上被放行（任意登录用户可查任意用户的部门归属）。前端 0 处引用，
+/// 已删除，使 `get-depts` 成为该 handler 的唯一入口。
 pub fn routes() -> Router {
     Router::new()
         .oapi_tags(["用户"])
@@ -35,5 +40,4 @@ pub fn routes() -> Router {
                 .post(api::list_all_users_includes_soft_deleted),
         )
         .push(Router::with_path("list-all").post(api::list_all_users))
-        .push(Router::with_path("get-depts-by-user-id").post(api::get_depts_by_user_id))
 }

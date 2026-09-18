@@ -53,7 +53,9 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/v1/health"]
+      # 必须判 body：项目契约「HTTP 恒 200」，curl -f 只看状态码会永远通过（DB 挂了也报健康）。
+      # 探活失败时 handler 返回 code:0，这里 grep 必须命中 code:1 才算健康。
+      test: ["CMD-SHELL", "curl -fsS -X POST http://127.0.0.1:8080/api/v1/health | grep -q '\"code\":1'"]
       interval: 10s
       timeout: 3s
       retries: 12
