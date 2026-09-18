@@ -25,6 +25,30 @@ pub struct Config {
     /// 跨域访问控制（CORS）。缺省为拒绝所有跨源（allow_origins 为空）。
     #[serde(default)]
     pub cors: Cors,
+    /// 操作日志相关策略（保留期等）。缺省 90 天。
+    #[serde(default)]
+    pub operation_log: OperationLog,
+}
+
+/// 操作日志保留策略（消费方：`task::operation_log_cleanup`）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct OperationLog {
+    /// 保留天数；`0` 表示**永久保留**（清理任务直接跳过）。默认 90 天。
+    /// 可用环境变量覆盖：`TIDE_OPERATION_LOG__RETENTION_DAYS=365`。
+    #[serde(default = "default_operation_log_retention_days")]
+    pub retention_days: u64,
+}
+
+impl Default for OperationLog {
+    fn default() -> Self {
+        Self {
+            retention_days: default_operation_log_retention_days(),
+        }
+    }
+}
+
+fn default_operation_log_retention_days() -> u64 {
+    90
 }
 
 /// 启动种子开关（见 [`Config::seed`]）。

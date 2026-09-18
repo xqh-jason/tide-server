@@ -53,3 +53,8 @@ allows = [
   "txt",
   "zip",
 ]
+
+[operation_log]
+# 操作日志保留天数；0 = 永久保留（清理任务直接跳过，不删任何日志）。
+# 可用环境变量覆盖：TIDE_OPERATION_LOG__RETENTION_DAYS=365
+retention_days = 90
