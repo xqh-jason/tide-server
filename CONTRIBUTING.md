@@ -13,7 +13,7 @@ docker compose up -d mysql
 
 # 2. 建表（迁移是独立 crate，必须在 migrations/ 目录执行；根目录 cargo run 是启动服务）
 cd migrations
-DATABASE_URL='mysql://root:root@localhost:3307/tide_server' cargo run -- up
+DATABASE_URL='mysql://root:root@localhost:3307/tide_server?charset=utf8mb4&timezone=%2B08:00' cargo run -- up
 cd ..
 
 # 3. 跑起来（development 档位自动执行幂等种子）
@@ -25,12 +25,12 @@ cargo test
 
 默认账号 `admin / admin123`（development 档位每次启动重置，仅限本地）。
 
-## 新增业务域
+## 扩展业务域
 
-平台能力（认证 / RBAC / 字典 / 日志 / 任务 / 文件 / 组织）已经在 `src/modules/system/` 下就绪，
-业务域写进 `src/modules/biz/<域>/`，然后在 `src/modules/mod.rs` 的 `DOMAINS` 加一行——
-选了 `MountGuard::Protected` 就自动获得 `AuthRequired` / `OperationLog` / `ApiPermission`
-三件套，不用自己接鉴权。完整三步见 README「新增业务域」一节。
+平台能力在 `src/modules/system/` 下就绪，业务域写进 `src/modules/biz/<模块>/<域>/`，然后在
+`src/modules/mod.rs` 的 `DOMAINS` 加一行——选了 `MountGuard::Protected` 就自动获得
+`AuthRequired` / `OperationLog` / `ApiPermission` 三件套，不用自己接鉴权。完整三步见
+README「扩展业务域」一节。
 
 新端点要登记进 `src/infra/seed.rs` 的 `API_SEEDS`，否则接口授权对它是 **fail-open**（未登记即放行）。
 

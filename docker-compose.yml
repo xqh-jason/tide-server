@@ -40,7 +40,7 @@ services:
     environment:
       # 容器内固定走 production：不执行弱口令重置等开发种子
       TIDE_ENV: production
-      # 首次部署置 TIDE_SEED_ENABLED=true 启动一次（见 README「首次部署 bootstrap」），
+      # 首次部署置 TIDE_SEED_ENABLED=true 启动一次（见 README「Docker 一键部署」），
       # 创建初始 admin / super 角色后应改回 false 并立即修改 admin 密码
       TIDE_SEED__ENABLED: ${TIDE_SEED_ENABLED:-false}
       TIDE_DATABASE__URL: "mysql://root:${MYSQL_ROOT_PASSWORD:-root}@mysql:3306/tide_server?charset=utf8mb4&timezone=%2B08:00"

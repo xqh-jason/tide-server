@@ -11,9 +11,11 @@ url = "mysql://root:root@localhost:3307/tide_server?charset=utf8mb4&timezone=%2B
 log_sql = false
 
 [cors]
-# 允许的跨源来源（精确匹配请求 Origin 头）；空列表 = 拒绝所有跨源访问。
-# 前端 dev 端口 5173；生产部署到独立域名时在此追加。
-allow_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+# 默认拒绝所有跨源（与代码里的 Default 一致）。本项目前后端始终同源：开发走 Vite proxy，
+# 生产走 nginx 的 /api 反代，浏览器侧没有跨源请求，因此这里保持空列表。
+# 确需跨源直连时按真实来源逐条加入（精确匹配，不支持 `*`）；注意 refresh token 是
+# SameSite=Lax 的 HttpOnly Cookie，跨站直连带不上，还需同步评估 allow_credentials。
+allow_origins = []
 # 允许的 HTTP 方法（缺省已含常用方法，可按需覆盖）
 allow_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 # 允许的请求头（缺省含 JSON 与鉴权头，可按需覆盖）
