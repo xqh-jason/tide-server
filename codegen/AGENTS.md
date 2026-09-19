@@ -2,7 +2,7 @@
 
 `codegen/` — 独立 crate（非 workspace 成员）：一份域定义 JSON → 生成 entity + 域四件套骨架，是本仓脚手架的代码生成器。
 
-**建档理由**：得分 9（独立 crate、自带 `Cargo.toml` / `Cargo.lock`，54 个 pub 项；与主 crate 完全不同的构建与测试路径）。
+**建档理由**：得分 9（独立 crate、自带 `Cargo.toml` / `Cargo.lock`，构建与测试路径与主 crate 完全独立）。
 
 ## WHERE TO LOOK
 

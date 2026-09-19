@@ -1,8 +1,8 @@
 ## OVERVIEW
 
-`src/entity/` — 21 张表的 SeaORM 实体，全局共享（关联表跨域使用），schema 的唯一事实来源是 `migrations/src/m20260913_000001_baseline.rs`。
+`src/entity/` — 21 张表的 SeaORM 实体（20 张建于 baseline 迁移，`sys_refresh_token` 建于 `m20260913_000002`），全局共享（关联表跨域使用）。
 
-**建档理由**：得分 15（23 文件 / 74 个 pub 项 / 被所有域引用；独立领域：数据模型与三种生成来源混居）。
+**建档理由**：得分 15（23 文件 / 64 个顶层 pub 项（`grep -roh '^pub ' src/entity/*.rs | wc -l`）/ 被所有域引用；独立领域：数据模型与三种生成来源混居）。
 
 ## WHERE TO LOOK
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | 主表（软删） | `sys_user` `sys_role` `sys_menu` `sys_dept` `sys_position` `sys_api` `sys_dictionary` `sys_dictionary_detail` `sys_config` `sys_file` `sys_job` | 有 `deleted_at: Option<DateTime>` |
 | 关系表（硬删） | `sys_user_role` `sys_user_dept` `sys_user_position` `sys_role_menu` `sys_role_api` | 自身无 `deleted_at` |
-| 日志表 | `sys_operation_log` `sys_login_log` `sys_job_log` | 批量滚动清理，见 `src/task/` |
+| 日志表 | `sys_operation_log` `sys_login_log` `sys_job_log` | 带 `deleted_at`（管理端 `soft_delete_batch` 软删）；保留期滚动清理是物理删，见 `src/task/` |
 | 会话表 | `sys_refresh_token` | 唯一声明非空 `Relation` + `Related<sys_user>` 的实体 |
 | 单行表 | `sys_site_config` | 恒 `id=1`，手写实体（codegen 不适用单行表） |
 | 模块声明 / 占位 | `mod.rs`、`prelude.rs` | `prelude` 当前 0 使用方，保留占位 |

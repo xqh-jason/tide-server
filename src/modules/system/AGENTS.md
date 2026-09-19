@@ -2,7 +2,7 @@
 
 `src/modules/system/` — 18 个平台能力垂直切片（RBAC / 认证 / 字典 / 日志 / 任务 / 文件 / 组织）；四件套布局与挂载机制见父档，本档只写 18 切片共用的工程约定与逐域硬规则。
 
-**建档理由**：得分 17（94 文件 / 18 子目录 / `SUPER_ROLE_KEY` 44 次、`enabled_int_values` 31 次等高中心化引用）。切片目录深度 4，不单独建档，逐域事实收在下面的表里。
+**建档理由**：得分 17（94 文件 / 18 子目录 / `SUPER_ROLE_KEY` 41 次 / 9 文件、`enabled_int_values` 31 次 / 18 文件等高中心化引用；前者 `grep -ro 'SUPER_ROLE_KEY' src --include='*.rs'` / `-rl`，后者同法。本仓无 rust-analyzer）。切片目录深度 4，不单独建档，逐域事实收在下面的表里。
 
 ## WHERE TO LOOK
 
@@ -15,13 +15,13 @@
 | `menu` | 菜单树（`parent_id` 邻接表） | 内存建树、`MAX_MENU_DEPTH = 10`；自环要单独拦（子孙集合不含自身，`contains` 判不出来） |
 | `dept` | 部门树（`dept_path` 物化路径 `/0/{id}/`） | 环判定靠 `parent.dept_path.starts_with(...)`；`MAX_DEPT_TREE_DEPTH = 64`；移动子树逐层加锁 |
 | `dictionary` | 字典类型 + 字典项（级联删） | `enabled_int_values(db, "status")` 是全仓状态取值唯一来源；删除返回级联条数供前端提示 |
-| `sys_api` | 接口权限点登记 | 目录/表名带 `sys_` 前缀，与兄弟域裸名不一致；`uk_api_path_method` 保证命中至多一行 |
+| `sys_api` | 接口权限点登记 | 目录/表名带 `sys_` 前缀，与兄弟域裸名不一致；`uk_sys_api_path_method` 保证命中至多一行 |
 | `permission` | 接口授权判定 + 超管常量 + 按钮码查询（无 api/dto） | `SUPER_ROLE_KEY`、`ADMIN_USERNAME` 的唯一出处；后端授权只有 `has_api_permission` 一条通道（按钮码常量已删，勿重建） |
 | `auth` | 登录 / 登出 / 刷新（无 repo） | 用户不存在、密码错、已禁用统一回「用户名或密码错误」防枚举；401 直写不走 `AppError` |
 | `refresh_token` | 会话列表 / 强制下线 / 清理（无 validate） | 只允许删死记录（已吊销或已过期）；在线会话必须先强制下线，防「无痕踢人」绕过审计 |
 | `captcha` | 图形验证码（无 repo） | 一次性消费：无论成败校验后立即删除防重放；不为此引入 `rand` |
 | `file` | 上传 / 下载 | 落盘路径只由服务端 `stored_name` 拼装；`upload` 是 multipart 例外、`download` 是 GET 例外 |
-| `config` | 参数配置 + 网站设置 | `sys_site_config` 恒单行 `id=1`，缺失即报「网站设置记录缺失，请执行迁移种子」 |
+| `config` | 参数配置 + 网站设置 | `sys_site_config` 恒单行 `id=1`；读缺失回退内存默认值（不落库），更新缺失才报「网站设置记录缺失，请执行迁移种子」 |
 | `position` | 职位 | `position_code` 唯一键含软删占位，查重必须走 `find_by_code_include_deleted` |
 | `job` | 定时任务 CRUD + `scheduler.rs` | DB 是事实来源：CRUD 提交后同步 add/remove，调度器失败不回滚 DB 只记 error（重启自愈） |
 | `job_log` | 调度执行日志（只读 + 删） | 由 `job/scheduler.rs` 直写 repo；过期清理 `BATCH_SIZE = 1000` 滚动批删 |
@@ -56,7 +56,7 @@ repo 是数据访问原语层：把 SQL 原子化（过滤 / 排序 / 分页 / �
 
 ### 命名与顺序（切片内）
 
-repo 分页 `find_page`、CRUD `find_by_id` / `create_*` / `update_*` / `soft_delete_*`；service `page_<实体>` / `create_<实体>` / `update_<实体>` / `get_<实体>` / `delete_<实体>`；handler `list_<实体>`。写关联表的 repo 函数加 `_with_links` 后缀。`api.rs` 函数顺序 = `mod.rs` 路由挂载顺序 = `list → create → update → get → delete`，特殊契约端点（`info` / `access-codes` / `menus` / `get-by-type` / `run-once`）排在 CRUD 之后。分页过滤参数打包成域 `*Filter`（定义在 `dto.rs`），与 `page_index` / `page_size` 分离——加条件只改 Filter，签名与调用点不动。
+repo 分页 `find_page`、CRUD `find_by_id` / `create_*` / `update_*` / `soft_delete_*`；service `page_<实体>` / `create_<实体>` / `update_<实体>` / `get_<实体>` / `delete_<实体>`；handler `list_<实体>`。写关联表的 repo 函数加 `_with_links` 后缀。`api.rs` 函数顺序跟随 `mod.rs` 路由挂载顺序（常规切片逐字对应；`user` 存在既有偏差——api.rs 里 get 在 update 前、挂载序相反，且 `by-username` / `info` / `access-codes` 在 list 与 create 之间）；常规 CRUD 序列 `list → create → update → get → delete`。分页过滤参数打包成域 `*Filter`（定义在 `dto.rs`），与 `page_index` / `page_size` 分离——加条件只改 Filter，签名与调用点不动。
 
 ### 测试规范
 

@@ -2,7 +2,7 @@
 
 `src/utils/` — 全局无状态工具层：错误 / 响应体 / 请求提取器 / 分页 / 人字段名称拼装 / JWT / 密码哈希 / 缓存 / 时间 / 文本——只依赖 `entity`，不依赖任何 `module`。
 
-**建档理由**：得分 12（`AppError` 491 次、`ApiResponse` 138 次、`JsonBody` 116 次、`ApiResult` 111 次、`fill_user_names` 66 次；全仓最高中心化 + 人字段协议唯一实现）。
+**建档理由**：得分 11（grep 计数，均按 次数/文件 口径：`AppError` 501 次 / 38 文件、`ApiResponse` 140 次 / 25 文件、`JsonBody` 116 次 / 20 文件、`ApiResult` 111 次 / 17 文件、`fill_user_names` 66 次 / 15 文件（`grep -ro/-rl 'X' src --include='*.rs'`）；全仓最高中心化 + 人字段协议唯一实现）。
 
 ## WHERE TO LOOK
 
@@ -18,7 +18,7 @@
 | 列表时间范围入参解析 | `datetime.rs` | `parse_datetime(field, s, end_of_day)` |
 | 响应体时间字段序列化（非日志） | `serde_format.rs` | `naive_datetime` 输出 `%Y-%m-%d %H:%M:%S`，非 serde ISO |
 | 密码 argon2id、通用 SHA-256 | `crypt.rs` | refresh token 落库存 SHA-256 hex |
-| JWT 签发 / 校验（HS256） | `jwt.rs` | `Claims` / `sign` / `verify` |
+| JWT 签发 / 校验（HS256） | `jwt.rs` | `Claims` / `sign` / `verify`；载荷含 `refresh_token_id`，缺该字段的旧 token 反序列化即失败——发版后全员重登即迁移路径，无双轨兼容 |
 | 缓存抽象与内存实现 | `cache.rs` | `Cache` trait + `MemoryCache`，`Arc<dyn Cache>` 注入 `AppState` |
 | 单 id 请求体 | `id_req.rs` | `IdReq`，所有域共用 |
 | 字符安全截断 | `text.rs` | `truncate_chars` |
@@ -39,7 +39,7 @@
 
 ## ANTI-PATTERNS
 
-- `utils` 不得 `use crate::modules::*`：会形成环，人字段协议因此只依赖 `entity`。
+- `utils` 不得 `use crate::modules::*`：会形成环，人字段协议因此只依赖 `entity`（生产代码零 modules 依赖；仅 `#[cfg(test)]` 例外，先例：`jwt.rs` 测试用 `SUPER_ROLE_KEY`）。
 - 不新增第二条名称拼装管道，不在各域自己 JOIN `sys_user` 取显示名。
 - 值域校验不写进 DTO、也不写进本目录的通用工具：请求体校验在各域私有 `validate.rs`，`check_status` 的允许值由调用方从字典读后传入（**不是硬编码**）。
 - 不改 `JsonBody` 为 Salvo 内置提取器：`affix-state` 依赖 salvo_extra 0.95.2、rsproxy 镜像暂无，故手写等价实现；`#[serde(flatten)]` 会丢字段路径，错误提示靠 serde_path_to_error + `FIELD_LABELS`，且只回传值是什么类型、不回传值本身。

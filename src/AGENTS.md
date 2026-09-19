@@ -3,7 +3,7 @@
 `src/` — **lib + bin 双 target**（2026-09-18 起）：`lib.rs` 导出平台能力供外部项目依赖，
 `main.rs` 只是进程级入口（tracing + `Config::load` + `infra::app::run`）。
 
-**建档理由**：得分 16（152 文件 / 26 子目录 / 814 个 pub 项 / 中心化引用极高），全仓源码唯一入口层。
+**建档理由**：得分 16（153 个 .rs 文件 / 26 个子目录 / 760 个顶层 pub 项 / 中心化引用极高；grep 实测，无 rust-analyzer），全仓源码唯一入口层。
 
 ## STRUCTURE
 
@@ -23,7 +23,7 @@ src/
 
 | 任务 | 位置 | 备注 |
 |---|---|---|
-| 新增定时任务 | `task/<name>.rs` + `task/mod.rs` | 三处同步：`HANDLER_NAME` = 文件名 = `sys_job.handler_name`；`handlers()` 与 `handler_defs()` 各加一行，两个漂移守卫测试会拦漏改 |
+| 新增定时任务 | `task/<name>.rs` + `task/mod.rs` | 注册两处：`handlers()` 与 `handler_defs()` 各加一行（引用各文件 `HANDLER_NAME` / `HANDLER_LABEL` 常量，拼错即编译失败），两个漂移守卫测试会拦漏改。`HANDLER_NAME` = `sys_job.handler_name` 合法值，**不要求等于文件名**（实况：`job_log_cleanup.rs` → `cleanup_job_logs`） |
 | 任务跨域取数 | `task/*_cleanup.rs` | 只调目标域 `repo` 原语（`delete_created_before` / `delete_expired_before`），不碰他域 Entity |
 | 加第 7 个顶层模块 | `lib.rs` + `main.rs` | `lib.rs` 加 `pub mod`；各目录自己的 `mod.rs` 决定对外可见性 |
 | 日志时间格式 / 级别 | `main.rs` | `LocalSeconds` 输出 `%Y-%m-%d %H:%M:%S`，替掉默认 UTC RFC3339 |

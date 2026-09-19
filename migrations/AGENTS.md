@@ -1,6 +1,6 @@
 ## OVERVIEW
 
-`migrations/` — 独立 crate `migration`（edition 2021、非 workspace）：20 张表 DDL 的唯一事实来源，sea-orm-migration 1.1.0。
+`migrations/` — 独立 crate `migration`（edition 2021、非 workspace）：21 张表 DDL（baseline 20 + 会话表）的唯一事实来源，sea-orm-migration 1.1.0。
 
 **它也是对外可依赖的库**（2026-09-18 实测）：包名 `migration`，暴露 `Migrator`，
 外部业务系统可用 `git + tag` 依赖它，链式拼接「基座平台表 + 自己的业务表」，
@@ -17,7 +17,8 @@
 | 25 条历史版本占位 | `src/legacy.rs`（635 行） | 空操作，只为满足 sea-orm 版本存在性校验 |
 | 全量建表基线 | `src/m20260913_000001_baseline.rs` | 20 张表最终态 DDL（含表/列注释与索引） |
 | 会话表 | `src/m20260913_000002_create_sys_refresh_token.rs` | 基线之后新增的表 |
-| 注释修正 | `src/m20260914_000001_fix_sys_refresh_token_revoked_by_comment.rs` | 纯 COMMENT 变更也走迁移 |
+| 注释修正 | `src/m20260914_000001_fix_sys_refresh_token_revoked_by_comment.rs`、`src/m20260917_000001_fix_sys_menu_permission_comment.rs` | 纯 COMMENT 变更也走迁移（两例：`revoked_by`、`menu.permission`） |
+| 列表查询索引 | `src/m20260918_000001_add_list_query_indexes.rs` | 只加等值 / 范围 / 前缀匹配真能用上的列；组合索引统一 `(deleted_at, 过滤列)`；前导通配符列不加 |
 | CLI 入口 | `src/main.rs` | `cli::run_cli(migration::Migrator)` |
 | sea-orm-cli 用法 | `README.md` | `migrate up / down / status / init` |
 
