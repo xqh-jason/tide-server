@@ -8,8 +8,9 @@
 //!
 
 use crate::entity::{
-    sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job, sys_menu,
-    sys_operation_log, sys_position, sys_refresh_token, sys_role, sys_site_config, sys_user,
+    hr_employee, sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job,
+    sys_menu, sys_operation_log, sys_position, sys_refresh_token, sys_role, sys_site_config,
+    sys_user,
 };
 use std::collections::HashMap;
 
@@ -134,6 +135,13 @@ impl UserRefIds for sys_job::Model {
 impl UserRefIds for sys_position::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_employee::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        // 审计人字段 + 关联账号（档案所属员工），一次批量查三类显示名
+        vec![self.created_by, self.updated_by, self.user_id]
     }
 }
 
@@ -353,5 +361,35 @@ mod tests {
             .exec(&db)
             .await
             .unwrap();
+    }
+
+    /// HR 员工档案：人字段 id 收集应含创建人 / 更新人 / 关联账号三类。
+    #[test]
+    fn hr_employee_collects_audit_and_account_ids() {
+        use crate::entity::hr_employee;
+        let row = hr_employee::Model {
+            id: 1,
+            user_id: 7,
+            hire_date: None,
+            regular_date: None,
+            leave_date: None,
+            employment_status: 1,
+            education: 0,
+            graduate_school: String::new(),
+            major: String::new(),
+            id_card: String::new(),
+            emergency_contact: String::new(),
+            emergency_phone: String::new(),
+            bank_account: String::new(),
+            remark: String::new(),
+            created_at: chrono::Local::now().naive_local(),
+            updated_at: chrono::Local::now().naive_local(),
+            created_by: 3,
+            updated_by: 4,
+            deleted_at: None,
+        };
+        let mut ids = row.user_ref_ids();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![3, 4, 7], "应收集创建人/更新人/关联账号三类 id");
     }
 }
