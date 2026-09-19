@@ -8,16 +8,16 @@
 
 | 任务 | 位置 | 备注 |
 |---|---|---|
-| 启动顺序、依赖装配 | `app.rs::run` / `run_with_domains` | 前者仅内置域；后者多收 `extra` 业务域（业务仓入口） |
+| 启动顺序、依赖装配 | `app.rs::run` / `run_with_domains` | 前者不额外传域；后者多收一个 `extra` 参数一起挂载 |
 | 配置项、环境变量覆盖、启动期校验 | `config.rs` + 根 `config.toml` | `Config::load()` 也是全部真库测试的 DSN 来源 |
 | 全局共享状态 | `state.rs::AppState` | `config` / `db` / `cache` / `scheduler` 四件（grep 实测 199 次 / 31 文件）；`from_depot` 取值 |
-| 路由挂载与中间件档位 | `router.rs::build` / `build_with` | `build_with` 经 `modules::all_domains(extra)` 合并内置与业务域；`hoop_when` 挂超时豁免 |
+| 路由挂载与中间件档位 | `router.rs::build` / `build_with` | `build_with` 经 `modules::all_domains(extra)` 合并传入的额外域；`hoop_when` 挂超时豁免 |
 | 框架级错误（解析失败 / 404 / 405 / 5xx） | `catcher.rs` | 统一改写成 HTTP 200 + 契约体 |
 | admin / super / 菜单 / 接口权限点种子 | `seed.rs` | `MENU_SEEDS` 46 条、`API_SEEDS` 87 条（条数以代码为准，不要抄行数/条数到别的文档） |
 
 ## CONVENTIONS
 
-- 启动顺序固定：`ConnectOptions`（`sqlx_logging` 由 `database.log_sql` 控制，默认关以免刷屏）→ 种子 → `JobScheduler::new` + **先 `init()` 再包 `Arc`** → 构造 `AppState` → `job::scheduler::init_scheduler` → 取 `config.cors` 副本建 `Cors` → `router::build`（或业务仓的 `build_with`）→ OpenAPI JSON + Swagger `unshift` → `Service::new(router).hoop(cors).catcher(...)` → `Server::serve`。
+- 启动顺序固定：`ConnectOptions`（`sqlx_logging` 由 `database.log_sql` 控制，默认关以免刷屏）→ 种子 → `JobScheduler::new` + **先 `init()` 再包 `Arc`** → 构造 `AppState` → `job::scheduler::init_scheduler` → 取 `config.cors` 副本建 `Cors` → `router::build`（或带额外域的 `build_with`）→ OpenAPI JSON + Swagger `unshift` → `Service::new(router).hoop(cors).catcher(...)` → `Server::serve`。
 - 调度器顺序「先 add 后 start」：未 start 即 drop 会刷错误日志；`init()` 显式提前是为了 fail-fast 于装载任务之前并避开 "Uninited" 噪音。
 - 种子门控：`env == "development"` 恒执行；生产仅当 `seed.enabled`（`TIDE_SEED__ENABLED=true`）执行，供首次部署 bootstrap 后立即关闭改密。`config.toml` 无 `env` 键即 development。
 - 配置装载：`File::with_name("config")` + 环境变量前缀 `TIDE_`、`prefix_separator("_")`、`separator("__")`（故 `TIDE_DATABASE__URL`）、`try_parsing(true)`；`list_separator(",")` 只对 `cors.allow_origins` 生效；每字段带 `#[serde(default = ...)]`。

@@ -12,8 +12,8 @@ HTTP 恒 200，例外仅认证失败 401 与 CORS 预检 204/403。
 
 ```
 tide-server/
-├── src/                  # lib + bin 双 target（lib.rs 是业务仓依赖的公开面）
-│   ├── lib.rs            # 基座公开面：6 个 pub mod（entity/infra/middleware/modules/task/utils）
+├── src/                  # lib + bin 双 target（bin 通过 lib.rs 取模块）
+│   ├── lib.rs            # 库入口：6 个 pub mod（entity/infra/middleware/modules/task/utils），供 bin target 取用
 │   ├── main.rs           # 进程入口：tracing + Config::load → infra::app::run
 │   ├── modules/system/   # 18 个平台域切片，四件套 api/service/repo/dto
 │   ├── modules/biz/      # 业务域容器，当前仅 mod.rs（业务从这里生长）
@@ -30,16 +30,15 @@ tide-server/
 
 三个独立包、非 workspace：根 crate / `migrations/` / `codegen/`。
 
-**平台能力基座**（2026-09-18 起）：本仓可被独立业务仓以 **git 依赖 + 版本 tag** 消费，
-也可直接 clone 后在本仓内开发业务；业务表属于业务系统自己的 crate 与迁移，不回流本仓。
-见 README「作为基座」一节。
+`src/modules/biz/` 是业务域容器（当前仅 `mod.rs`）：具体业务功能在这里生长，
+平台能力（RBAC / 认证 / 字典 / 日志 / 文件 / 组织）在 `src/modules/system/` 下。
 
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
 |------|----------|-------|
 | 服务入口 `src/main.rs`、mod 声明、依赖方向 | `src/AGENTS.md` | lib + bin 双 target，`task/` 注册表规则 |
-| 新增业务域、路由装配 | `src/modules/AGENTS.md` | `DOMAINS` 登记表 + `MountGuard`，本仓三步装配；业务仓走 `all_domains` |
+| 新增业务域、路由装配 | `src/modules/AGENTS.md` | `DOMAINS` 登记表 + `MountGuard` 三步装配，路由自动挂载 |
 | 平台域切片：分层 / repo 边界 / 加锁读 / 软删除 / 命名 / 测试 | `src/modules/system/AGENTS.md` | 18 域硬规则表 |
 | 启动顺序、配置、全局状态、种子 | `src/infra/AGENTS.md` | `Config` fail-fast、`AppState`、catcher |
 | 错误码、响应体、分页、人字段拼装 | `src/utils/AGENTS.md` | 拼装协议唯一实现 |
@@ -51,7 +50,8 @@ tide-server/
 ## CODE MAP
 
 无 rust-analyzer（toolchain `profile=minimal`）：refs 为 grep 实测，仅 `src/`、子串匹配（非
-全词、非 LSP）——次数 `grep -ro '<sym>' src --include='*.rs' | wc -l`，文件数同式换 `-rl`；`DOMAINS` 行含 `MY_DOMAINS` 子串命中。Location 相对 `src/`。
+全词、非 LSP）——次数 `grep -ro '<sym>' src --include='*.rs' | wc -l`，文件数同式换 `-rl`。
+Location 相对 `src/`。
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
@@ -68,7 +68,7 @@ tide-server/
 | `SUPER_ROLE_KEY` | const | `modules/system/permission/mod.rs:19` | 41 / 9 | 超管保留字：短路 + 改名保护 |
 | `enabled_int_values` | fn | `modules/system/dictionary/service.rs:214` | 31 / 18 | `status` 允许值唯一来源 |
 | `DOMAINS` | const 表 | `modules/mod.rs:84` | 24 / 7 | 19 行内置路由装配入口 |
-| `all_domains` | fn | `modules/mod.rs:259` | 7 / 2 | 合并内置 + 业务仓注册域 |
+| `all_domains` | fn | `modules/mod.rs:259` | 7 / 2 | 合并内置域与额外传入的域（无 extra 时等于内置） |
 
 ## CONVENTIONS
 
@@ -108,8 +108,7 @@ tide-server/
 
 ## UNIQUE STYLES
 
-- 垂直切片 + `DOMAINS` 登记表装配：本仓新增域三步走 → `src/modules/AGENTS.md`；
-  业务仓的新增域走 `modules::all_domains` + `app::run_with_domains`（不 fork 基座）
+- 垂直切片 + `DOMAINS` 登记表装配：新增域三步走，路由自动挂载 → `src/modules/AGENTS.md`
 - 单信封契约：HTTP 恒 200，业务成败只看 `code`
 - Conventional Commits + 中文描述，如 `feat(rbac): 完善软删除过滤与用户创建校验`；类型
   `feat` / `fix` / `refactor` / `chore` / `docs` / `test`
