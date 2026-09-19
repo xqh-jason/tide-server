@@ -6,6 +6,7 @@ mod m20260913_000002_create_sys_refresh_token;
 mod m20260914_000001_fix_sys_refresh_token_revoked_by_comment;
 mod m20260917_000001_fix_sys_menu_permission_comment;
 mod m20260918_000001_add_list_query_indexes;
+mod m20260919_000001_create_hr_employee;
 
 pub struct Migrator;
 
@@ -44,6 +45,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260914_000001_fix_sys_refresh_token_revoked_by_comment::Migration),
             Box::new(m20260917_000001_fix_sys_menu_permission_comment::Migration),
             Box::new(m20260918_000001_add_list_query_indexes::Migration),
+            // 业务表迁移（HR）：追加在平台迁移之后，顺序不可改
+            Box::new(m20260919_000001_create_hr_employee::Migration),
         ]
     }
 }

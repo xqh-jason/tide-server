@@ -2,6 +2,9 @@
 
 pub mod prelude;
 
+// 业务实体（HR）
+pub mod hr_employee;
+
 pub mod sys_api;
 pub mod sys_config;
 pub mod sys_dept;
