@@ -64,8 +64,8 @@ services:
   frontend:
     build:
       # 前端仓库目录（相对于本文件所在目录）。
-      # 默认 `../tide-admin` = 基座自带前端；**要用自己的前端仓时改成它的目录**，
-      # 例如 `../<你的前端仓>`（见 README「作为基座」一节）。
+      # 默认 `../tide-admin`（同级目录）；前端仓库在别处时用环境变量指定，
+      # 例如 `../<你的前端仓>`。
       # 其 Dockerfile + docker/nginx.conf 由前端仓自带。
       context: ${FRONTEND_DIR:-../tide-admin}
       dockerfile: Dockerfile
