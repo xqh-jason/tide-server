@@ -2,8 +2,8 @@
 
 # tide-server
 
-基于 **Rust · Salvo · SeaORM** 的 RBAC 中后台管理系统后端，
-配套前端 [tide-admin](https://github.com/xqh-jason/tide-admin)（其基座为 Vue Vben Admin 5.x）
+基于 **Rust · Salvo · SeaORM** 的 RBAC 中后台管理系统后端，配套前端
+[tide-admin](https://github.com/xqh-jason/tide-admin)（基座为 Vue Vben Admin 5.x）
 
 [![CI](https://github.com/xqh-jason/tide-server/actions/workflows/ci.yml/badge.svg)](https://github.com/xqh-jason/tide-server/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -16,58 +16,35 @@
 
 ## ✨ 功能特性
 
-**认证与会话**
-
-- 账号密码 + 图形验证码登录，失败文案统一防账号枚举，分级落登录日志
-- 双凭证机制：2h access JWT + 7 天 refresh token（HttpOnly Cookie，SHA-256 落库不存明文）
-- 静默刷新：`POST /auth/refresh` 凭 Cookie 换发新 access token（响应体为裸 token，
-  失败真 HTTP 401）；角色随刷新从 DB 重查，权限变更最迟一个 token 周期生效
-- 服务端可吊销：登出 / 管理员强制下线 / 会话管理页，吊销即时生效、重启不丢
-- 过期凭证每日定时物理清理（保留 30 天供审计，天数可配、`0` = 永久保留）
-
-**权限（RBAC 三级同源）**
-
-- 用户 / 角色 / 菜单 / API 四大管理，接口·菜单·按钮权限码统一在种子中登记（按钮码只控前端显隐）
-- 两级鉴权：认证中间件（会话合并查询，禁用/软删用户即时 401）+
-  接口级授权（路径规范化后按 `sys_api` path+method 精确匹配 + 角色绑定，未登记放行、超管短路）
-
-**系统管理**
-
-- 部门（树表）/ 职位 / 数据字典（类型 + 字典项）/ 参数配置 / 文件上传 / 定时任务
-- 审计盖章（`created_by` / `updated_by`）与操作人名称批量拼装，请求体脱敏截断落操作日志
-- 操作日志**只记写请求**（非 POST 与读语义路径如 `/list`、`/get`、`/info`、`/download` 不落库），
-  消除只读翻页带来的写放大；授权失败的写请求仍留痕
-- 四类日志/会话保留期独立可配（操作日志 / 登录日志 / 调度日志 / 过期会话，`0` = 永久保留），
-  过期清理任务每日物理删除
-- 主表软删除、关系表硬删除约定贯穿全部查询
-
-**工程化**
-
-- 统一契约：`POST + JSON`，响应 `{ code, data, message }`（`code=1` 成功），
-  HTTP 恒 200，仅认证失败 401；Swagger UI 开箱可用
-- SeaORM 迁移（独立 crate，含列表查询复合索引）+ 启动幂等种子（菜单树 / 接口权限点 / 默认定时任务）
-- 分页统一按主键降序（`ORDER BY id DESC`）：无排序时 LIMIT/OFFSET 行序由执行计划决定，
-  会出现跨页重复与漏项
-- 真库集成测试内联在各域（事务回滚隔离，无孤儿数据）；clippy 对 unwrap / expect / todo /
-  unsafe 全量 deny
+- **认证与会话**：账号密码 + 图形验证码登录，失败提示统一为「用户名或密码错误」防账号枚举，
+  失败原因分级落登录日志；双凭证（短时效 access JWT + 长时效 refresh token，后者只进 HttpOnly
+  Cookie、库中只存 SHA-256 哈希，时效见 [`config.toml`](config.toml) 的 `[jwt]`）；
+  `POST /auth/refresh` 静默续期并重查角色，权限变更最迟一个 token 周期生效；登出 / 强制下线
+  即时生效、重启不丢；过期凭证每日物理清理（保留天数可配，`0` = 永久）
+- **权限（RBAC）**：用户 / 角色 / 菜单 / API 四大管理，菜单、接口权限点与按钮权限码统一在种子登记
+  （按钮码只控前端显隐）；两级鉴权 —— 认证中间件（禁用 / 软删用户即时 401）+
+  接口级授权（路径规范化后按 `sys_api` 的 path + method 精确匹配角色绑定，超管短路，未登记放行）
+- **系统管理**：部门（树）/ 职位 / 字典 / 参数配置 / 网站设置 / 文件 / 定时任务 / 会话管理；
+  审计字段（`created_by` / `updated_by`）由 repo 层盖章，操作人名称批量拼装；操作日志只记写请求
+  （非 POST 与 `/list`、`/get` 等只读语义端点不落库），请求体脱敏截断后入库，授权失败的写请求仍留痕；
+  操作 / 登录 / 调度日志与会话的保留期独立可配（`0` = 永久保留），清理任务每日物理删除；
+  主表软删除、关系表硬删除
+- **工程化**：统一响应体 `{ code, data, message }`（`code=1` 成功）；SeaORM 迁移
+  （含列表查询复合索引）+ 启动幂等种子（菜单 / 接口权限点 / 定时任务）；分页统一按 `id` 降序；
+  Swagger UI 开箱可用；真库集成测试内联在各域（事务回滚隔离）；
+  clippy 对 unwrap / expect / todo / unsafe 全量 deny
 
 ## 🖼 界面预览
 
-点击缩略图查看原图（支持键盘操作与全屏查看）。
+| 登录页 | 角色管理 | 菜单管理 |
+| :---: | :---: | :---: |
+| [![登录页](screenshots/01-login.png)](screenshots/01-login.png) | [![角色管理](screenshots/02-role.png)](screenshots/02-role.png) | [![菜单管理](screenshots/03-menu.png)](screenshots/03-menu.png) |
+| 账号密码 + 图形验证码 | 内置 `super` 超管不可编辑 | 菜单树与按钮权限码登记 |
 
-| 登录页 | 角色管理 |
+| 定时任务 | API 管理 |
 | :---: | :---: |
-| [![登录页](screenshots/01-login.png)](screenshots/01-login.png) | [![角色管理](screenshots/02-role.png)](screenshots/02-role.png) |
-| 账号密码 + 图形验证码登录 | 角色列表，内置 `super` 超管角色不可编辑 |
-
-| 菜单管理 | 定时任务 |
-| :---: | :---: |
-| [![菜单管理](screenshots/03-menu.png)](screenshots/03-menu.png) | [![定时任务](screenshots/04-job.png)](screenshots/04-job.png) |
-| 菜单树与按钮权限码登记（只控前端显隐） | Cron 调度，支持立即执行与执行日志 |
-
-| API 管理（接口权限点登记，鉴权判定的数据源） | |
-| :---: | :---: |
-| [![API 管理](screenshots/05-api.png)](screenshots/05-api.png) | |
+| [![定时任务](screenshots/04-job.png)](screenshots/04-job.png) | [![API 管理](screenshots/05-api.png)](screenshots/05-api.png) |
+| Cron 调度 + 执行日志 | 接口权限点登记（鉴权判定的数据源） |
 
 ## 🧱 技术栈
 
@@ -86,206 +63,136 @@
 | 环境要求 | 版本 |
 |---|---|
 | Rust | 1.96.0（`rust-toolchain.toml` 已钉住，`rustup` 自动对齐） |
-| MySQL | 8.x（推荐经 docker-compose 起本地实例） |
+| MySQL | 8.x（推荐经 docker compose 起本地实例） |
 | 前端（可选） | Node `^22.18 \|\| ^24.12` + pnpm 11 |
 
 ```bash
-# 1. 起开发 MySQL（3307 映射到宿主机；首次会自动建库）
-docker compose up -d mysql
+docker compose up -d mysql        # 1. 起开发 MySQL（宿主机 3307，首次自动建库）
 
-# 2. 建表（在 migrations 目录执行；注意根目录 cargo run 会启动服务）
-cd migrations
-DATABASE_URL='mysql://root:root@localhost:3307/tide_server' cargo run -- up
+cd migrations                     # 2. 建表（根目录的 cargo run 是启动服务，不是迁移）
+DATABASE_URL='mysql://root:root@localhost:3307/tide_server?charset=utf8mb4&timezone=%2B08:00' cargo run -- up
 cd ..
 
-# 3. 启动后端（监听 0.0.0.0:8080，development 环境自动执行幂等种子）
-cargo run
+cargo run                         # 3. 启动后端：0.0.0.0:8080，development 自动跑幂等种子
 
-# 4. 前端（tide-admin 仓库，与后端同级存放）
-cd ../tide-admin
+cd ../tide-admin                  # 4. 前端（可选，与后端同级存放）
 pnpm install
-pnpm dev:ele    # http://localhost:5910，/api 代理 → http://127.0.0.1:8080
+pnpm dev:ele                      # http://localhost:5910，/api 代理 → 127.0.0.1:8080
 ```
 
-默认账号 `admin / admin123`（development 环境种子约定，每次启动重置；生产环境务必第一时间改密）。
+默认账号 `admin / admin123`（development 每次启动重置；生产环境务必第一时间改密）。
 
 ## 🐳 Docker 一键部署
 
-前后端仓库需同级存放：`tide-server/` 与 `tide-admin/`。
+前后端仓库需同级存放（前端在别处时用 `FRONTEND_DIR=<你的前端目录>` 指定）。
 
 ```bash
 cp .env.example .env      # TIDE_JWT_SECRET 必设（生产用强随机串），密码按需修改
 docker compose up -d --build
 ```
 
-- 前端：http://localhost（nginx 静态托管 + `/api` 反代后端）
-- 健康检查：http://localhost/api/v1/health
-- 后端容器启动时自动执行迁移；上传文件落在 `backend_uploads` 卷
-
-### 首次部署 bootstrap（创建初始 admin）
-
-生产模式默认不执行种子（避免弱口令重置）。首次部署需显式开启一次：
+- 前端 http://localhost（nginx 静态托管 + `/api` 反代后端），健康检查 http://localhost/api/v1/health
+- 后端容器启动时自动执行迁移，上传文件落在 `backend_uploads` 卷
 
 ```bash
-TIDE_SEED_ENABLED=true docker compose up -d --build backend   # 建初始 admin / super 角色
-docker compose up -d backend                                  # 改回默认后重启（不再重置密码）
+# 首次部署：显式开启一次种子（生产默认不播种，避免弱口令被重置）
+TIDE_SEED_ENABLED=true docker compose up -d --build backend
+docker compose up -d backend      # 改回默认后重启，随后立即登录修改 admin 密码
 ```
 
-随后**立即登录并修改 admin 密码**。
+### ⚠️ 上线前必做
 
-### ⚠️ 上线前必做的三件事（安全部署须知）
+1. **关闭种子**：production 保持 `TIDE_SEED__ENABLED=false`（默认即关），否则每次重启都会把
+   `admin` 密码重置为 `admin123`。
+2. **换 JWT 密钥**：`TIDE_JWT__SECRET` 必须是强随机串；production 下仍用内置开发密钥会
+   **拒绝启动**（fail-fast，有意设计）。
+3. **确认上传目录与保留期**：`TIDE_UPLOAD__DIR` 不要对外静态托管；按合规要求设置
+   `TIDE_LOG_RETENTION__*_DAYS`（`0` = 永久保留）。
 
-本项目默认值面向**本地开发**，直接上公网会失守。部署到生产前逐项确认：
+接口鉴权对**未登记的 `path + method` 一律放行**（fail-open）：清空 `sys_api` 会让所有已登录用户
+可调用全部接口。
 
-1. **关闭强口令重置种子**：保持 production 环境不设 `TIDE_SEED__ENABLED`（默认即关），
-   否则每次重启都会把 `admin` 密码重置为 `admin123`；bootstrap 完成后立即改密。
-2. **换掉 JWT 密钥**：`TIDE_JWT__SECRET` 必须是强随机串。`production` 环境下仍用内置
-   开发密钥，服务会**拒绝启动**（fail-fast，属于有意设计）。
-3. **确认上传目录与保留期**：`TIDE_UPLOAD__DIR` 指向的目录不要对外静态托管；
-   按合规要求设置 `TIDE_LOG_RETENTION__*_DAYS`（`0` = 永久保留）。
-
-另：接口鉴权对**未登记的 `path + method` 一律放行**（fail-open）；清空 `sys_api` 表会让所有已登录用户可调用全部接口。
-
-### 环境变量（`TIDE_` 前缀 + `__` 层级分隔）
-
-| 环境变量 | 对应配置 | 说明 |
-|---|---|---|
-| `TIDE_ENV` | `env` | `development` / `production`（生产不重置 admin 弱口令） |
-| `TIDE_SEED__ENABLED` | `seed.enabled` | 生产环境显式开启启动种子（首次部署 bootstrap 用） |
-| `TIDE_DATABASE__URL` | `database.url` | 连接串，务必带 `charset=utf8mb4&timezone=%2B08:00` |
-| `TIDE_JWT__SECRET` | `jwt.secret` | JWT 签名密钥（compose 部署必设），生产替换为强随机串；production 下默认开发密钥会被拒绝启动 |
-| `TIDE_JWT__TTL_SECONDS` | `jwt.ttl_seconds` | access token 过期秒数（自动识别数字类型） |
-| `TIDE_JWT__REFRESH_TTL_SECONDS` | `jwt.refresh_ttl_seconds` | 刷新凭证有效期秒数 |
-| `TIDE_CORS__ALLOW_ORIGINS` | `cors.allow_origins` | 跨域白名单，逗号分隔（如 `a.com,b.com`）；经 Vite proxy 同源访问时无需配置 |
-| `TIDE_UPLOAD__DIR` | `upload.dir` | 上传落盘目录 |
-| `TIDE_LOG_RETENTION__OPERATION_LOG_DAYS` | `log_retention.operation_log_days` | 操作日志保留天数，默认 90；`0` = 永久保留 |
-| `TIDE_LOG_RETENTION__LOGIN_LOG_DAYS` | `log_retention.login_log_days` | 登录日志保留天数，默认 90；`0` = 永久保留 |
-| `TIDE_LOG_RETENTION__JOB_LOG_DAYS` | `log_retention.job_log_days` | 调度日志保留天数，默认 90；`0` = 永久保留 |
-| `TIDE_LOG_RETENTION__REFRESH_TOKEN_DAYS` | `log_retention.refresh_token_days` | 已过期会话保留天数，默认 30；`0` = 永久保留 |
-
-列表类字段统一逗号分隔。
+配置项与默认值以 [`config.toml`](config.toml) 与 [`.env.example`](.env.example) 为准；
+常用覆盖变量：`TIDE_ENV`、`TIDE_DATABASE__URL`（务必带 `charset=utf8mb4&timezone=%2B08:00`）、
+`TIDE_JWT__SECRET`、`TIDE_JWT__TTL_SECONDS`、`TIDE_JWT__REFRESH_TTL_SECONDS`、
+`TIDE_CORS__ALLOW_ORIGINS`、`TIDE_UPLOAD__DIR`、`TIDE_LOG_RETENTION__*_DAYS`
+（`TIDE_` 前缀 + `__` 层级分隔，列表值逗号分隔）。
 
 ## 📡 接口契约
 
-- 所有端点 `POST + JSON body`（文件上传为 multipart），响应体统一
-  `{ code: 1, data, message }`（`code=1` 成功 / `0` 失败），HTTP 恒 200，仅认证失败 401
-- 分页请求 `{ page, pageSize }`，响应 `{ total, totalPages, items }`；结果统一按 `id` 降序
-- 操作日志的 `keyword` 为路径**前缀**匹配（如 `/api/v1/user`），前缀匹配才能利用 B-Tree 索引
+- 端点统一 `POST + JSON body`，响应体 `{ code: 1, data, message }`（`code=1` 成功 / `0` 失败），
+  HTTP 恒 200——例外只有认证失败 401（含 `/auth/refresh`）与 CORS 预检 204/403
+- `/auth/refresh` 成功时响应体为**裸 token 字符串**（非统一信封），前端在 HTTP 层直取
+  `resp.data` 当新 token；失败返回真 401，前端据此走重新登录
+- 契约例外：`file/upload` 为 multipart，`file/download` 与 `site-config/get` 为 GET
+- 分页请求 `{ page, pageSize }`（`pageSize` 上限 1000），响应 `{ total, totalPages, items }`，
+  统一按 `id` 降序；操作日志 `keyword` 为路径**前缀**匹配（如 `/api/v1/user`）
 - Swagger UI：`/swagger-ui`（规范文件 `/api-doc/openapi.json`）
 
 ## 📁 目录结构
 
 ```
 src/
-├── lib.rs                                    # 库入口：6 个 pub mod，供 bin target 取用
-├── main.rs                                   # 进程入口：tracing + Config::load → infra::app::run
-├── modules/system/<域>/                      # 平台能力域（垂直切片契约驱动四件套，18 个）
-├── modules/biz/<域>/                         # 业务域容器（具体业务功能从这里生长）
-├── infra/                                    # 启动管线、配置、AppState、路由登记表
-├── middleware/                               # AuthRequired / OperationLog / ApiPermission
-├── entity/                                   # SeaORM 实体（全局共享）
-├── utils/                                    # 错误、响应体、JWT、密码、缓存、分页、人名字段拼装
-└── task/                                     # 四类保留期清理任务（job 域注册，天数读配置）
-migrations/          # sea-orm-migration（独立 crate，包名 `migration`，含列表查询复合索引）
-codegen/             # 代码生成器（entity / 四件套骨架）
-docker/              # 容器入口脚本
+├── lib.rs                       # 库入口：把各模块整体公开给本仓 bin target
+├── main.rs                      # 进程入口：tracing + Config::load → infra::app::run
+├── modules/system/<域>/         # 平台能力域（api/service/repo/dto 四件套）
+├── modules/biz/<模块>/<域>/     # 业务域（按模块分组，四件套写法同平台域）
+├── infra/                       # 启动管线、Config、AppState、路由装配、种子
+├── middleware/                  # InjectState / AuthRequired / ApiPermission / OperationLog / CORS / 超时
+├── entity/                      # SeaORM 实体（全局共享）
+├── utils/                       # 错误、响应体、JWT、密码、缓存、分页、人名字段拼装
+└── task/                        # 保留期清理任务（天数读配置）
+migrations/    # sea-orm-migration（独立 crate，包名 `migration`，含列表查询复合索引）
+codegen/       # 代码生成器（entity / 四件套骨架）
+docker/        # 容器入口脚本
 ```
 
-## 🧩 新增业务域
+## 🧩 扩展业务域
 
-平台能力（认证 / RBAC / 字典 / 日志 / 定时任务 / 文件 / 组织）已经就绪，业务域与它并列生长。
-
-```
-src/modules/biz/<你的域>/    # 四件套 api/service/repo/dto，写法与 system/ 下的域完全一致
-src/entity/<你的表>.rs        # 实体（可用 codegen 生成）
-migrations/                   # 业务表迁移（追加新文件，不改 baseline）
-```
+平台能力（认证 / RBAC / 字典 / 日志 / 任务 / 文件 / 组织）已经就绪，业务域与它并列生长：
+`src/modules/biz/<模块>/<域>/`——按模块分组，四件套写法与平台域完全一致（约定见 `biz/mod.rs`
+注释），实体可用 `codegen/` 生成。
 
 接入三处：`src/entity/mod.rs` 加 `pub mod <表>;` → `src/modules/biz/mod.rs` 加
-`pub mod <域>;` → `src/modules/mod.rs` 的 `DOMAINS` 加一行。加了 `MountGuard::Protected`
-就自动获得 `AuthRequired` / `OperationLog` / `ApiPermission` 三件套，不用自己接鉴权。
+`pub mod <模块>;`（域在模块自己的 `mod.rs` 里声明）→ `src/modules/mod.rs` 的 `DOMAINS` 加一行。
+登记为 `MountGuard::Protected` 即自动获得 `AuthRequired` / `OperationLog` / `ApiPermission`
+三件套，不用自己接鉴权。
 
-**别忘了登记接口权限点**：新端点要进 `src/infra/seed.rs` 的 `API_SEEDS`，否则接口授权对它是
-fail-open（未登记即放行）。
+**新端点必须登记到 `src/infra/seed.rs` 的 `API_SEEDS`**，否则接口授权对它是 fail-open（未登记即放行）。
 
-前端页面放 `tide-admin` 的 `apps/web-ele/src/views/biz/<域>/`：
-
-- 页面三件：`index.vue`（页面 + vxe-table）+ `data.ts`（列 / 搜索 / 表单 schema）
-  + `modules/form.vue`（新建 / 编辑抽屉）；
-- `apps/web-ele/src/api/<域>.ts` 一个资源一个文件；
-- **菜单由后端驱动**（`accessMode: backend`）：在 `MENU_SEEDS` 里加页面行，
-  `component` 写 `#/views/<分组>/<域>/index.vue`（会被 `normalizeComponent`
-  归一并命中 `import.meta.glob`）。
-
-### 建库
-
-**每个业务系统用独立数据库**。数据库由连接串决定（`config.toml` 的 `database.url`），
-代码不假设库名。一个库里同时有平台表和业务表——它是一套可独立运行的部署，
-自己的 admin、自己的 RBAC 数据。
-
-迁移 crate（包名 `migration`）负责全部平台表（认证 / RBAC / 字典 / 日志 / 任务 / 组织），
-业务表在 `migrations/` 里**追加新文件**（不改已发布的 baseline）：
-
-一条命令建库：
-
-```bash
-# 先建空库（库名随意，如 tide_<业务>）
-mysql -h127.0.0.1 -P3307 -uroot -p -e "CREATE DATABASE tide_mybiz CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
-# 跑迁移（必须在 migrations/ 目录执行；根目录 cargo run 是启动服务）
-cd migrations
-DATABASE_URL='mysql://root:root@127.0.0.1:3307/tide_mybiz?charset=utf8mb4&timezone=%2B08:00' cargo run -- up
-```
-
-平台表与业务表在同一次 `up` 里按顺序建出。注意事项：
-
-- **平台表迁移的顺序不能改**：新迁移**追加在后面**即可。
-- 业务表引用 `sys_user.id` 时用**逻辑外键**（全库约定：不加物理外键），
-  审计字段（`created_by` / `updated_by`，`0` = 种子）由 repo 层盖章。
-- 启动种子（admin / super / 菜单 / 接口登记）由 `TIDE_SEED__ENABLED=true` 在**首次部署**时跑一次。
-- **多业务共用一套 RBAC 当前不内置**（认证热路径依赖同库 JOIN）；当前形态是「每个业务系统一个自洽的库」。
-
-### 部署
-
-`docker-compose.yml` 的 `frontend.build.context` 默认取同级目录的 `../tide-admin`；
-前端仓库在别处时用环境变量指定：
-
-```bash
-FRONTEND_DIR=<你的前端目录> docker compose up -d --build
-```
+其余约定：业务表迁移在 `migrations/` 追加（不改已发布的 baseline，平台表相对顺序不动）；
+业务数据放独立连接串指向的库（代码不假设库名，一个库里平台表与业务表并存，自己一套 admin
+与 RBAC 数据）；业务表引用 `sys_user.id` 用**逻辑外键**（全库不加物理外键），审计字段由 repo
+层盖章。前端页面与接口文件在 `tide-admin` 里按同样的模块分组镜像：
+`apps/web-ele/src/views/biz/<模块>/<域>/` + `apps/web-ele/src/api/<模块>/<域>.ts`。
 
 ## 🧪 测试与 CI
 
-集成测试内联在各域 `repo.rs` / `service.rs`，直连本地 MySQL；测试夹具用事务回滚
-隔离（`test_txn()`），结束（含 panic）自动 ROLLBACK，不留孤儿数据；全量串行跑
-（同时跑两个 `cargo test` 会因共享种子行互相干扰）。
+集成测试内联在各域 `repo.rs` / `service.rs`，直连本地 MySQL，夹具用事务回滚隔离
+（`test_txn()`，结束含 panic 自动 ROLLBACK）；**勿并行跑两个 `cargo test`**（共享种子行会互相干扰）。
 
 ```bash
 cargo fmt --check && (cd migrations && cargo fmt --check)
 cargo clippy --all-targets -- -D warnings && (cd migrations && cargo clippy --all-targets -- -D warnings)
-cargo test              # 需本地 MySQL（docker compose up -d mysql 后即可）
+cargo test              # 需本地 MySQL（docker compose up -d mysql 后即可）；--lib 只跑库侧测试
 ```
 
-CI（`.github/workflows/ci.yml`，`push/PR → main` 触发）：lint job
-（fmt + clippy `-D warnings` 双 crate）与 test job（MySQL service container 跑全量真库测试）。
-
-全仓测试均连真库、无 mock；`cargo test --lib` 只跑库侧测试。
+CI（`.github/workflows/ci.yml`，`push` 到 `main` / tag 与全部 PR 触发）：lint job 对两个 crate 跑
+fmt + clippy `-D warnings`，test job 起一个 MySQL 8 容器跑全量真库测试；全仓无 mock。
 
 ## 🤝 贡献
 
-欢迎 Issue 与 PR：提交信息遵循 Conventional Commits（中文描述），PR 需附
-`cargo test` 结果；契约变更需同步说明响应体与端点，并更新前端对接说明。
-
-完整流程与本地开发环境（MySQL 3307、真库测试、双 crate 门禁）见
-[CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请勿开公开 Issue，见 [SECURITY.md](SECURITY.md)。
+欢迎 Issue 与 PR：提交信息遵循 Conventional Commits（中文描述），PR 附 `cargo test` 结果；
+契约变更需同步说明端点与响应体。完整流程见 [CONTRIBUTING.md](CONTRIBUTING.md)；
+安全问题请勿开公开 Issue，见 [SECURITY.md](SECURITY.md)。
 
 ## 🙏 致谢
 
-- [Salvo](https://github.com/salvo-rs/salvo) / [SeaORM](https://github.com/SeaQL/sea-orm) — 后端框架
-- [Vue Vben Admin](https://github.com/vbenjs/vue-vben-admin) — 配套前端
-  [tide-admin](https://github.com/xqh-jason/tide-admin) 的脚手架基座（该仓库为 Vue Vben Admin 的二次开发）
+- [Salvo](https://github.com/salvo-rs/salvo) / [SeaORM](https://github.com/SeaQL/sea-orm) —— 后端框架
+- [Vue Vben Admin](https://github.com/vbenjs/vue-vben-admin) —— 前端
+  [tide-admin](https://github.com/xqh-jason/tide-admin) 的脚手架基座
 
 ## 📄 License
 
-本项目基于 [MIT](LICENSE) 协议开源；配套前端 tide-admin 同为 MIT，其内部
+本项目与配套前端 tide-admin 均为 [MIT](LICENSE) 协议开源；tide-admin 内部
 `packages/` / `internal/` / `scripts/` 保留上游 Vue Vben Admin 的版权声明。
-
