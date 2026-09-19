@@ -24,7 +24,7 @@
 | 操作日志落库 | `op_log.rs::OperationLog` | 直写 `operation_log::repo` |
 | 跨源白名单 | `cors.rs::Cors` | 构造时取 `config.cors` 副本，不依赖 Depot；挂载位置见 `infra/AGENTS.md` |
 | 请求级超时兜底 | `request_timeout.rs::RequestTimeout` | 预算 30s（`DEFAULT_REQUEST_TIMEOUT_SECS`）+ `is_exempt` 路径豁免 |
-| 中间件挂载顺序 | `infra/router.rs`（不在本目录） | 档位与顺序由挂载行的 `MountGuard` 决定；行来源是 `modules::DOMAINS` 或 `all_domains` 合并结果；公开挂位下需登录态的子路由（`auth/logout`、`site-config/update`）在各自域 `mod.rs` 自挂 |
+| 中间件挂载顺序 | `infra/router.rs`（不在本目录） | 档位与顺序由挂载行的 `MountGuard` 决定；挂载行来自 `modules::DOMAINS` 登记表；公开挂位下需登录态的子路由（`auth/logout`、`site-config/update`）在各自域 `mod.rs` 自挂 |
 
 ## CONVENTIONS
 

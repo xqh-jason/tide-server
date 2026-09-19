@@ -10,17 +10,14 @@
 |---|---|---|
 | 平台能力域（RBAC / 认证 / 字典 / 日志 / 任务 / 文件 / 部门 / 职位） | `system/<域>/` | 18 切片逐个的角色与硬规则见 `system/AGENTS.md` |
 | 新业务功能 | `biz/<域>/` | 目前为空；四件套结构与 URL 契约与平台域完全一致 |
-| 新增业务域（**本仓内**） | `mod.rs` 的 `DOMAINS` 追加一行 | 基座内置域走这条 |
-| 新增业务域（**业务仓**） | 自己的 `main.rs` 里写 `const MY_DOMAINS` → `app::run_with_domains` | 2026-09-18 起支持；见 `modules::all_domains` 文档 |
-| 挂载 / 鉴权档位 / 新增域装配 | `mod.rs` 的 `DOMAINS` + `DomainMount` + `MountGuard` + `all_domains` | `infra/router.rs::build_with` 循环消费，是**消费函数**（不再是「唯一消费者」） |
+| 新增业务域 | `mod.rs` 的 `DOMAINS` 追加一行 + 容器 `mod.rs` 加 `pub mod` | 三步装配见 CONVENTIONS |
+| 挂载 / 鉴权档位 / 新增域装配 | `mod.rs` 的 `DOMAINS` + `DomainMount` + `MountGuard` | `infra/router.rs::build_with` 循环消费 |
 | 容器级数据有效性、权限码语义、按层命名表 | `mod.rs` 文件头 doc 注释 | 与代码同处一文件，改约定先改这里 |
 
 ## CONVENTIONS
 
 - 一行 `DomainMount` = `path` 前缀 + `guard` + `routers` 函数数组；`infra/router.rs` 据此自动挂载，不再逐域手写 `push` + 中间件。
-- **两条装配路径**（2026-09-18）：① 基座自己的域 → 直接改 `DOMAINS`；② 业务仓的域 → 在业务仓写 `const MY_DOMAINS` 并传给 `app::run_with_domains`。
-  合并由 `modules::all_domains(extra)` 完成（内置在前、外部在后），**不用全局可变状态**（避免「先注册否则漏挂」的隐式时序依赖与测试并行随机失败）。
-  不要写「`infra/router.rs` 是 DOMAINS 唯一消费者」——它不是了。
+- `DomainMount` 的 `Clone` / `Debug` / `PartialEq` 与 `all_domains(extra)` 是「额外传入一组域」的入口：域是可传参的，不再只有一张 `const` 表。**不用全局可变状态**（避免「先注册否则漏挂」的隐式时序依赖与测试并行随机失败）。
 - `path` 空串 = 出口自带前缀（`health::routes()` 自带 `/health`、`auth::routes()` 自带 `/auth`），直接挂 `api/v1`。
 - 同一前缀可并挂多个出口：`user` 行同时挂 `system::user::routes` 与 `system::menu::user_routes`（`POST /api/v1/user/menus` 业务在 menu 域）。
 - `MountGuard::Protected` = 固定顺序三件套 `AuthRequired → OperationLog → ApiPermission`（顺序有意：授权失败的写操作仍要留操作日志）；`Public` = 三件套都不挂。
