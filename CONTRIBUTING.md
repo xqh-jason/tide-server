@@ -25,19 +25,18 @@ cargo test
 
 默认账号 `admin / admin123`（development 档位每次启动重置，仅限本地）。
 
-## 作为基座开发（两种用法）
+## 新增业务域
 
-本仓是**平台能力基座**，不包含具体业务表。两种用法都支持，按你的想法选：
+平台能力（认证 / RBAC / 字典 / 日志 / 任务 / 文件 / 组织）已经在 `src/modules/system/` 下就绪，
+业务域写进 `src/modules/biz/<域>/`，然后在 `src/modules/mod.rs` 的 `DOMAINS` 加一行——
+选了 `MountGuard::Protected` 就自动获得 `AuthRequired` / `OperationLog` / `ApiPermission`
+三件套，不用自己接鉴权。完整三步见 README「新增业务域」一节。
 
-| 用法 | 怎么做 |
-|---|---|
-| **直接在本仓开发业务** | 业务域写进 `src/modules/biz/<域>/`，在 `DOMAINS` 加一行，前端页面放 `tide-admin` |
-| **独立仓库依赖本仓** | 你的 `Cargo.toml` 写 `git + tag`，`main.rs` 用 `run_with_domains` 注册自己的域 |
+新端点要登记进 `src/infra/seed.rs` 的 `API_SEEDS`，否则接口授权对它是 **fail-open**（未登记即放行）。
 
-两者的写法见 README「作为基座」一节。
-
-本仓对外接口就是 `src/lib.rs` 里的 6 个 `pub mod`。**改动公开面（新增/修改 pub 项、
-改变函数签名）属于破坏性变更**：以 tag 引用本仓的使用方会受影响。这类改动请同时说明升级影响。
+本仓对外接口是 HTTP 契约（端点 + 响应体），不是 Rust 库 API：`src/lib.rs` 只是把模块整体
+公开给本仓自己的 bin target 用。即便如此，**契约变更（响应体、端点、鉴权行为）**会直接影响
+已对接的前端与使用方，PR 里要单独说明。
 
 ### 发版（tag）
 

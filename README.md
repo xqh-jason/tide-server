@@ -183,7 +183,7 @@ docker compose up -d backend                                  # 改回默认后�
 
 ```
 src/
-├── lib.rs                                    # 基座公开面（外部项目可依赖的入口，2026-09-18 起）
+├── lib.rs                                    # 库入口：6 个 pub mod，供 bin target 取用（2026-09-18 起）
 ├── main.rs                                   # 进程入口：tracing + Config::load → infra::app::run
 ├── modules/system/<域>/                      # 平台能力域（垂直切片契约驱动四件套，18 个）
 ├── modules/biz/<域>/                         # 业务域容器（具体业务功能从这里生长）
@@ -197,21 +197,9 @@ codegen/             # 代码生成器（entity / 四件套骨架）
 docker/              # 容器入口脚本
 ```
 
-## 🧩 作为基座：在本仓开发，或派生你自己的系统
+## 🧩 新增业务域
 
-本仓是**平台能力基座**：认证 / RBAC / 字典 / 日志 / 定时任务 / 文件 / 组织都已就绪，
-且与具体业务无关。**两种用法都支持，按你的想法选**：
-
-| 用法 | 适合 | 怎么做 |
-|---|---|---|
-| **A. 直接 clone 本仓开发** | 你只有一个业务系统；想要最少的仓库与配置 | clone 后把业务域写进 `src/modules/biz/<域>/`，在 `DOMAINS` 加一行 |
-| **B. 作为依赖（独立仓库）** | 你要同时养多个业务系统；需要各自的发版节奏 | 自己的仓库用 **git 依赖 + 版本 tag** 引用本仓，用 `run_with_domains` 注册自己的域 |
-
-两者都不需要 fork 基座去改核心机制。**若你选 B，本仓保持业务中性**：业务表（前缀随你自定）
-属于你自己的 crate 与迁移，不回流本仓——这样一个基座可以同时服务多个业务系统。
-（选 A 则是你把这仓当成自己项目的起点，`biz/` 与 `DOMAINS` 都可以按需改。）
-
-### 用法 A：直接在本仓开发
+平台能力（认证 / RBAC / 字典 / 日志 / 定时任务 / 文件 / 组织）已经就绪，业务域与它并列生长。
 
 ```
 src/modules/biz/<你的域>/    # 四件套 api/service/repo/dto，写法与 system/ 下的域完全一致
@@ -220,142 +208,69 @@ migrations/                   # 业务表迁移（追加新文件，不改 basel
 ```
 
 接入三处：`src/entity/mod.rs` 加 `pub mod <表>;` → `src/modules/biz/mod.rs` 加
-`pub mod <域>;` → `src/modules/mod.rs` 的 `DOMAINS` 加一行。前端页面放
-`tide-admin` 的 `apps/web-ele/src/views/biz/<域>/`。
+`pub mod <域>;` → `src/modules/mod.rs` 的 `DOMAINS` 加一行。加了 `MountGuard::Protected`
+就自动获得 `AuthRequired` / `OperationLog` / `ApiPermission` 三件套，不用自己接鉴权。
 
-### 用法 B：派生独立业务仓
+**别忘了登记接口权限点**：新端点要进 `src/infra/seed.rs` 的 `API_SEEDS`，否则接口授权对它是
+fail-open（未登记即放行）。
 
-#### 后端仓
+前端页面放 `tide-admin` 的 `apps/web-ele/src/views/biz/<域>/`：
 
-```toml
-# <你的仓库>/Cargo.toml
-[dependencies]
-tide-server = { git = "https://github.com/<owner>/tide-server", tag = "v0.2.0" }
-salvo = { version = "0.95", features = ["oapi"] }
-sea-orm = { version = "1", features = ["sqlx-mysql", "runtime-tokio", "macros", "with-chrono", "with-json"] }
-tokio = { version = "1", features = ["full"] }
-anyhow = "1"
-```
-
-```rust
-// <你的仓库>/src/main.rs —— 用自己的业务域启动基座
-use salvo::prelude::Router;
-use tide_server::infra;
-use tide_server::modules::{DomainMount, MountGuard};
-
-mod my_domain; // 你自己的业务域（四件套，写法与基座内置域一致）
-
-/// 你自己的域：`Protected` 自动获得鉴权 / 操作日志 / 接口授权三件套。
-const MY_DOMAINS: &[DomainMount] = &[DomainMount {
-    path: "<域前缀>",
-    guard: MountGuard::Protected,
-    routers: &[my_domain::routes],
-}];
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().init();
-    let config = infra::config::Config::load()?;
-    infra::app::run_with_domains(config, MY_DOMAINS).await
-}
-```
-
-要点：
-
-- **不必接鉴权**：业务域走完 `Protected` 后与平台域同权，中间件、超时豁免、统一错误体都自动生效；
-- **别忘了登记接口权限点**：新端点要进 `sys_api`（未登记接口按 fail-open 放行）；
-- 配置仍从**进程工作目录**的 `config.toml` 读（`TIDE_*` 环境变量可覆盖全部项）；
-- 基座升级 = 改 tag；基座当前**不承诺跨 tag 的 API 兼容**，升版时预期需小改。
-
-#### 建库：让你的库既有平台表、也有自己的业务表
-
-**每个业务系统用独立数据库**。数据库由连接串决定（`config.toml` 的 `database.url`），
-代码不假设库名。业务库里会有完整的平台表（认证 / RBAC / 字典 / 日志 / 任务 / 组织）
-**加上**你自己的业务表——每个业务系统是一套可独立运行的部署，自己的 admin、自己的 RBAC 数据。
-
-基座的迁移 crate 已可作为依赖使用（包名 `migration`），在你自己的迁移 crate 里**链式拼接**：
-
-```toml
-# <你的仓库>/migrations/Cargo.toml
-[dependencies]
-migration = { git = "https://github.com/<owner>/tide-server", tag = "vX.Y.Z" }
-sea-orm-migration = { version = "1.1.0", features = ["runtime-tokio", "sqlx-mysql"] }
-```
-
-```rust
-// <你的仓库>/migrations/src/lib.rs —— 先基座、后自己
-use sea_orm_migration::prelude::*;
-
-#[derive(DeriveMigrationName)]
-pub struct Migration;   // 你的建表迁移（写法见基座 migrations/src/m20260913_000001_baseline.rs）
-
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.get_connection().execute(Statement::from_string(
-            manager.get_database_backend(),
-            r#"CREATE TABLE `<业务前缀>_xxx` ( ... ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"#.to_string(),
-        )).await?;
-        Ok(())
-    }
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> { Ok(()) }
-}
-
-pub struct HrMigrator;
-
-#[async_trait::async_trait]
-impl MigratorTrait for HrMigrator {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        let mut m = migration::Migrator::migrations(); // ← 基座：全部平台表迁移
-        m.push(Box::new(Migration));                  // ← 自己：业务表迁移（追加在末尾）
-        m
-    }
-}
-```
-
-一条命令建库（建出平台表 + 业务表）：
-
-```bash
-# 先建空库（业务库名随意，如 tide_<业务>）
-mysql -h127.0.0.1 -P3307 -uroot -p -e "CREATE DATABASE tide_mybiz CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
-# 跑迁移
-cd <你的仓库>/migrations
-DATABASE_URL='mysql://root:root@127.0.0.1:3307/tide_mybiz?charset=utf8mb4&timezone=%2B08:00' cargo run -- up
-```
-
-实测结果（2026-09-18，全新库）：`sys_=21 hr_=1 total=22` —— 21 张平台表（20 张在 baseline +
-`sys_refresh_token` 单独一条）由基座迁移建出，业务表由自己的迁移建出，两者在同一次 `up` 里按顺序执行。
-基座迁移共 30 条（含 25 条历史版本占位），条数会随基座演进增长，以代码为准。
-
-注意事项：
-
-- **基座迁移顺序不能改**（占位在前、baseline 在后）：`migration::Migrator::migrations()` 已排好，
-  自己的迁移**追加在后面**即可。
-- 业务表引用 `sys_user.id` 时用**逻辑外键**（全库约定：不加物理外键），
-  审计字段（`created_by` / `updated_by`，`0` = 种子）由 repo 层盖章。
-- 启动种子（admin / super / 菜单 / 接口登记）由 `TIDE_SEED__ENABLED=true` 在**首次部署**时跑一次，
-  之后关掉；它建的是你自己库里的那份 RBAC 数据。
-- **多业务共用一套 RBAC 的形态（基础系统一个库 + 各业务一个库）本仓当前不内置**：
-  那需要跨库方案（同一实例内的跨 schema 查询，或把鉴权做成服务调用），
-  而基座现在的认证热路径有一条 `sys_refresh_token` LEFT JOIN `sys_user` 的单条 SQL，
-  跨实例直接不成立。当前支持的是「每个业务系统一个自洽的库」（上面这种）。
-
-#### 前端仓
-
-从 [tide-admin](https://github.com/xqh-jason/tide-admin) fork 一份（它的 `apps/web-ele`
-是基座管理界面），然后把新页面放进 `apps/web-ele/src/views/<分组>/<域>/`：
-
-- 页面三件：`index.vue`（页面 + vxe-table）+ `data.ts`(列 / 搜索 / 表单 schema)
+- 页面三件：`index.vue`（页面 + vxe-table）+ `data.ts`（列 / 搜索 / 表单 schema）
   + `modules/form.vue`（新建 / 编辑抽屉）；
 - `apps/web-ele/src/api/<域>.ts` 一个资源一个文件；
 - **菜单由后端驱动**（`accessMode: backend`）：在 `MENU_SEEDS` 里加页面行，
   `component` 写 `#/views/<分组>/<域>/index.vue`（会被 `normalizeComponent`
-  归一并命中 `import.meta.glob`）；
-- 页面也可以直接放在基座的 `tide-admin` 里（用法 A），此时菜单种子同样在基座。
+  归一并命中 `import.meta.glob`）。
 
-### 基座发版（tag 流程）
+### 建库
 
-只要有人用 tag 引用本仓，tag 就是发布点（用法 A 不需要发版）。**先过门禁、再打 tag**：
+**每个业务系统用独立数据库**。数据库由连接串决定（`config.toml` 的 `database.url`），
+代码不假设库名。一个库里同时有平台表和业务表——它是一套可独立运行的部署，
+自己的 admin、自己的 RBAC 数据。
+
+迁移 crate（包名 `migration`）负责全部平台表（认证 / RBAC / 字典 / 日志 / 任务 / 组织），
+业务表在 `migrations/` 里**追加新文件**（不改已发布的 baseline）：
+
+一条命令建库：
+
+```bash
+# 先建空库（库名随意，如 tide_<业务>）
+mysql -h127.0.0.1 -P3307 -uroot -p -e "CREATE DATABASE tide_mybiz CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
+# 跑迁移（必须在 migrations/ 目录执行；根目录 cargo run 是启动服务）
+cd migrations
+DATABASE_URL='mysql://root:root@127.0.0.1:3307/tide_mybiz?charset=utf8mb4&timezone=%2B08:00' cargo run -- up
+```
+
+实测结果（2026-09-18，全新库）：`sys_=21 hr_=1 total=22` —— 21 张平台表（20 张在 baseline +
+`sys_refresh_token` 单独一条）与业务表在同一次 `up` 里按顺序建出。
+平台表迁移共 30 条（含 25 条历史版本占位），条数会随演进增长，以代码为准。
+
+注意事项：
+
+- **平台表迁移的顺序不能改**（占位在前、baseline 在后）：`migration::Migrator::migrations()` 已排好，
+  新迁移**追加在后面**即可。
+- 业务表引用 `sys_user.id` 时用**逻辑外键**（全库约定：不加物理外键），
+  审计字段（`created_by` / `updated_by`，`0` = 种子）由 repo 层盖章。
+- 启动种子（admin / super / 菜单 / 接口登记）由 `TIDE_SEED__ENABLED=true` 在**首次部署**时跑一次，
+  之后关掉。
+- **多业务共用一套 RBAC 的形态（基础系统一个库 + 各业务一个库）当前不内置**：
+  那需要跨库方案（同一实例内的跨 schema 查询，或把鉴权做成服务调用），
+  而现在的认证热路径有一条 `sys_refresh_token` LEFT JOIN `sys_user` 的单条 SQL，
+  跨实例直接不成立。当前支持的是「每个业务系统一个自洽的库」（上面这种）。
+
+### 部署
+
+`docker-compose.yml` 的 `frontend.build.context` 默认取同级目录的 `../tide-admin`；
+前端仓库在别处时用环境变量指定：
+
+```bash
+FRONTEND_DIR=<你的前端目录> docker compose up -d --build
+```
+
+### 发版（tag 流程）
+
+**先过门禁、再打 tag**：
 
 ```bash
 # 1. 三道门禁全绿（CI 对 tag 也会跑，但本地先跑一轮能省一个来回）
@@ -363,26 +278,14 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test                      # 需本地 MySQL
 
-# 2. 打 tag（推送到远端后消费方才能解析）
+# 2. 打 tag
 git tag vX.Y.Z
 git push origin main --tags
 ```
 
-消费方升级 = 改 `Cargo.toml` 的 `tag` 后 `cargo update -p tide-server`。
-
 **为什么强调“先过门禁”**：2026-09-18 实际踩过——tag 已打好、消费方也拉到了，
 才发现该提交在 `-D warnings` 下不干净（一个 clippy 告警），只能 `git tag -d` 重打。
 现在 CI 监听 `tags: ["v*"]`，tag 自身也有校验，但 CI 是事后发现，本地门禁是事前。
-
-### 部署
-
-`docker-compose.yml` 的 `frontend.build.context` 可配置（用法 A 用默认值即可）：
-
-```bash
-FRONTEND_DIR=<你的前端目录> docker compose up -d --build
-```
-
-默认值 `../tide-admin` 即本仓自带前端。
 
 ## 🧪 测试与 CI
 
