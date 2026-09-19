@@ -196,6 +196,12 @@ pub const DOMAINS: &[DomainMount] = &[
         guard: MountGuard::Protected,
         routers: &[system::refresh_token::routes],
     },
+    // 员工档案（业务域）：POST /api/v1/hr/employee/{list,create,update,get,delete}
+    DomainMount {
+        path: "hr/employee",
+        guard: MountGuard::Protected,
+        routers: &[biz::hr::employee::routes],
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -244,7 +250,7 @@ pub const DOMAINS: &[DomainMount] = &[
 /// 合并 [`DOMAINS`] 与额外传入的域，得到最终挂载顺序。
 ///
 /// 顺序 = [`DOMAINS`] 在前、`extra` 在后。路由匹配是「先注册先命中」吗？
-/// 不是——Salvo 的路由树按完整路径匹配，内置的 19 条与额外域不同前缀，
+/// 不是——Salvo 的路由树按完整路径匹配，内置的 20 条与额外域不同前缀，
 /// 不存在覆盖关系；但**同前缀**的两种情况要留意：
 /// - 想复用一个**已存在的**前缀（如往 `/user` 下加端点）：
 ///   应当改 `DOMAINS`（属于平台能力），或在额外域里用**自己的**前缀；
@@ -267,7 +273,7 @@ mod tests {
     }
 
     /// **可传参挂载回归**（2026-09-18）：额外传入的域被追加到列表尾部，
-    /// 且 `DOMAINS` 的 19 条不被覆盖、顺序仍在前面。
+    /// 且 `DOMAINS` 的 20 条不被覆盖、顺序仍在前面。
     ///
     /// 改造前不可能写出本用例：`DOMAINS` 是 `const`，路由组装直接读它，
     /// 调用方没有追加入口。
@@ -298,5 +304,18 @@ mod tests {
         let merged = all_domains(&[]);
         assert_eq!(merged.len(), DOMAINS.len());
         assert!(merged.iter().eq(DOMAINS.iter()));
+    }
+
+    /// 业务域 `hr/employee` 必须登记在受保护档位：漏登 = 路由 404；
+    /// 档位写成 `Public` = 整套鉴权三件套失效（fail-open），故两者都断言。
+    #[test]
+    fn employee_domain_is_registered_as_protected() {
+        let row = DOMAINS
+            .iter()
+            .find(|d| d.path == "hr/employee")
+            .expect("hr/employee 必须登记在 DOMAINS");
+
+        assert_eq!(row.guard, MountGuard::Protected);
+        assert_eq!(row.routers.len(), 1);
     }
 }

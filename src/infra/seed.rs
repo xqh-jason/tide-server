@@ -573,6 +573,63 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("SystemJob"),
         sort: 6,
     },
+    // 人事管理目录（业务域 `biz/hr`）：员工档案页 + 按钮权限码。
+    // 按钮码只控前端显隐，后端判定走 sys_api（见 API_SEEDS 的 hr/employee 段）。
+    MenuSeed {
+        name: "Hr",
+        title: "人事管理",
+        path: "/hr",
+        component: "",
+        icon: "lucide:users",
+        menu_type: 1,
+        permission: "",
+        parent: None,
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrEmployee",
+        title: "员工档案",
+        path: "/hr/employee",
+        component: "#/views/biz/hr/employee/index.vue",
+        icon: "lucide:id-card",
+        menu_type: 2,
+        permission: "",
+        parent: Some("Hr"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrEmployeeCreate",
+        title: "员工新增",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:employee:create",
+        parent: Some("HrEmployee"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrEmployeeUpdate",
+        title: "员工修改",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:employee:update",
+        parent: Some("HrEmployee"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrEmployeeDelete",
+        title: "员工删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:employee:delete",
+        parent: Some("HrEmployee"),
+        sort: 3,
+    },
 ];
 
 /// API 种子定义：`path` 必须带 `/api/v1` 前缀且**写成规范化形式**（无尾斜杠、无重复
@@ -600,7 +657,7 @@ const fn api(
     }
 }
 
-/// 全部管理端点登记（87 条）。刻意排除：
+/// 全部管理端点登记（92 条）。刻意排除：
 /// - 公开接口：/health、/captcha/generate、/auth/{login,logout}、GET /site-config/get；
 /// - 登录后每个用户必调的契约端点：POST /user/{info,access-codes,menus}
 ///   （登记即 fail-closed，会把所有非超管用户挡在登录态之外）。
@@ -857,6 +914,38 @@ const API_SEEDS: &[ApiSeed] = &[
         "按用户强制下线全部会话",
         "刷新凭证",
     ),
+    // 员工档案（业务域 hr/employee）：与 DOMAINS 的 "hr/employee" 档位、菜单
+    // HrEmployee 及其按钮码一一对应；漏登 = 该端点 fail-open（未登记放行）。
+    api(
+        "/api/v1/hr/employee/list",
+        "POST",
+        "员工档案列表查询",
+        "员工档案",
+    ),
+    api(
+        "/api/v1/hr/employee/create",
+        "POST",
+        "员工档案新增",
+        "员工档案",
+    ),
+    api(
+        "/api/v1/hr/employee/update",
+        "POST",
+        "员工档案修改",
+        "员工档案",
+    ),
+    api(
+        "/api/v1/hr/employee/get",
+        "POST",
+        "员工档案详情",
+        "员工档案",
+    ),
+    api(
+        "/api/v1/hr/employee/delete",
+        "POST",
+        "员工档案删除",
+        "员工档案",
+    ),
 ];
 
 /// 按 name 查菜单 id（不过滤软删，与 seed 的查重口径一致）。
@@ -866,6 +955,69 @@ async fn find_menu_id_by_name(db: &DatabaseConnection, name: &str) -> anyhow::Re
         .one(db)
         .await?;
     Ok(menu.map(|menu| menu.id))
+}
+
+/// 播种一个「整数值」字典类型及其字典项，返回字典类型 id（幂等：类型按 `type`
+/// 查重、字典项按 `dictionary_id + value` 查重；只补缺、不覆盖运维改过的行）。
+///
+/// 供业务域枚举使用（人事的 `employmentStatus` / `education`）。平台既有的
+/// `status` / `execResultStatus` 保留各自的历史迁移逻辑（旧编码原地改名、extend
+/// 回填），刻意不走本函数，改动前先读那两段注释。
+async fn seed_int_dictionary(
+    db: &DatabaseConnection,
+    admin_id: u64,
+    dict_type: &str,
+    name: &str,
+    remark: &str,
+    items: &[(&str, &str, i32)],
+) -> anyhow::Result<u64> {
+    let dict_id = match sys_dictionary::Entity::find()
+        .filter(sys_dictionary::Column::Type.eq(dict_type))
+        .one(db)
+        .await?
+    {
+        Some(dict) => dict.id,
+        None => {
+            sys_dictionary::ActiveModel {
+                name: Set(name.to_string()),
+                r#type: Set(dict_type.to_string()),
+                status: Set(1),
+                remark: Set(remark.to_string()),
+                // 种子数据的操作人统一记为 admin 自己
+                created_by: Set(admin_id),
+                updated_by: Set(admin_id),
+                ..Default::default()
+            }
+            .insert(db)
+            .await?
+            .id
+        }
+    };
+
+    for (label, value, sort) in items {
+        let existing = sys_dictionary_detail::Entity::find()
+            .filter(sys_dictionary_detail::Column::DictionaryId.eq(dict_id))
+            .filter(sys_dictionary_detail::Column::Value.eq(*value))
+            .one(db)
+            .await?;
+        if existing.is_none() {
+            sys_dictionary_detail::ActiveModel {
+                dictionary_id: Set(dict_id),
+                label: Set(String::from(*label)),
+                value: Set(String::from(*value)),
+                extend: Set(String::new()),
+                sort: Set(*sort),
+                status: Set(1),
+                created_by: Set(admin_id),
+                updated_by: Set(admin_id),
+                ..Default::default()
+            }
+            .insert(db)
+            .await?;
+        }
+    }
+
+    Ok(dict_id)
 }
 
 /// 启动初始化：确保开发种子数据存在（幂等，可重复调用）。
@@ -1126,6 +1278,38 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             Some(_) => {}
         }
     }
+
+    // 4.3 数据字典：人事业务枚举（type=employmentStatus / education）。员工档案
+    //     （hr_employee.employment_status / education）的值域来源，接口层用
+    //     dictionary::service::enabled_int_values 预取后交 validate（见
+    //     modules::biz::hr::employee::api）。值改这里、不同步改代码即生效。
+    const SEED_DICT_TYPE_EMPLOYMENT_STATUS: &str = "employmentStatus";
+    const SEED_DICT_TYPE_EDUCATION: &str = "education";
+    seed_int_dictionary(
+        db,
+        admin_id,
+        SEED_DICT_TYPE_EMPLOYMENT_STATUS,
+        "在职状态",
+        "员工档案（hr_employee）在职状态：1 在职、2 试用、3 离职",
+        &[("在职", "1", 1), ("试用", "2", 2), ("离职", "3", 3)],
+    )
+    .await?;
+    seed_int_dictionary(
+        db,
+        admin_id,
+        SEED_DICT_TYPE_EDUCATION,
+        "最高学历",
+        "员工档案（hr_employee）最高学历：0 未填、1 高中、2 大专、3 本科、4 硕士、5 博士",
+        &[
+            ("未填", "0", 1),
+            ("高中", "1", 2),
+            ("大专", "2", 3),
+            ("本科", "3", 4),
+            ("硕士", "4", 5),
+            ("博士", "5", 6),
+        ],
+    )
+    .await?;
 
     // 5. 示例定时任务：登录日志每日清理（幂等按 job_name；调度器在 init_scheduler 装载）
     const SEED_JOB_NAME: &str = "登录日志每日清理";
@@ -1616,6 +1800,90 @@ mod tests {
 
         // 收尾恢复默认，保持库状态收敛（中途 panic 遗留非空值也可手动复位）
         set_dict_item_extend(&db, dict_id, "1", "success").await;
+    }
+
+    /// 人事枚举字典：`employmentStatus` / `education` 的启用项即员工档案
+    /// `employment_status` / `education` 的合法取值集合（接口层用同一函数预取）。
+    /// 字典缺失会导致建档 / 改档全部被拒（`get_dictionary_by_type` 报错），
+    /// 故值集合必须与 `hr_employee` 列注释一致。
+    #[tokio::test]
+    async fn ensure_seed_creates_hr_employee_dictionaries() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let mut status_allowed = crate::modules::system::dictionary::service::enabled_int_values(
+            &db,
+            "employmentStatus",
+        )
+        .await
+        .unwrap();
+        status_allowed.sort_unstable();
+        assert_eq!(status_allowed, vec![1, 2, 3], "在职状态：在职/试用/离职");
+
+        let mut education_allowed =
+            crate::modules::system::dictionary::service::enabled_int_values(&db, "education")
+                .await
+                .unwrap();
+        education_allowed.sort_unstable();
+        assert_eq!(
+            education_allowed,
+            vec![0, 1, 2, 3, 4, 5],
+            "学历：未填/高中/大专/本科/硕士/博士"
+        );
+    }
+
+    /// 员工档案端点必须全部登记：漏登 = 该端点 fail-open（未登记即放行），
+    /// 所以断言的是「5 条都在、都是 POST、都启用且未软删」，而不只是菜单存在。
+    #[tokio::test]
+    async fn ensure_seed_registers_hr_employee_endpoints_and_menus() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        for action in ["list", "create", "update", "get", "delete"] {
+            let path = format!("/api/v1/hr/employee/{action}");
+            let row = sys_api::Entity::find()
+                .filter(sys_api::Column::Path.eq(path.as_str()))
+                .filter(sys_api::Column::Method.eq("POST"))
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("{path} 必须登记在 sys_api"));
+            assert_eq!(row.status, 1, "{path} 种子应为启用");
+            assert!(row.deleted_at.is_none(), "{path} 不应是软删占位行");
+        }
+
+        let hr_id = find_menu_id_by_name(&db, "Hr")
+            .await
+            .unwrap()
+            .expect("Hr 目录");
+        let employee_id = find_menu_id_by_name(&db, "HrEmployee")
+            .await
+            .unwrap()
+            .expect("HrEmployee 菜单");
+        let employee = sys_menu::Entity::find_by_id(employee_id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(employee.parent_id, hr_id, "员工档案页应挂在人事管理目录下");
+        assert_eq!(employee.menu_type, 2, "员工档案应是页面菜单");
+        assert_eq!(employee.component, "#/views/biz/hr/employee/index.vue");
+
+        for (name, permission) in [
+            ("HrEmployeeCreate", "hr:employee:create"),
+            ("HrEmployeeUpdate", "hr:employee:update"),
+            ("HrEmployeeDelete", "hr:employee:delete"),
+        ] {
+            let id = find_menu_id_by_name(&db, name).await.unwrap().expect(name);
+            let button = sys_menu::Entity::find_by_id(id)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(button.parent_id, employee_id, "{name} 应挂在页面菜单下");
+            assert_eq!(button.menu_type, 3, "{name} 应是按钮");
+            assert_eq!(button.permission, permission);
+        }
     }
 
     /// API 种子：全部管理端点应随 ensure_seed 落库（含可能被管理员软删的
