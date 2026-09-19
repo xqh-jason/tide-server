@@ -1,12 +1,7 @@
-//! tide-server 可执行入口：初始化日志，装载配置，交给基座启动管线。
+//! tide-server 可执行入口：初始化日志，装载配置，交给启动管线。
 //!
 //! 2026-09-18 起本 crate 同时有 lib target（见 `src/lib.rs`）：平台能力都在库里，
 //! 本文件只做「进程级」的事（日志订阅者、配置装载、启动）。
-//!
-//! 外部项目（如自己的业务系统）**不需要复制本文件**：在自己的 `main.rs` 里调用
-//! `tide_server::infra::app::run_with_domains(config, MY_DOMAINS)`，用
-//! `tide_server::modules::DomainMount` 声明自己注册的域即可。
-//! 需要自定义日志格式时照抄下面的 `LocalSeconds`（它是进程级策略，不属于基座）。
 
 use tide_server::infra;
 
@@ -33,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
         .with_timer(LocalSeconds)
         .init();
 
-    // 配置装载走基座（`config.toml` + `TIDE_*` 环境变量覆盖，含 fail-fast 校验）。
+    // 配置装载（`config.toml` + `TIDE_*` 环境变量覆盖，含 fail-fast 校验）。
     let config = infra::config::Config::load()?;
     infra::app::run(config).await
 }
