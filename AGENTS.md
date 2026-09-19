@@ -1,6 +1,6 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-09-19（置顶新增最高规则：AI 只写测试与骨架、实现由作者手写；二轮复查：CODE MAP 引用计数全表重测，统一为 grep -ro/-rl 可复现口径）
+**Updated:** 2026-09-19（置顶新增最高规则：AI 只写测试与骨架、实现由作者手写；二轮复查：CODE MAP 引用计数全表重测，统一为 grep -ro/-rl 可复现口径；hr 分支：`DOMAINS` 增至 20 行（`biz/hr/employee`），CODE MAP 计数与种子条数同步）
 
 ## 最高规则（优先于本文件其余全部内容）
 
@@ -31,7 +31,7 @@ tide-server/
 │   ├── lib.rs            # 库入口：6 个 pub mod（entity/infra/middleware/modules/task/utils），供 bin target 取用
 │   ├── main.rs           # 进程入口：tracing + Config::load → infra::app::run
 │   ├── modules/system/   # 18 个平台域切片，四件套 api/service/repo/dto
-│   ├── modules/biz/      # 业务域容器，当前仅 mod.rs（业务从这里生长）
+│   ├── modules/biz/      # 业务域容器（当前 biz/hr/employee 员工档案），业务从这里生长
 │   ├── infra/            # 启动管线、Config、AppState、路由组装、seed
 │   ├── middleware/       # InjectState / AuthRequired / op_log / CORS / 30s 超时
 │   ├── entity/           # SeaORM 实体（21 表），全局共享
@@ -45,7 +45,7 @@ tide-server/
 
 三个独立包、非 workspace：根 crate / `migrations/` / `codegen/`。
 
-`src/modules/biz/` 是业务域容器（当前仅 `mod.rs`）：具体业务功能在这里生长，
+`src/modules/biz/` 是业务域容器（当前 `hr/employee` 员工档案，`hr` 分支）：具体业务功能在这里生长，
 平台能力（RBAC / 认证 / 字典 / 日志 / 文件 / 组织）在 `src/modules/system/` 下。
 
 ## WHERE TO LOOK
@@ -70,20 +70,20 @@ Location 相对 `src/`。
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `AppError` | enum | `utils/error.rs:21` | 501 / 38 | 唯一业务错误；收 1213/1205 |
-| `AppState` | struct | `infra/state.rs:12` | 199 / 31 | config+db+cache+scheduler |
-| `ApiResponse<T>` | struct | `utils/response.rs:11` | 140 / 25 | `{code,data,message}` 包裹 |
-| `JsonBody<T>` | extractor | `utils/request.rs:66` | 116 / 20 | 手写提取器 + 字段级报错 |
-| `ApiResult<T>` | alias | `utils/mod.rs:24` | 111 / 17 | handler 返回类型 |
-| `Config::load` | fn | `infra/config.rs:237` | 61 / 45 | 配置装载；真库测试 DSN 源 |
-| `fill_user_names` | fn | `utils/user_ref.rs:58` | 66 / 15 | 人字段显示名唯一管道 |
-| `PageQuery` | struct | `utils/page.rs:13` | 56 / 22 | 分页入参；`page_size` `clamp(1,1000)` |
-| `PageResult<T>` | struct | `utils/page.rs:39` | 46 / 15 | 分页出参 |
-| `paginate` | fn | `utils/page.rs:91` | 18 / 15 | 分页执行；各域 repo 统一调用 |
+| `AppError` | enum | `utils/error.rs:21` | 532 / 39 | 唯一业务错误；收 1213/1205 |
+| `AppState` | struct | `infra/state.rs:12` | 203 / 32 | config+db+cache+scheduler |
+| `ApiResponse<T>` | struct | `utils/response.rs:11` | 145 / 26 | `{code,data,message}` 包裹 |
+| `JsonBody<T>` | extractor | `utils/request.rs:66` | 122 / 21 | 手写提取器 + 字段级报错 |
+| `ApiResult<T>` | alias | `utils/mod.rs:24` | 117 / 18 | handler 返回类型 |
+| `Config::load` | fn | `infra/config.rs:237` | 62 / 46 | 配置装载；真库测试 DSN 源 |
+| `fill_user_names` | fn | `utils/user_ref.rs:58` | 71 / 16 | 人字段显示名唯一管道 |
+| `PageQuery` | struct | `utils/page.rs:13` | 60 / 24 | 分页入参；`page_size` `clamp(1,1000)` |
+| `PageResult<T>` | struct | `utils/page.rs:39` | 49 / 16 | 分页出参 |
+| `paginate` | fn | `utils/page.rs:91` | 19 / 16 | 分页执行；各域 repo 统一调用 |
 | `SUPER_ROLE_KEY` | const | `modules/system/permission/mod.rs:19` | 41 / 9 | 超管保留字：短路 + 改名保护 |
-| `enabled_int_values` | fn | `modules/system/dictionary/service.rs:214` | 31 / 18 | `status` 允许值唯一来源 |
-| `DOMAINS` | const 表 | `modules/mod.rs:84` | 24 / 7 | 19 行内置路由装配入口 |
-| `all_domains` | fn | `modules/mod.rs:259` | 7 / 2 | 合并内置域与额外传入的域（无 extra 时等于内置） |
+| `enabled_int_values` | fn | `modules/system/dictionary/service.rs:214` | 37 / 20 | 值域校验允许值唯一来源 |
+| `DOMAINS` | const 表 | `modules/mod.rs:84` | 29 / 9 | 20 行内置路由装配入口 |
+| `all_domains` | fn | `modules/mod.rs:258` | 7 / 2 | 合并内置域与额外传入的域（无 extra 时等于内置） |
 
 ## CONVENTIONS
 

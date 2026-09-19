@@ -13,7 +13,7 @@
 | 全局共享状态 | `state.rs::AppState` | `config` / `db` / `cache` / `scheduler` 四件（grep 实测 199 次 / 31 文件）；`from_depot` 取值 |
 | 路由挂载与中间件档位 | `router.rs::build` / `build_with` | `build_with` 经 `modules::all_domains(extra)` 合并传入的额外域；`hoop_when` 挂超时豁免 |
 | 框架级错误（解析失败 / 404 / 405 / 5xx） | `catcher.rs` | 统一改写成 HTTP 200 + 契约体 |
-| admin / super / 菜单 / 接口权限点种子 | `seed.rs` | `MENU_SEEDS` 46 条、`API_SEEDS` 87 条（条数以代码为准，不要抄行数/条数到别的文档） |
+| admin / super / 菜单 / 接口权限点种子 | `seed.rs` | `MENU_SEEDS` 51 条、`API_SEEDS` 92 条（条数以代码为准，不要抄行数/条数到别的文档） |
 
 ## CONVENTIONS
 
@@ -33,4 +33,4 @@
 - 不让 catcher 产出真实 4xx / 5xx：它 `ctrl.skip_rest()` 后渲染契约体，HTTP 恒 200（全仓唯一的状态码例外不在本层，见 `middleware/AGENTS.md`）。
 - 不在测试里无条件 `std::env::remove_var`：2026-09-13 CI 回归——抹掉 `TIDE_DATABASE__URL` 会让全量连库测试固定 30s `PoolTimedOut`；现由 `ENV_LOCK` + `EnvGuard` 保护。
 - 不信任种子的「先查后插」在并发下幂等（TOCTOU）：并发路径必须靠唯一索引兜底，2026-09-11 实际踩过。
-- `API_SEEDS` 是 87 条（2026-09-17 补登 `/api/v1/sys-api/list-all`，此前漏登导致该端点 fail-open）——以代码为准，改种子时同步文档。
+- `API_SEEDS` 是 92 条（2026-09-17 补登 `/api/v1/sys-api/list-all`，此前漏登导致该端点 fail-open；2026-09-19 `hr` 分支补登员工档案 5 条）——以代码为准，改种子时同步文档。

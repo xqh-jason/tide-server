@@ -1,15 +1,15 @@
 ## OVERVIEW
 
-`src/modules/` — 垂直切片容器层：`system/`（18 个平台能力域，随脚手架交付、保持稳定）+ `biz/`（业务域容器，当前为空），全部出口收敛到本目录 `mod.rs` 的 `DOMAINS` 登记表。
+`src/modules/` — 垂直切片容器层：`system/`（18 个平台能力域，随脚手架交付、保持稳定）+ `biz/`（业务域容器，当前 `hr/employee` 员工档案），全部出口收敛到本目录 `mod.rs` 的 `DOMAINS` 登记表（20 行）。
 
-**建档理由**：得分 17（96 文件 / 20 子目录 / 路由登记表是全仓唯一装配点），与 `src/` 的入口职责明显分层。
+**建档理由**：得分 17（103 文件 / 22 子目录 / 路由登记表是全仓唯一装配点），与 `src/` 的入口职责明显分层。
 
 ## WHERE TO LOOK
 
 | 任务 | 位置 | 备注 |
 |---|---|---|
 | 平台能力域（RBAC / 认证 / 字典 / 日志 / 任务 / 文件 / 部门 / 职位） | `system/<域>/` | 18 切片逐个的角色与硬规则见 `system/AGENTS.md` |
-| 新业务功能 | `biz/<域>/` | 目前为空；四件套结构与 URL 契约与平台域完全一致 |
+| 新业务功能 | `biz/<域>/` | 现有 `biz/hr/employee`（员工档案）；四件套结构与 URL 契约与平台域完全一致 |
 | 新增业务域 | `mod.rs` 的 `DOMAINS` 追加一行 + 容器 `mod.rs` 加 `pub mod` | 三步装配见 CONVENTIONS |
 | 挂载 / 鉴权档位 / 新增域装配 | `mod.rs` 的 `DOMAINS` + `DomainMount` + `MountGuard` | `infra/router.rs::build_with` 循环消费 |
 | 容器级数据有效性、权限码语义、按层命名表 | `mod.rs` 文件头 doc 注释 | 与代码同处一文件，改约定先改这里 |
@@ -33,3 +33,4 @@
 - 后端授权只认接口通道：`ApiPermission` 按 `sys_api` + `sys_role_api` 判定（内核 `permission::service::has_api_permission`）；`sys_menu.permission` 走 `/access-codes` 只控按钮显隐，判定面不消费（原 service 层按钮码校验 2026-09-17 连根删除，勿重建）。
 - biz 域不得绕过 service 直接操作他域 Entity 的业务逻辑。
 - 不把 `validate` 声明为 `pub mod`：它是域内私有的纯函数校验层。
+- `hr` 分支的业务只以**追加**方式落地（`biz/`、迁移文件、`DOMAINS` / `seed` 登记行），不改平台既有行；平台改动先落 `main`，再单向合并到 `hr`（设计见 `docs/superpowers/specs/` 的 HR/ERP 架构设计）。
