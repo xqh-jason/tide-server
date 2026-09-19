@@ -15,8 +15,7 @@ use crate::modules::{DomainMount, MountGuard};
 /// 公开/受保护（Protected 统一挂 AuthRequired + OperationLog + ApiPermission）、
 /// 同前缀下并挂的出口集合（如 `/user` 下 user CRUD 与 menu 菜单契约端点）。
 ///
-/// 参数**显式传入**而非直接读 `DOMAINS`：业务仓库注册的域要能一并挂上，
-/// 详见 `modules::all_domains` 的说明。
+/// 参数显式传入而非直接读 `DOMAINS`：域集合可由调用方决定，见 `modules::all_domains`。
 fn mount_domains(api: Router, domains: &[DomainMount]) -> Router {
     let mut api = api;
     for mount in domains {
@@ -39,20 +38,19 @@ fn mount_domains(api: Router, domains: &[DomainMount]) -> Router {
     api
 }
 
-/// 组装全局路由（仅基座内置域）。
+/// 组装全局路由（不额外传入域）。
 ///
-/// 等价于 `build_with(state, &[])`；基座自己的二进制走这条。
+/// 等价于 `build_with(state, &[])`；本仓的 `main.rs` 走这条。
 pub fn build(state: AppState) -> Router {
     build_with(state, &[])
 }
 
-/// 组装全局路由，并额外挂上 `extra` 里的业务域。
+/// 组装全局路由，并额外挂上 `extra` 里的域。
 ///
-/// 业务仓库（以 git 依赖消费本 crate）在自己的 `main.rs` 里把自身的
-/// `const MY_DOMAINS: &[DomainMount]` 传进来——见 `modules::all_domains`
-/// 的用法说明与 `infra::app::run_with_domains`。
+/// `build_with(state, &[])` 与 [`build`] 等价，两者只差一个域集合参数——
+/// 用法见 `modules::all_domains` 与 `infra::app::run_with_domains`。
 ///
-/// 中间件与超时豁免对所有域（含 extra）一致生效，业务域无需自行接鉴权。
+/// 中间件与超时豁免对所有域（含 extra）一致生效。
 pub fn build_with(state: AppState, extra: &[DomainMount]) -> Router {
     let domains = crate::modules::all_domains(extra);
     Router::new()

@@ -6,24 +6,24 @@ use crate::infra::config::Config;
 use crate::modules::DomainMount;
 use crate::utils::cache::MemoryCache;
 
-/// 启动完整服务（仅基座内置域）。
+/// 启动完整服务（不额外传入域）。
 ///
-/// 供本仓的 `main.rs` 使用；业务仓库请用 [`run_with_domains`] 把自己的业务域带上。
+/// 供本仓的 `main.rs` 使用；需要自定义域集合时用 [`run_with_domains`]。
 pub async fn run(config: Config) -> anyhow::Result<()> {
     run_with_domains(config, &[]).await
 }
 
-/// 启动完整服务，并额外挂载 `extra` 里的业务域。
+/// 启动完整服务，并额外挂载 `extra` 里的域。
 ///
-/// 外部项目（以 git 依赖 + 版本 tag 消费本 crate）的入口写法：
+/// 与 [`run`] 只差一个域集合参数：
 ///
 /// ```ignore
 /// let config = tide_server::infra::config::Config::load()?;
 /// tide_server::infra::app::run_with_domains(config, MY_DOMAINS).await
 /// ```
 ///
-/// `extra` 里的域享受与平台域相同的中间件三件套、超时豁免、契约体与
-/// OpenAPI 收录，**无需自己接鉴权或重新组装路由**。
+/// `extra` 里的域享受与 `DOMAINS` 相同的中间件三件套、超时豁免、契约体与
+/// OpenAPI 收录。
 pub async fn run_with_domains(config: Config, extra: &[DomainMount]) -> anyhow::Result<()> {
     let addr = format!("{}:{}", config.server.host, config.server.port);
     // 显式用 ConnectOptions：关掉 sea-orm 默认开启的 SQL 语句日志，避免控制台刷屏。
