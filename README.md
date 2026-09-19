@@ -45,8 +45,7 @@
 
 - 统一契约：`POST + JSON`，响应 `{ code, data, message }`（`code=1` 成功），
   HTTP 恒 200，仅认证失败 401；Swagger UI 开箱可用
-- SeaORM 迁移（独立 crate，含列表查询复合索引）+ 启动幂等种子（菜单树 46 条 /
-  API 权限点 87 条 / 默认定时任务）
+- SeaORM 迁移（独立 crate，含列表查询复合索引）+ 启动幂等种子（菜单树 / 接口权限点 / 默认定时任务）
 - 分页统一按主键降序（`ORDER BY id DESC`）：无排序时 LIMIT/OFFSET 行序由执行计划决定，
   会出现跨页重复与漏项
 - 真库集成测试内联在各域（事务回滚隔离，无孤儿数据）；clippy 对 unwrap / expect / todo /
@@ -66,7 +65,7 @@
 | [![菜单管理](screenshots/03-menu.png)](screenshots/03-menu.png) | [![定时任务](screenshots/04-job.png)](screenshots/04-job.png) |
 | 菜单树与按钮权限码登记（只控前端显隐） | Cron 调度，支持立即执行与执行日志 |
 
-| API 管理（接口权限点登记，种子 87 条，鉴权判定的数据源） | |
+| API 管理（接口权限点登记，鉴权判定的数据源） | |
 | :---: | :---: |
 | [![API 管理](screenshots/05-api.png)](screenshots/05-api.png) | |
 
@@ -145,9 +144,7 @@ docker compose up -d backend                                  # 改回默认后�
 3. **确认上传目录与保留期**：`TIDE_UPLOAD__DIR` 指向的目录不要对外静态托管；
    按合规要求设置 `TIDE_LOG_RETENTION__*_DAYS`（`0` = 永久保留）。
 
-另：接口鉴权对**未登记的 `path + method` 一律放行**（fail-open，便于逐域接管）。
-标准部署应保留种子数据中的 `API_SEEDS` 登记（87 条）；如果清空了 `sys_api` 表，
-所有已登录用户将可调用全部接口。
+另：接口鉴权对**未登记的 `path + method` 一律放行**（fail-open）；清空 `sys_api` 表会让所有已登录用户可调用全部接口。
 
 ### 环境变量（`TIDE_` 前缀 + `__` 层级分隔）
 
@@ -159,17 +156,14 @@ docker compose up -d backend                                  # 改回默认后�
 | `TIDE_JWT__SECRET` | `jwt.secret` | JWT 签名密钥（compose 部署必设），生产替换为强随机串；production 下默认开发密钥会被拒绝启动 |
 | `TIDE_JWT__TTL_SECONDS` | `jwt.ttl_seconds` | access token 过期秒数（自动识别数字类型） |
 | `TIDE_JWT__REFRESH_TTL_SECONDS` | `jwt.refresh_ttl_seconds` | 刷新凭证有效期秒数 |
-| `TIDE_CORS__ALLOW_ORIGINS` | `cors.allow_origins` | 跨域白名单，逗号分隔（如 `a.com,b.com`）；配置文件内置的是 vben 默认的 5173，tide-admin 开发端口是 **5910**——经 Vite proxy 同源访问时不需改，若前端直连后端（非代理）则需把源站加进来 |
+| `TIDE_CORS__ALLOW_ORIGINS` | `cors.allow_origins` | 跨域白名单，逗号分隔（如 `a.com,b.com`）；经 Vite proxy 同源访问时无需配置 |
 | `TIDE_UPLOAD__DIR` | `upload.dir` | 上传落盘目录 |
 | `TIDE_LOG_RETENTION__OPERATION_LOG_DAYS` | `log_retention.operation_log_days` | 操作日志保留天数，默认 90；`0` = 永久保留 |
 | `TIDE_LOG_RETENTION__LOGIN_LOG_DAYS` | `log_retention.login_log_days` | 登录日志保留天数，默认 90；`0` = 永久保留 |
 | `TIDE_LOG_RETENTION__JOB_LOG_DAYS` | `log_retention.job_log_days` | 调度日志保留天数，默认 90；`0` = 永久保留 |
 | `TIDE_LOG_RETENTION__REFRESH_TOKEN_DAYS` | `log_retention.refresh_token_days` | 已过期会话保留天数，默认 30；`0` = 永久保留 |
 
-列表类字段统一逗号分隔；同源反代部署下无需配置 CORS。
-
-四类保留期分开配置而非共用一个天数：过期会话过期即不可用（保留仅供审计「谁被何时下线」），
-而审计日志是合规证据，通常需要更长窗口。
+列表类字段统一逗号分隔。
 
 ## 📡 接口契约
 
@@ -183,7 +177,7 @@ docker compose up -d backend                                  # 改回默认后�
 
 ```
 src/
-├── lib.rs                                    # 库入口：6 个 pub mod，供 bin target 取用（2026-09-18 起）
+├── lib.rs                                    # 库入口：6 个 pub mod，供 bin target 取用
 ├── main.rs                                   # 进程入口：tracing + Config::load → infra::app::run
 ├── modules/system/<域>/                      # 平台能力域（垂直切片契约驱动四件套，18 个）
 ├── modules/biz/<域>/                         # 业务域容器（具体业务功能从这里生长）
@@ -242,22 +236,13 @@ cd migrations
 DATABASE_URL='mysql://root:root@127.0.0.1:3307/tide_mybiz?charset=utf8mb4&timezone=%2B08:00' cargo run -- up
 ```
 
-实测结果（2026-09-18，全新库）：`sys_=21 hr_=1 total=22` —— 21 张平台表（20 张在 baseline +
-`sys_refresh_token` 单独一条）与业务表在同一次 `up` 里按顺序建出。
-平台表迁移共 30 条（含 25 条历史版本占位），条数会随演进增长，以代码为准。
+平台表与业务表在同一次 `up` 里按顺序建出。注意事项：
 
-注意事项：
-
-- **平台表迁移的顺序不能改**（占位在前、baseline 在后）：`migration::Migrator::migrations()` 已排好，
-  新迁移**追加在后面**即可。
+- **平台表迁移的顺序不能改**：新迁移**追加在后面**即可。
 - 业务表引用 `sys_user.id` 时用**逻辑外键**（全库约定：不加物理外键），
   审计字段（`created_by` / `updated_by`，`0` = 种子）由 repo 层盖章。
-- 启动种子（admin / super / 菜单 / 接口登记）由 `TIDE_SEED__ENABLED=true` 在**首次部署**时跑一次，
-  之后关掉。
-- **多业务共用一套 RBAC 的形态（基础系统一个库 + 各业务一个库）当前不内置**：
-  那需要跨库方案（同一实例内的跨 schema 查询，或把鉴权做成服务调用），
-  而现在的认证热路径有一条 `sys_refresh_token` LEFT JOIN `sys_user` 的单条 SQL，
-  跨实例直接不成立。当前支持的是「每个业务系统一个自洽的库」（上面这种）。
+- 启动种子（admin / super / 菜单 / 接口登记）由 `TIDE_SEED__ENABLED=true` 在**首次部署**时跑一次。
+- **多业务共用一套 RBAC 当前不内置**（认证热路径依赖同库 JOIN）；当前形态是「每个业务系统一个自洽的库」。
 
 ### 部署
 
@@ -267,25 +252,6 @@ DATABASE_URL='mysql://root:root@127.0.0.1:3307/tide_mybiz?charset=utf8mb4&timezo
 ```bash
 FRONTEND_DIR=<你的前端目录> docker compose up -d --build
 ```
-
-### 发版（tag 流程）
-
-**先过门禁、再打 tag**：
-
-```bash
-# 1. 三道门禁全绿（CI 对 tag 也会跑，但本地先跑一轮能省一个来回）
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test                      # 需本地 MySQL
-
-# 2. 打 tag
-git tag vX.Y.Z
-git push origin main --tags
-```
-
-**为什么强调“先过门禁”**：2026-09-18 实际踩过——tag 已打好、消费方也拉到了，
-才发现该提交在 `-D warnings` 下不干净（一个 clippy 告警），只能 `git tag -d` 重打。
-现在 CI 监听 `tags: ["v*"]`，tag 自身也有校验，但 CI 是事后发现，本地门禁是事前。
 
 ## 🧪 测试与 CI
 
@@ -302,11 +268,7 @@ cargo test              # 需本地 MySQL（docker compose up -d mysql 后即可
 CI（`.github/workflows/ci.yml`，`push/PR → main` 触发）：lint job
 （fmt + clippy `-D warnings` 双 crate）与 test job（MySQL service container 跑全量真库测试）。
 
-当前全仓 522 个 `#[test]`（均在 `src/`，migrations 与 codegen 无测试），全部连真库、无 mock。
-
-拆出 lib target 后可用 `cargo test --lib` 只跑库侧测试（改造前该命令报
-`no library targets found`，因为本仓曾是 binary-only crate）。
-条数会随切片增长，改代码时请同步这里。
+全仓测试均连真库、无 mock；`cargo test --lib` 只跑库侧测试。
 
 ## 🤝 贡献
 
