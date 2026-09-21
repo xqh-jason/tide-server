@@ -22,6 +22,7 @@ use std::sync::OnceLock;
 use crate::infra::state::AppState;
 
 pub mod job_log_cleanup;
+pub mod leave_grant_expire;
 pub mod login_log_cleanup;
 pub mod operation_log_cleanup;
 pub mod refresh_token_cleanup;
@@ -60,6 +61,10 @@ pub fn handler_defs() -> &'static [HandlerDef] {
             HandlerDef {
                 name: refresh_token_cleanup::HANDLER_NAME,
                 label: refresh_token_cleanup::HANDLER_LABEL,
+            },
+            HandlerDef {
+                name: leave_grant_expire::HANDLER_NAME,
+                label: leave_grant_expire::HANDLER_LABEL,
             },
         ]
     })
@@ -102,6 +107,14 @@ pub fn handlers() -> &'static HashMap<&'static str, JobHandler> {
                         as Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>
                 }) as JobHandler,
             ),
+            // 假期额度过期作废任务（见 leave_grant_expire.rs）
+            (
+                leave_grant_expire::HANDLER_NAME,
+                (|state: &AppState| {
+                    Box::pin(leave_grant_expire::run(state))
+                        as Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>>
+                }) as JobHandler,
+            ),
         ])
     })
 }
@@ -118,6 +131,7 @@ mod tests {
         assert!(handlers().contains_key(job_log_cleanup::HANDLER_NAME));
         assert!(handlers().contains_key(operation_log_cleanup::HANDLER_NAME));
         assert!(handlers().contains_key(refresh_token_cleanup::HANDLER_NAME));
+        assert!(handlers().contains_key(leave_grant_expire::HANDLER_NAME));
     }
 
     /// 守卫：`handler_defs` 与注册表 key 一一对应、label 非空——防止新增/删除
