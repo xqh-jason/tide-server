@@ -15,10 +15,6 @@ use crate::utils::user_ref::UserRefNames;
 ///
 /// 按 `char` 处理而非字节，避免多字节字符被切断在 UTF-8 边界。
 pub(crate) fn mask_middle(s: &str, keep_head: usize, keep_tail: usize) -> String {
-    // 实现提示：
-    // 1) 先把入参按 char 收集成 Vec<char>；
-    // 2) chars.len() <= keep_head + keep_tail 时直接返回原串；
-    // 3) 否则拼：首 keep_head 个字符 + "*".repeat(chars.len() - keep_head - keep_tail) + 尾 keep_tail 个字符。
     let chars = s.chars().collect::<Vec<char>>();
     let len = chars.len();
 
@@ -29,7 +25,7 @@ pub(crate) fn mask_middle(s: &str, keep_head: usize, keep_tail: usize) -> String
     let mask_len = len - keep_head - keep_tail;
     let mut out = String::with_capacity(len);
     out.extend(chars.iter().take(keep_head).copied());
-    out.extend(std::iter::repeat('*').take(mask_len));
+    out.push_str(&"*".repeat(mask_len));
     out.extend(chars.iter().skip(len - keep_tail).copied());
 
     out

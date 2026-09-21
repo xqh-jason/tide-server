@@ -14,54 +14,206 @@
 //!
 //! 需要查库的规则（`user_id` 查重、账号存在性、档案存在性）留在 service 层。
 
-use crate::modules::biz::hr::employee::dto::{CreateEmployeeReq, UpdateEmployeeReq};
+use crate::modules::biz::hr::employee::dto::{
+    CreateAccountReq, CreateEmployeeReq, UpdateEmployeeReq,
+};
+use crate::utils::check;
+
+/// 毕业院校 / 专业长度上限（对齐 `VARCHAR(128)`）。
+const GRADUATE_SCHOOL_MAX: usize = 128;
+const MAJOR_MAX: usize = 128;
+/// 身份证号长度上限（对齐 `VARCHAR(32)`）。
+const ID_CARD_MAX: usize = 32;
+/// 紧急联系人 / 紧急电话长度上限。
+const EMERGENCY_CONTACT_MAX: usize = 64;
+const EMERGENCY_PHONE_MAX: usize = 32;
+/// 工资卡号长度上限（对齐 `VARCHAR(64)`）。
+const BANK_ACCOUNT_MAX: usize = 64;
+/// 备注长度上限（对齐 `VARCHAR(255)`）。
+const REMARK_MAX: usize = 255;
+/// 账号字段长度上限（对齐 `sys_user` 列宽）。
+const ACCOUNT_USERNAME_MAX: usize = 64;
+const ACCOUNT_PASSWORD_MAX: usize = 128;
+const ACCOUNT_NICKNAME_MAX: usize = 64;
+
+/// 检查必填文本字段：trim 后非空，且不超过列长度。
+fn check_required(s: &str, label: &str, max: usize, errors: &mut Vec<String>) {
+    if s.trim().is_empty() {
+        errors.push(format!("{label}不能为空"));
+    } else if s.chars().count() > max {
+        errors.push(format!("{label}长度不能超过 {max} 个字符"));
+    }
+}
+
+/// 检查可选文本字段：仅限长度（空串合法，表示未设置）。
+fn check_len(s: &str, label: &str, max: usize, errors: &mut Vec<String>) {
+    if s.chars().count() > max {
+        errors.push(format!("{label}长度不能超过 {max} 个字符"));
+    }
+}
+
+/// 检查可选日期字段：非空必须能按 `yyyy-MM-dd` 解析。
+fn check_date(v: &Option<String>, label: &str, errors: &mut Vec<String>) {
+    let Some(raw) = v.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    if chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").is_err() {
+        errors.push(format!("{label}格式应为 yyyy-MM-dd"));
+    }
+}
+
+/// 检查学历值域（字典 `education`）：文案风格与 `utils::check::check_status` 一致。
+fn check_education(value: i8, allowed: &[i8], errors: &mut Vec<String>) {
+    if allowed.contains(&value) {
+        return;
+    }
+    if allowed.is_empty() {
+        errors.push("学历取值不合法".to_string());
+        return;
+    }
+    let choices = allowed
+        .iter()
+        .map(i8::to_string)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    errors.push(format!("学历取值不合法，仅允许：{choices}"));
+}
+
+/// 账号来源二选一 + 账号必填项（创建专用）。
+fn check_account_source(
+    user_id: &Option<u64>,
+    create_account: &Option<CreateAccountReq>,
+    errors: &mut Vec<String>,
+) {
+    match (user_id, create_account) {
+        (Some(_), Some(_)) => errors.push("userId 与 createAccount 只能二选一".to_string()),
+        (None, None) => errors.push("必须指定 userId 或 createAccount".to_string()),
+        (Some(0), None) => errors.push("userId 必须大于 0".to_string()),
+        (Some(_), None) => {}
+        (None, Some(acc)) => {
+            check_required(&acc.username, "登录账号", ACCOUNT_USERNAME_MAX, errors);
+            check_required(&acc.password, "初始密码", ACCOUNT_PASSWORD_MAX, errors);
+            check_required(&acc.nickname, "用户昵称", ACCOUNT_NICKNAME_MAX, errors);
+        }
+    }
+}
+
+/// 值域检查（创建 / 更新共用）：在职状态走通用 `check_status`，学历同款风格。
+fn check_value_domains(
+    employment_status: i8,
+    education: i8,
+    employment_status_allowed: &[i8],
+    education_allowed: &[i8],
+    errors: &mut Vec<String>,
+) {
+    check::check_status(employment_status, employment_status_allowed)
+        .map_err(|e| errors.push(e))
+        .ok();
+    check_education(education, education_allowed, errors);
+}
+
+/// 收集到的错误拼接为一条消息（按字段检查顺序，可读性优于只给首条）。
+fn join_errors(errors: Vec<String>) -> Result<(), String> {
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
+}
 
 /// 创建员工档案校验：账号来源二选一 + 账号必填项 + 日期格式 + 字段长度 + 值域。
 ///
 /// 长度上限（按 `char` 计数，对齐 `hr_employee` 列定义）：
 /// `graduate_school` / `major` 128、`id_card` 32、`emergency_contact` 64、
 /// `emergency_phone` 32、`bank_account` 64、`remark` 255。
-// 骨架交接：`api.rs` 的 handler 实现后会调用本函数，届时删除本行。
-#[allow(dead_code)]
 pub fn validate_create_employee(
     req: &CreateEmployeeReq,
     employment_status_allowed: &[i8],
     education_allowed: &[i8],
 ) -> Result<(), String> {
-    // 实现提示：
-    // 1) 账号来源：`match (&req.user_id, &req.create_account)`
-    //    - 都传 → 「userId 与 createAccount 只能二选一」
-    //    - 都不传 → 「必须指定 userId 或 createAccount」
-    //    - `Some(id)` 且 `*id == 0` → 「userId 必须大于 0」
-    //    - `Some(acc)` → 账号必填项（trim 后非空）：「登录账号不能为空」「初始密码不能为空」
-    //      「用户昵称不能为空」；username / nickname 长度上限 64；password 长度上限 128
-    // 2) 三个日期字段（入职日期 / 转正日期 / 离职日期）：非空则必须能按 `%Y-%m-%d` 解析，
-    //    否则 `「{label}格式应为 yyyy-MM-dd」`
-    // 3) 长度：按 `char` 计数，超出报 `「{label}长度不能超过 {max} 个字符」`
-    //    （helper 可仿 position 域 `check_len`；敏感字段空串合法 = 不设置）
-    // 4) 值域：`check::check_status(req.employment_status, employment_status_allowed)`
-    //    错误消息原样收下；`education` 不在 `education_allowed` 时报
-    //    「学历取值不合法，仅允许：{choices}」（choices 用 ` / ` 拼接，同 check_status 风格）
-    // 5) 错误累积进 `Vec<String>`，末了 `errors.join("；")`，空则 `Ok(())`
-    let _ = (req, employment_status_allowed, education_allowed);
-    Err("未实现：validate_create_employee".to_string())
+    let mut errors = Vec::new();
+    check_account_source(&req.user_id, &req.create_account, &mut errors);
+    check_date(&req.hire_date, "入职日期", &mut errors);
+    check_date(&req.regular_date, "转正日期", &mut errors);
+    check_date(&req.leave_date, "离职日期", &mut errors);
+    check_len(
+        &req.graduate_school,
+        "毕业院校",
+        GRADUATE_SCHOOL_MAX,
+        &mut errors,
+    );
+    check_len(&req.major, "专业", MAJOR_MAX, &mut errors);
+    check_len(&req.id_card, "身份证号", ID_CARD_MAX, &mut errors);
+    check_len(
+        &req.emergency_contact,
+        "紧急联系人",
+        EMERGENCY_CONTACT_MAX,
+        &mut errors,
+    );
+    check_len(
+        &req.emergency_phone,
+        "紧急电话",
+        EMERGENCY_PHONE_MAX,
+        &mut errors,
+    );
+    check_len(&req.bank_account, "工资卡号", BANK_ACCOUNT_MAX, &mut errors);
+    check_len(&req.remark, "备注", REMARK_MAX, &mut errors);
+    check_value_domains(
+        req.employment_status,
+        req.education,
+        employment_status_allowed,
+        education_allowed,
+        &mut errors,
+    );
+    join_errors(errors)
 }
 
 /// 更新员工档案校验：同创建，但无账号字段，另加 id 必须大于 0。
 ///
 /// 敏感字段（`id_card` / `bank_account`）**空串合法**：语义是「不修改」
 /// （列表 / 详情回传掩码值，前端编辑表单不回填）。
-// 骨架交接：`api.rs` 的 handler 实现后会调用本函数，届时删除本行。
-#[allow(dead_code)]
 pub fn validate_update_employee(
     req: &UpdateEmployeeReq,
     employment_status_allowed: &[i8],
     education_allowed: &[i8],
 ) -> Result<(), String> {
-    // 实现提示：与 create 同一套规则，去掉账号二选一；`req.id == 0` 报
-    // 「员工档案 ID 必须大于 0」；长度与日期规则复用同一批私有 helper
-    let _ = (req, employment_status_allowed, education_allowed);
-    Err("未实现：validate_update_employee".to_string())
+    let mut errors = Vec::new();
+    if req.id == 0 {
+        errors.push("员工档案 ID 必须大于 0".to_string());
+    }
+    check_date(&req.hire_date, "入职日期", &mut errors);
+    check_date(&req.regular_date, "转正日期", &mut errors);
+    check_date(&req.leave_date, "离职日期", &mut errors);
+    check_len(
+        &req.graduate_school,
+        "毕业院校",
+        GRADUATE_SCHOOL_MAX,
+        &mut errors,
+    );
+    check_len(&req.major, "专业", MAJOR_MAX, &mut errors);
+    check_len(&req.id_card, "身份证号", ID_CARD_MAX, &mut errors);
+    check_len(
+        &req.emergency_contact,
+        "紧急联系人",
+        EMERGENCY_CONTACT_MAX,
+        &mut errors,
+    );
+    check_len(
+        &req.emergency_phone,
+        "紧急电话",
+        EMERGENCY_PHONE_MAX,
+        &mut errors,
+    );
+    check_len(&req.bank_account, "工资卡号", BANK_ACCOUNT_MAX, &mut errors);
+    check_len(&req.remark, "备注", REMARK_MAX, &mut errors);
+    check_value_domains(
+        req.employment_status,
+        req.education,
+        employment_status_allowed,
+        education_allowed,
+        &mut errors,
+    );
+    join_errors(errors)
 }
 
 #[cfg(test)]

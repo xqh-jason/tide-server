@@ -8,8 +8,9 @@
 //! 业务判断（存在性文案、查重决策、字段是否可改）不在本层：
 //! repo 只用 `Option` / `bool` 表达事实，文案与决策留给 service。
 
-use sea_orm::DatabaseTransaction;
+use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
+use sea_orm::{Condition, DatabaseTransaction, QueryOrder};
 
 use crate::entity::hr_employee;
 use crate::modules::biz::hr::employee::dto::EmployeeFilter;
@@ -53,20 +54,54 @@ pub async fn find_employee_page(
     page_index: u64,
     page_size: u64,
 ) -> anyhow::Result<PageData<hr_employee::Model>> {
-    // 实现提示：
-    // 1) `use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};`
-    // 2) `let mut cond = Condition::all();`
-    // 3) `if let Some(kw) = &filter.keyword {`
-    //      `cond = cond.add(Condition::any()`
-    //        `.add(hr_employee::Column::Remark.like(format!("%{kw}%")))`
-    //        `.add(hr_employee::Column::EmergencyContact.like(format!("%{kw}%")))); }`
-    // 4) 其余 `if let Some(v)` 逐项追加：employment_status / education / created_by /
-    //    updated_by 用 `.eq(v)`；四个时间列用 `.gte(v)` / `.lte(v)`；
-    // 5) 末行固定 `.filter(hr_employee::Column::DeletedAt.is_null())`
-    //    `.order_by_desc(hr_employee::Column::Id)`；
-    // 6) 交 `crate::utils::paginate(select, db, page_index, page_size).await`
-    let _ = (db, filter, page_index, page_size);
-    anyhow::bail!("未实现：find_employee_page")
+    let mut cond = Condition::all();
+
+    if let Some(kw) = &filter.keyword {
+        cond = cond.add(
+            Condition::any()
+                .add(hr_employee::Column::Remark.like(format!("%{kw}%")))
+                .add(hr_employee::Column::EmergencyContact.like(format!("%{kw}%"))),
+        );
+    }
+
+    if let Some(status) = filter.employment_status {
+        cond = cond.add(hr_employee::Column::EmploymentStatus.eq(status));
+    }
+
+    if let Some(education) = filter.education {
+        cond = cond.add(hr_employee::Column::Education.eq(education));
+    }
+
+    if let Some(created_by) = filter.created_by {
+        cond = cond.add(hr_employee::Column::CreatedBy.eq(created_by));
+    }
+
+    if let Some(updated_by) = filter.updated_by {
+        cond = cond.add(hr_employee::Column::UpdatedBy.eq(updated_by));
+    }
+
+    if let Some(created_at_begin) = filter.created_at_begin {
+        cond = cond.add(hr_employee::Column::CreatedAt.gte(created_at_begin));
+    }
+
+    if let Some(created_at_end) = filter.created_at_end {
+        cond = cond.add(hr_employee::Column::CreatedAt.lte(created_at_end));
+    }
+
+    if let Some(updated_at_begin) = filter.updated_at_begin {
+        cond = cond.add(hr_employee::Column::UpdatedAt.gte(updated_at_begin));
+    }
+
+    if let Some(updated_at_end) = filter.updated_at_end {
+        cond = cond.add(hr_employee::Column::UpdatedAt.lte(updated_at_end));
+    }
+
+    let select = hr_employee::Entity::find()
+        .filter(cond)
+        .filter(hr_employee::Column::DeletedAt.is_null())
+        .order_by_desc(hr_employee::Column::Id);
+    let page_data = crate::utils::paginate(select, db, page_index, page_size).await?;
+    Ok(page_data)
 }
 
 /// 事务内创建档案：审计盖章（创建人与更新人同源，均取 `actor_id`）。
@@ -75,13 +110,14 @@ pub async fn create_employee_in_tx(
     model: hr_employee::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<hr_employee::Model> {
-    // 实现提示：
-    // 1) `use sea_orm::{ActiveModelTrait, ActiveValue::Set};`
-    // 2) `let model = hr_employee::ActiveModel {`
-    //      `created_by: Set(actor_id), updated_by: Set(actor_id), ..model };`
-    // 3) `model.insert(txn).await`
-    let _ = (txn, model, actor_id);
-    anyhow::bail!("未实现：create_employee_in_tx")
+    let model = hr_employee::ActiveModel {
+        created_by: Set(actor_id),
+        updated_by: Set(actor_id),
+        ..model
+    };
+
+    let employee = model.insert(txn).await?;
+    Ok(employee)
 }
 
 /// 事务内更新档案（窄写）：只刷新更新人，`created_by` 保持 `NotSet` 不被覆盖。
@@ -92,11 +128,13 @@ pub async fn update_employee_in_tx(
     model: hr_employee::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<hr_employee::Model> {
-    // 实现提示：
-    // `let model = hr_employee::ActiveModel { updated_by: Set(actor_id), ..model };`
-    // `model.update(txn).await`（`id` 由调用方 Set）
-    let _ = (txn, model, actor_id);
-    anyhow::bail!("未实现：update_employee_in_tx")
+    let model = hr_employee::ActiveModel {
+        updated_by: Set(actor_id),
+        ..model
+    };
+
+    let employee = model.update(txn).await?;
+    Ok(employee)
 }
 
 /// 事务内软删档案：只更新 `deleted_at` + `updated_by`。
@@ -108,18 +146,17 @@ pub async fn soft_delete_employee_in_tx(
     id: u64,
     actor_id: u64,
 ) -> anyhow::Result<bool> {
-    // 实现提示：
-    // 1) `use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_orm::sea_query::Expr};`
-    // 2) `hr_employee::Entity::update_many()`
-    //      `.filter(hr_employee::Column::Id.eq(id))`
-    //      `.filter(hr_employee::Column::DeletedAt.is_null())`
-    //      `.col_expr(hr_employee::Column::DeletedAt,`
-    //                `Expr::value(Some(chrono::Local::now().naive_local())))`
-    //      `.col_expr(hr_employee::Column::UpdatedBy, Expr::value(actor_id))`
-    //      `.exec(txn).await?`
-    // 3) `Ok(result.rows_affected > 0)`
-    let _ = (txn, id, actor_id);
-    anyhow::bail!("未实现：soft_delete_employee_in_tx")
+    let result = hr_employee::Entity::update_many()
+        .filter(hr_employee::Column::Id.eq(id))
+        .filter(hr_employee::Column::DeletedAt.is_null())
+        .set(hr_employee::ActiveModel {
+            deleted_at: Set(Some(chrono::Local::now().naive_local())),
+            updated_by: Set(actor_id),
+            ..Default::default()
+        })
+        .exec(txn)
+        .await?;
+    Ok(result.rows_affected > 0)
 }
 
 #[cfg(test)]
