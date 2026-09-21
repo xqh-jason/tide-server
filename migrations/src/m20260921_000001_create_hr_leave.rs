@@ -4,7 +4,8 @@
 //!   作废走 `status` + 反向流水（软删占位会让 `(employee_id, leave_type_id, period)`
 //!   唯一键在重建账户时冲突）；
 //! - `employee_id` 指向 `hr_employee.id`（逻辑外键，全库无物理外键）；
-//! - 幂等：information_schema 探测任一表存在即整体跳过。
+//! - 幂等：逐表探测 `information_schema`，**只为缺失的表建表**（DDL 不在事务里，
+//!   若中途失败 / 被杀，重跑会补齐剩余表，而不是因首表已存在整体跳过）。
 
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_orm::Statement;
@@ -106,29 +107,16 @@ const CREATE_LEAVE_BALANCE_LOG: &str = r#"CREATE TABLE `hr_leave_balance_log` (
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let conn = manager.get_connection();
-        // 幂等护栏：information_schema 探测任一表是否存在，存在即整体跳过
-        for table in TABLES {
-            let exists = conn
-                .query_one(Statement::from_string(
-                    manager.get_database_backend(),
-                    format!(
-                        "SELECT 1 FROM information_schema.TABLES \
-                         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}'"
-                    ),
-                ))
-                .await?
-                .is_some();
-            if exists {
-                return Ok(());
-            }
-        }
-        for ddl in [
-            CREATE_LEAVE_TYPE,
-            CREATE_LEAVE_GRANT,
-            CREATE_LEAVE_BALANCE,
-            CREATE_LEAVE_BALANCE_LOG,
+        // 自愈式幂等：缺表即补、不缺即跳（DDL 不在事务里，中途失败后重跑必须能补齐剩余表）
+        for (table, ddl) in [
+            ("hr_leave_type", CREATE_LEAVE_TYPE),
+            ("hr_leave_grant", CREATE_LEAVE_GRANT),
+            ("hr_leave_balance", CREATE_LEAVE_BALANCE),
+            ("hr_leave_balance_log", CREATE_LEAVE_BALANCE_LOG),
         ] {
-            conn.execute_unprepared(ddl).await?;
+            if !table_exists(conn, manager.get_database_backend(), table).await? {
+                conn.execute_unprepared(ddl).await?;
+            }
         }
         Ok(())
     }
@@ -141,4 +129,22 @@ impl MigrationTrait for Migration {
         }
         Ok(())
     }
+}
+
+/// 探测表是否存在（`information_schema.TABLES`，限定当前库）。
+async fn table_exists(
+    conn: &impl ConnectionTrait,
+    backend: sea_orm::DbBackend,
+    table: &str,
+) -> Result<bool, DbErr> {
+    Ok(conn
+        .query_one(Statement::from_string(
+            backend,
+            format!(
+                "SELECT 1 FROM information_schema.TABLES \
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}'"
+            ),
+        ))
+        .await?
+        .is_some())
 }

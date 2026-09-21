@@ -466,4 +466,53 @@ mod tests {
             "流水应只收集操作人 id（无审计人字段对）"
         );
     }
+
+    /// HR 假期额度：假期类型与额度账户都只有审计人字段对（`created_by` / `updated_by`）。
+    #[test]
+    fn user_ref_ids_covers_leave_type_and_balance() {
+        let leave_type = hr_leave_type::Model {
+            id: 1,
+            type_code: "annual".to_string(),
+            type_name: "年假".to_string(),
+            unit: 1,
+            balance_mode: 1,
+            min_unit_minutes: 240,
+            require_attachment: 0,
+            allow_negative: 0,
+            pay_ratio: 1000,
+            status: 1,
+            remark: String::new(),
+            created_at: chrono::Local::now().naive_local(),
+            updated_at: chrono::Local::now().naive_local(),
+            created_by: 8,
+            updated_by: 9,
+            deleted_at: None,
+        };
+        assert_eq!(
+            leave_type.user_ref_ids(),
+            vec![8, 9],
+            "假期类型应收集创建人 / 更新人 id"
+        );
+
+        let balance = hr_leave_balance::Model {
+            id: 1,
+            employee_id: 2,
+            leave_type_id: 3,
+            period: "2026".to_string(),
+            granted_minutes: 4800,
+            used_minutes: 480,
+            locked_minutes: 0,
+            expired_minutes: 0,
+            adjust_minutes: 0,
+            created_at: chrono::Local::now().naive_local(),
+            updated_at: chrono::Local::now().naive_local(),
+            created_by: 10,
+            updated_by: 11,
+        };
+        assert_eq!(
+            balance.user_ref_ids(),
+            vec![10, 11],
+            "额度账户应收集创建人 / 更新人 id"
+        );
+    }
 }

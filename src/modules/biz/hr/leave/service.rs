@@ -45,6 +45,17 @@
 //! 钉死了「结转批次入本年度账户」；`expire_…` 的 `expired == 480` 因 `today`（2026-04-01）与批次
 //! `effective_at`（2026-01-01）同年度，只钉死「作废不按 `period` 字段入账」；真正区分
 //! 「与授予同桶」和「按 `today` 入账」的是用例 `expire_grants_books_to_the_same_account_as_the_grant_across_years`。
+//!
+//! # 记录型假别（`balance_mode = BALANCE_MODE_RECORD_ONLY`）
+//!
+//! 记录型假别（只记录不扣额度，如种子里的 `personal` 事假 / `sick` 病假）**没有额度概念**：
+//! - 调用方（P2 请假 service）在提交时读假别 `balance_mode`，为 `BALANCE_MODE_RECORD_ONLY`
+//!   时整条额度链路跳过——不 lock / 不 consume / 不 release / 不写流水；
+//! - 原语本层保留**防御性 no-op**：[`lock_leave_in_tx`] / [`consume_locked_in_tx`] /
+//!   [`release_locked_in_tx`] 读到 `balance_mode = 0` 直接 `Ok(())`（不建账户、不写流水），
+//!   [`available_minutes`] 返回 `Ok(0)`。
+//!
+//! **P2 请假计划需同步该口径**（否则事假 / 病假会被本层的「账户不存在」护栏挡住）。
 
 use std::collections::HashMap;
 
@@ -109,9 +120,12 @@ pub(crate) async fn grant_leave_in_tx(
 /// 预占额度（审批中）：账户 `locked_minutes += minutes`，可用不足且假别 `allow_negative = 0` 时拒绝。
 ///
 /// 预占只动 `locked`，**不**动 `used`——实扣在审批通过时由 [`consume_locked_in_tx`] 完成。
-// 实现提示：① `repo::find_balance_by_account_for_update(txn, employee_id, leave_type_id, period)` 加锁读，
-// 账期取 `on_date` 的自然年；`None` → `AppError::Biz("额度账户不存在，请先发放额度")`；
-// ② 账户加锁读后即可用，读 `hr_leave_type`（`repo::find_leave_type_by_id`）取 `allow_negative`；
+// 实现提示：⓪ 先读假别 `repo::find_leave_type_by_id(txn, leave_type_id)` 取 `balance_mode` 与
+// `allow_negative`：`BALANCE_MODE_RECORD_ONLY` → 直接 `Ok(())`（记录型假别无额度概念，
+// 防御性 no-op，见文件头「记录型假别」）；① 账户加锁读
+// `repo::find_balance_by_account_for_update(txn, employee_id, leave_type_id, period)`，账期取
+// `on_date` 的自然年；`None` → `AppError::Biz("额度账户不存在，请先发放额度")`；
+// ② 账户加锁读后即可用（`allow_negative` 已在 ⓪ 取到）；
 // ③ `available = granted + adjust − used − locked − expired`；`available < minutes` 且
 // `allow_negative == 0` → `AppError::Biz(format!("额度不足：可用 {available} 分钟，本次需要 {minutes} 分钟"))`
 // （`allow_negative == 1` 放行，允许负余额）；④ 账户 `locked_minutes += minutes` →
@@ -134,7 +148,9 @@ pub(crate) async fn lock_leave_in_tx(
 /// 实扣（审批通过）：FEFO 扣批次剩余，账户 `locked -= minutes`、`used += minutes`，可用不变。
 ///
 /// 批次归属：每个被扣的批次写一条流水（`grant_id` 指向它），供「这笔假扣的是哪个批次」追溯。
-// 实现提示：① `repo::find_active_grants_for_update(txn, employee_id, leave_type_id, on_date)` FEFO 加锁读；
+// 实现提示：⓪ 读假别 `repo::find_leave_type_by_id(txn, leave_type_id)`：`balance_mode` 为
+// `BALANCE_MODE_RECORD_ONLY` → 直接 `Ok(())`（记录型假别无额度概念，防御性 no-op）；
+// ① `repo::find_active_grants_for_update(txn, employee_id, leave_type_id, on_date)` FEFO 加锁读；
 // ② 账户加锁读（账期取 `on_date` 的自然年）——`locked_minutes -= minutes`、`used_minutes += minutes`，
 // 变动前后**可用值相同**；③ 循环扣批次：`take = min(剩余待扣, batch.remaining_minutes)` →
 // `repo::consume_grant_in_tx(txn, batch.id, take, actor_id)`（返回 `false` 说明并发下批次已被扣空，
@@ -168,7 +184,9 @@ pub(crate) async fn consume_locked_in_tx(
 }
 
 /// 释放预占（审批驳回 / 撤销）：账户 `locked -= minutes`，可用恢复，流水正向记恢复量。
-// 实现提示：① 账户加锁读 `repo::find_balance_by_account_for_update(txn, employee_id, leave_type_id, period)`，
+// 实现提示：⓪ 读假别 `repo::find_leave_type_by_id(txn, leave_type_id)`：`balance_mode` 为
+// `BALANCE_MODE_RECORD_ONLY` → 直接 `Ok(())`（记录型假别无额度概念，防御性 no-op）；
+// ① 账户加锁读 `repo::find_balance_by_account_for_update(txn, employee_id, leave_type_id, period)`，
 // 账期取 `on_date` 的自然年（`format!("{}", on_date.year())`）；`None` →
 // `AppError::Biz("额度账户不存在，请先发放额度")`；② 账户 `locked_minutes -= minutes` →
 // `repo::update_balance_in_tx`；③ 写流水：`biz_type = LOG_BIZ_LEAVE_RELEASE`、`delta = +minutes`
@@ -224,8 +242,11 @@ pub(crate) async fn expire_grants_in_tx(
 /// 相减可能越界，聚合口径一律升位到 `i64`。
 // 实现提示：① 本签名收 `&DatabaseTransaction`，与加锁读原语同型，直接复用
 // `repo::find_balance_by_account_for_update(txn, employee_id, leave_type_id, period)`（无需新 SQL）；
-// ② 账户 `None` 视为 0（未发放即无可用量）；③ `on_date` 当前不参与计算（签名保留，供后续
-// 「按有效期折算可用」口径），实现时 `let _ = on_date;` 消音。
+// ② 账户 `None` 视为 0（未发放即无可用量）；③ 读假别 `repo::find_leave_type_by_id`：
+// `balance_mode = BALANCE_MODE_RECORD_ONLY` → 返回 `Ok(0)`，并**加注释**
+// 「记录型假别无额度概念，调用方不应据此判定可否请假」（见文件头「记录型假别」）；
+// ④ `on_date` 当前不参与计算（签名保留，供后续「按有效期折算可用」口径），
+// 实现时 `let _ = on_date;` 消音。
 // 骨架期：仅测试调用，实现函数体后删除本属性
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn available_minutes(
@@ -588,7 +609,7 @@ mod tests {
                 employee_id: Some(emp),
                 ..Default::default()
             },
-            1,
+            0,
             10,
         )
         .await
@@ -779,7 +800,7 @@ mod tests {
                 biz_type: Some(LOG_BIZ_LEAVE_RELEASE),
                 ..Default::default()
             },
-            1,
+            0,
             10,
         )
         .await
@@ -847,7 +868,7 @@ mod tests {
     async fn expire_grants_books_to_the_same_account_as_the_grant_across_years() {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type(&txn).await;
-        // 2025 年生效、2025 年底失效的结转批次 → 入 2025 账期账户
+        // 2025 年生效、2025 年底失效的当年既发即失效批次 → 入 2025 账期账户
         let _stale = service::grant_leave_in_tx(
             &txn,
             ACTOR_ID,
@@ -933,7 +954,7 @@ mod tests {
                 employee_id: Some(emp),
                 ..Default::default()
             },
-            1,
+            0,
             100,
         )
         .await
