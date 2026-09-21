@@ -2,7 +2,10 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # 平台与业务两条长期分支都要门禁：`hr` 分支禁止向 `main` 开 PR
+    # （设计文档 §2 的单向合并纪律），若只有 `main` 触发，业务分支的推送
+    # 就完全跑不到 fmt / clippy / 真库测试。
+    branches: [main, hr]
     # 版本 tag 也触发：打出的 tag 要对得起它指向的提交。没有这条的话，tag
     # 从未经过任何校验——2026-09-18 就实际踩到：tag 打好后才发现该提交在
     # `-D warnings` 下不干净（clippy 告警），只能删 tag 重打。
