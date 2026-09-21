@@ -4,7 +4,7 @@
 //! - entity 不直接暴露给接口，响应体一律经 `From<Model>` 转换；
 //! - 请求体永不接受 `*_by` / `*_name`（审计字段由 repo 盖章、人名字段由 service 拼装）；
 //! - 时间字段一律 `String`（DTO 层不做解析，解析在 service）；
-//! - `employee_name` / `leave_type_name` / `operator_name` 由 service 批量拼装后回填；
+//! - `employee_name` / `time_off_type_name` / `operator_name` 由 service 批量拼装后回填；
 //!   `created_by_name` / `updated_by_name` 由平台唯一管道 `utils::user_ref::fill_user_names`
 //!   经 `UserRefNames` 填充（`From<Model>` 里一律留空串）；
 //! - quota 单位为分钟（`i32`），「天 ↔ 分钟」换算在前端按假别 `unit` / `min_unit_minutes` 完成。
@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::entity::{hr_leave_balance, hr_leave_balance_log, hr_leave_grant, hr_leave_type};
+use crate::entity::{
+    hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
+};
 use crate::utils::PageQuery;
 use crate::utils::serde_format::format_datetime;
 use crate::utils::user_ref::UserRefNames;
@@ -27,7 +29,7 @@ fn fmt_date(d: chrono::NaiveDate) -> String {
 /// 假期类型列表请求：分页字段内嵌 `PageQuery`，过滤条件只在此声明一次。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct LeaveTypeListReq {
+pub struct TimeOffTypeListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
@@ -39,7 +41,7 @@ pub struct LeaveTypeListReq {
 
 /// 假期类型分页过滤条件（repo 层入参，分页参数另行传入）。
 #[derive(Debug, Clone, Default)]
-pub struct LeaveTypeFilter {
+pub struct TimeOffTypeFilter {
     /// 模糊搜索关键字（匹配类型编码 / 类型名称）
     pub keyword: Option<String>,
     /// 状态精确过滤（1 启用 0 停用）
@@ -49,7 +51,7 @@ pub struct LeaveTypeFilter {
 /// 创建假期类型请求。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateLeaveTypeReq {
+pub struct CreateTimeOffTypeReq {
     /// 类型编码（单列唯一，含软删占位）
     pub type_code: String,
     /// 类型名称
@@ -75,7 +77,7 @@ pub struct CreateLeaveTypeReq {
 /// 更新假期类型请求（字段与创建一致 + 主键）。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct UpdateLeaveTypeReq {
+pub struct UpdateTimeOffTypeReq {
     /// 假期类型主键
     pub id: u64,
     /// 类型编码（单列唯一，含软删占位）
@@ -103,7 +105,7 @@ pub struct UpdateLeaveTypeReq {
 /// 假期类型响应体。
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct LeaveTypeResp {
+pub struct TimeOffTypeResp {
     pub id: u64,
     /// 类型编码
     pub type_code: String,
@@ -139,9 +141,9 @@ pub struct LeaveTypeResp {
     pub updated_by_name: String,
 }
 
-/// `hr_leave_type::Model` → `LeaveTypeResp` 字段搬运（人名字段留空待 `fill_user_names` 拼装）。
-impl From<hr_leave_type::Model> for LeaveTypeResp {
-    fn from(m: hr_leave_type::Model) -> Self {
+/// `hr_time_off_type::Model` → `TimeOffTypeResp` 字段搬运（人名字段留空待 `fill_user_names` 拼装）。
+impl From<hr_time_off_type::Model> for TimeOffTypeResp {
+    fn from(m: hr_time_off_type::Model) -> Self {
         Self {
             id: m.id,
             type_code: m.type_code,
@@ -165,7 +167,7 @@ impl From<hr_leave_type::Model> for LeaveTypeResp {
 }
 
 /// 按名称映射填充创建人 / 更新人显示名（查不到给空串）。
-impl UserRefNames for LeaveTypeResp {
+impl UserRefNames for TimeOffTypeResp {
     fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
         self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
         self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
@@ -175,15 +177,15 @@ impl UserRefNames for LeaveTypeResp {
 /// 额度批次列表请求。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct LeaveGrantListReq {
+pub struct TimeOffGrantListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
     /// 员工档案 ID 精确过滤；不传查全部
     pub employee_id: Option<u64>,
     /// 假期类型 ID 精确过滤；不传查全部
-    pub leave_type_id: Option<u64>,
-    /// 发放依据模糊搜索（字典 leaveGrantReason）；不传查全部
+    pub time_off_type_id: Option<u64>,
+    /// 发放依据模糊搜索（字典 timeOffGrantReason）；不传查全部
     pub reason: Option<String>,
     /// 归属周期精确过滤（如 2026）；不传查全部
     pub period: Option<String>,
@@ -193,11 +195,11 @@ pub struct LeaveGrantListReq {
 
 /// 额度批次分页过滤条件（repo 层入参，分页参数另行传入）。
 #[derive(Debug, Clone, Default)]
-pub struct LeaveGrantFilter {
+pub struct TimeOffGrantFilter {
     /// 员工档案 ID 精确过滤
     pub employee_id: Option<u64>,
     /// 假期类型 ID 精确过滤
-    pub leave_type_id: Option<u64>,
+    pub time_off_type_id: Option<u64>,
     /// 发放依据模糊搜索
     pub reason: Option<String>,
     /// 归属周期精确过滤
@@ -219,10 +221,10 @@ pub struct BatchCreateGrantReq {
     /// 是否全员发放（范围之一）
     pub all: bool,
     /// 假期类型 ID
-    pub leave_type_id: u64,
+    pub time_off_type_id: u64,
     /// 每人发放分钟数（恒正）
     pub minutes: i32,
-    /// 发放依据（字典 leaveGrantReason，幂等键之一）
+    /// 发放依据（字典 timeOffGrantReason，幂等键之一）
     pub reason: String,
     /// 归属周期（幂等键之一，如 2026）
     pub period: String,
@@ -250,16 +252,16 @@ pub struct BatchCreateGrantResp {
 /// 额度批次响应体。
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct LeaveGrantResp {
+pub struct TimeOffGrantResp {
     pub id: u64,
     /// 员工档案 ID
     pub employee_id: u64,
     /// 员工姓名（service 批量拼装）
     pub employee_name: String,
     /// 假期类型 ID
-    pub leave_type_id: u64,
+    pub time_off_type_id: u64,
     /// 假期类型名称（service 批量拼装）
-    pub leave_type_name: String,
+    pub time_off_type_name: String,
     /// 来源：1 发放 2 手工调整 3 加班转调休
     pub source: i8,
     /// 发放依据
@@ -290,15 +292,15 @@ pub struct LeaveGrantResp {
     pub updated_by_name: String,
 }
 
-/// `hr_leave_grant::Model` → `LeaveGrantResp` 字段搬运（人名字段留空待拼装）。
-impl From<hr_leave_grant::Model> for LeaveGrantResp {
-    fn from(m: hr_leave_grant::Model) -> Self {
+/// `hr_time_off_grant::Model` → `TimeOffGrantResp` 字段搬运（人名字段留空待拼装）。
+impl From<hr_time_off_grant::Model> for TimeOffGrantResp {
+    fn from(m: hr_time_off_grant::Model) -> Self {
         Self {
             id: m.id,
             employee_id: m.employee_id,
             employee_name: String::new(),
-            leave_type_id: m.leave_type_id,
-            leave_type_name: String::new(),
+            time_off_type_id: m.time_off_type_id,
+            time_off_type_name: String::new(),
             source: m.source,
             reason: m.reason,
             period: m.period,
@@ -318,7 +320,7 @@ impl From<hr_leave_grant::Model> for LeaveGrantResp {
 }
 
 /// 按名称映射填充创建人 / 更新人显示名（查不到给空串）。
-impl UserRefNames for LeaveGrantResp {
+impl UserRefNames for TimeOffGrantResp {
     fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
         self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
         self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
@@ -328,25 +330,25 @@ impl UserRefNames for LeaveGrantResp {
 /// 额度账户列表请求。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct LeaveBalanceListReq {
+pub struct TimeOffBalanceListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
     /// 员工档案 ID 精确过滤；不传查全部
     pub employee_id: Option<u64>,
     /// 假期类型 ID 精确过滤；不传查全部
-    pub leave_type_id: Option<u64>,
+    pub time_off_type_id: Option<u64>,
     /// 账期精确过滤（自然年，如 2026）；不传查全部
     pub period: Option<String>,
 }
 
 /// 额度账户分页过滤条件（repo 层入参，分页参数另行传入）。
 #[derive(Debug, Clone, Default)]
-pub struct LeaveBalanceFilter {
+pub struct TimeOffBalanceFilter {
     /// 员工档案 ID 精确过滤
     pub employee_id: Option<u64>,
     /// 假期类型 ID 精确过滤
-    pub leave_type_id: Option<u64>,
+    pub time_off_type_id: Option<u64>,
     /// 账期精确过滤
     pub period: Option<String>,
 }
@@ -354,16 +356,16 @@ pub struct LeaveBalanceFilter {
 /// 额度账户响应体（聚合展示行）。
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct LeaveBalanceResp {
+pub struct TimeOffBalanceResp {
     pub id: u64,
     /// 员工档案 ID
     pub employee_id: u64,
     /// 员工姓名（service 批量拼装）
     pub employee_name: String,
     /// 假期类型 ID
-    pub leave_type_id: u64,
+    pub time_off_type_id: u64,
     /// 假期类型名称（service 批量拼装）
-    pub leave_type_name: String,
+    pub time_off_type_name: String,
     /// 账期（自然年）
     pub period: String,
     /// 累计授予
@@ -390,15 +392,15 @@ pub struct LeaveBalanceResp {
     pub updated_by_name: String,
 }
 
-/// `hr_leave_balance::Model` → `LeaveBalanceResp` 字段搬运（人名字段留空待拼装）。
-impl From<hr_leave_balance::Model> for LeaveBalanceResp {
-    fn from(m: hr_leave_balance::Model) -> Self {
+/// `hr_time_off_balance::Model` → `TimeOffBalanceResp` 字段搬运（人名字段留空待拼装）。
+impl From<hr_time_off_balance::Model> for TimeOffBalanceResp {
+    fn from(m: hr_time_off_balance::Model) -> Self {
         Self {
             id: m.id,
             employee_id: m.employee_id,
             employee_name: String::new(),
-            leave_type_id: m.leave_type_id,
-            leave_type_name: String::new(),
+            time_off_type_id: m.time_off_type_id,
+            time_off_type_name: String::new(),
             period: m.period,
             granted_minutes: m.granted_minutes,
             used_minutes: m.used_minutes,
@@ -419,7 +421,7 @@ impl From<hr_leave_balance::Model> for LeaveBalanceResp {
 }
 
 /// 按名称映射填充创建人 / 更新人显示名（查不到给空串）。
-impl UserRefNames for LeaveBalanceResp {
+impl UserRefNames for TimeOffBalanceResp {
     fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
         self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
         self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
@@ -429,25 +431,25 @@ impl UserRefNames for LeaveBalanceResp {
 /// 额度流水列表请求。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct LeaveBalanceLogListReq {
+pub struct TimeOffBalanceLogListReq {
     /// 分页参数（page / page_size）
     #[serde(flatten)]
     pub page: PageQuery,
     /// 员工档案 ID 精确过滤；不传查全部
     pub employee_id: Option<u64>,
     /// 假期类型 ID 精确过滤；不传查全部
-    pub leave_type_id: Option<u64>,
+    pub time_off_type_id: Option<u64>,
     /// 业务类型精确过滤（1 授予 2 手工调整 3 请假预占 4 审批实扣 5 驳回释放 6 过期作废）
     pub biz_type: Option<i8>,
 }
 
 /// 额度流水分页过滤条件（repo 层入参，分页参数另行传入）。
 #[derive(Debug, Clone, Default)]
-pub struct LeaveBalanceLogFilter {
+pub struct TimeOffBalanceLogFilter {
     /// 员工档案 ID 精确过滤
     pub employee_id: Option<u64>,
     /// 假期类型 ID 精确过滤
-    pub leave_type_id: Option<u64>,
+    pub time_off_type_id: Option<u64>,
     /// 业务类型精确过滤
     pub biz_type: Option<i8>,
 }
@@ -455,16 +457,16 @@ pub struct LeaveBalanceLogFilter {
 /// 额度流水响应体（append-only 对账凭据）。
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct LeaveBalanceLogResp {
+pub struct TimeOffBalanceLogResp {
     pub id: u64,
     /// 员工档案 ID
     pub employee_id: u64,
     /// 员工姓名（service 批量拼装）
     pub employee_name: String,
     /// 假期类型 ID
-    pub leave_type_id: u64,
+    pub time_off_type_id: u64,
     /// 假期类型名称（service 批量拼装）
-    pub leave_type_name: String,
+    pub time_off_type_name: String,
     /// 授予批次 ID；0=账户级操作
     pub grant_id: u64,
     /// 业务类型：1 授予 2 手工调整 3 请假预占 4 审批实扣 5 驳回释放 6 过期作废
@@ -489,16 +491,16 @@ pub struct LeaveBalanceLogResp {
     pub created_at: String,
 }
 
-/// `hr_leave_balance_log::Model` → `LeaveBalanceLogResp` 字段搬运
+/// `hr_time_off_balance_log::Model` → `TimeOffBalanceLogResp` 字段搬运
 /// （人名字段留空待拼装；流水无 `updated_at`）。
-impl From<hr_leave_balance_log::Model> for LeaveBalanceLogResp {
-    fn from(m: hr_leave_balance_log::Model) -> Self {
+impl From<hr_time_off_balance_log::Model> for TimeOffBalanceLogResp {
+    fn from(m: hr_time_off_balance_log::Model) -> Self {
         Self {
             id: m.id,
             employee_id: m.employee_id,
             employee_name: String::new(),
-            leave_type_id: m.leave_type_id,
-            leave_type_name: String::new(),
+            time_off_type_id: m.time_off_type_id,
+            time_off_type_name: String::new(),
             grant_id: m.grant_id,
             biz_type: m.biz_type,
             delta_minutes: m.delta_minutes,
@@ -518,7 +520,7 @@ impl From<hr_leave_balance_log::Model> for LeaveBalanceLogResp {
 ///
 /// 流水表是 append-only：**没有** `created_by` / `updated_by` 审计人字段对，
 /// 唯一的人字段是 `operator_id`（0=系统，查不到自然给空串）。
-impl UserRefNames for LeaveBalanceLogResp {
+impl UserRefNames for TimeOffBalanceLogResp {
     fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
         self.operator_name = names.get(&self.operator_id).cloned().unwrap_or_default();
     }

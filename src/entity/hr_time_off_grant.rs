@@ -3,17 +3,17 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
-#[sea_orm(table_name = "hr_leave_grant")]
+#[sea_orm(table_name = "hr_time_off_grant")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: u64,
     /// 员工档案 ID（hr_employee.id）
     pub employee_id: u64,
     /// 假期类型 ID
-    pub leave_type_id: u64,
+    pub time_off_type_id: u64,
     /// 来源：1 发放 2 手工调整 3 加班转调休
     pub source: i8,
-    /// 发放依据（字典 leaveGrantReason）
+    /// 发放依据（字典 timeOffGrantReason）
     pub reason: String,
     /// 归属周期（如 2026）
     pub period: String,

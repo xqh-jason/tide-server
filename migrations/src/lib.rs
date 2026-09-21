@@ -7,7 +7,7 @@ mod m20260914_000001_fix_sys_refresh_token_revoked_by_comment;
 mod m20260917_000001_fix_sys_menu_permission_comment;
 mod m20260918_000001_add_list_query_indexes;
 mod m20260919_000001_create_hr_employee;
-mod m20260921_000001_create_hr_leave;
+mod m20260921_000001_create_hr_time_off;
 
 pub struct Migrator;
 
@@ -48,7 +48,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260918_000001_add_list_query_indexes::Migration),
             // 业务表迁移（HR）：追加在平台迁移之后，顺序不可改
             Box::new(m20260919_000001_create_hr_employee::Migration),
-            Box::new(m20260921_000001_create_hr_leave::Migration),
+            Box::new(m20260921_000001_create_hr_time_off::Migration),
         ]
     }
 }

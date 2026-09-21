@@ -202,11 +202,11 @@ pub const DOMAINS: &[DomainMount] = &[
         guard: MountGuard::Protected,
         routers: &[biz::hr::employee::routes],
     },
-    // 假期额度与发放（业务域）：POST /api/v1/hr/leave/{leave-type,leave-grant,leave-balance}/...
+    // 假期额度与发放（业务域）：POST /api/v1/hr/time-off/{type,grant,balance}/...
     DomainMount {
-        path: "hr/leave",
+        path: "hr/time-off",
         guard: MountGuard::Protected,
-        routers: &[biz::hr::leave::routes],
+        routers: &[biz::hr::time_off::routes],
     },
 ];
 

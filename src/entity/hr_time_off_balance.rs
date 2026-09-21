@@ -3,14 +3,14 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
-#[sea_orm(table_name = "hr_leave_balance")]
+#[sea_orm(table_name = "hr_time_off_balance")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: u64,
     /// 员工档案 ID（hr_employee.id）
     pub employee_id: u64,
     /// 假期类型 ID
-    pub leave_type_id: u64,
+    pub time_off_type_id: u64,
     /// 账期（自然年，如 2026）
     pub period: String,
     /// 累计授予

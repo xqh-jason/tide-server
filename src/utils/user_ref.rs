@@ -8,8 +8,8 @@
 //!
 
 use crate::entity::{
-    hr_employee, hr_leave_balance, hr_leave_balance_log, hr_leave_grant, hr_leave_type, sys_api,
-    sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job, sys_menu,
+    hr_employee, hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
+    sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job, sys_menu,
     sys_operation_log, sys_position, sys_refresh_token, sys_role, sys_site_config, sys_user,
 };
 use std::collections::HashMap;
@@ -157,25 +157,25 @@ impl UserRefIds for sys_refresh_token::Model {
     }
 }
 
-impl UserRefIds for hr_leave_type::Model {
+impl UserRefIds for hr_time_off_type::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         vec![self.created_by, self.updated_by]
     }
 }
 
-impl UserRefIds for hr_leave_grant::Model {
+impl UserRefIds for hr_time_off_grant::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         vec![self.created_by, self.updated_by]
     }
 }
 
-impl UserRefIds for hr_leave_balance::Model {
+impl UserRefIds for hr_time_off_balance::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         vec![self.created_by, self.updated_by]
     }
 }
 
-impl UserRefIds for hr_leave_balance_log::Model {
+impl UserRefIds for hr_time_off_balance_log::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         // append-only 流水表：无 created_by / updated_by 审计人字段对，唯一人字段是操作人
         vec![self.operator_id]
@@ -419,11 +419,11 @@ mod tests {
 
     /// HR 假期额度账本：批次收集审计人字段对；append-only 流水只收集操作人。
     #[test]
-    fn user_ref_ids_covers_leave_ledger_entities() {
-        let grant = hr_leave_grant::Model {
+    fn user_ref_ids_covers_time_off_ledger_entities() {
+        let grant = hr_time_off_grant::Model {
             id: 1,
             employee_id: 2,
-            leave_type_id: 3,
+            time_off_type_id: 3,
             source: 2,
             reason: "manual".to_string(),
             period: "2026".to_string(),
@@ -444,11 +444,11 @@ mod tests {
             "批次应收集创建人 / 更新人 id"
         );
 
-        let log = hr_leave_balance_log::Model {
+        let log = hr_time_off_balance_log::Model {
             id: 1,
             balance_id: 2,
             employee_id: 3,
-            leave_type_id: 4,
+            time_off_type_id: 4,
             grant_id: 5,
             biz_type: 1,
             delta_minutes: 480,
@@ -469,8 +469,8 @@ mod tests {
 
     /// HR 假期额度：假期类型与额度账户都只有审计人字段对（`created_by` / `updated_by`）。
     #[test]
-    fn user_ref_ids_covers_leave_type_and_balance() {
-        let leave_type = hr_leave_type::Model {
+    fn user_ref_ids_covers_time_off_type_and_balance() {
+        let time_off_type = hr_time_off_type::Model {
             id: 1,
             type_code: "annual".to_string(),
             type_name: "年假".to_string(),
@@ -489,15 +489,15 @@ mod tests {
             deleted_at: None,
         };
         assert_eq!(
-            leave_type.user_ref_ids(),
+            time_off_type.user_ref_ids(),
             vec![8, 9],
             "假期类型应收集创建人 / 更新人 id"
         );
 
-        let balance = hr_leave_balance::Model {
+        let balance = hr_time_off_balance::Model {
             id: 1,
             employee_id: 2,
-            leave_type_id: 3,
+            time_off_type_id: 3,
             period: "2026".to_string(),
             granted_minutes: 4800,
             used_minutes: 480,

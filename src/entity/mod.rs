@@ -4,10 +4,10 @@ pub mod prelude;
 
 // 业务实体（HR）
 pub mod hr_employee;
-pub mod hr_leave_balance;
-pub mod hr_leave_balance_log;
-pub mod hr_leave_grant;
-pub mod hr_leave_type;
+pub mod hr_time_off_balance;
+pub mod hr_time_off_balance_log;
+pub mod hr_time_off_grant;
+pub mod hr_time_off_type;
 
 pub mod sys_api;
 pub mod sys_config;

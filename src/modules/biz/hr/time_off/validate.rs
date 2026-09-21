@@ -17,8 +17,8 @@
 //! 的函数体尚未接上，非测试构建下它们没有任何用户（test 构建下由下方用例覆盖）；
 //! **`api.rs` 的函数体补齐时一并删除这三个属性**。
 
-use crate::modules::biz::hr::leave::dto::{
-    BatchCreateGrantReq, CreateLeaveTypeReq, UpdateLeaveTypeReq,
+use crate::modules::biz::hr::time_off::dto::{
+    BatchCreateGrantReq, CreateTimeOffTypeReq, UpdateTimeOffTypeReq,
 };
 
 /// 创建假期类型校验。
@@ -43,29 +43,29 @@ use crate::modules::biz::hr::leave::dto::{
 // .map_err(|e| errors.push(e)).ok();`（返回 `Result<(), String>`，非 `AppError`）。
 // 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn validate_create_leave_type(
-    req: &CreateLeaveTypeReq,
+pub fn validate_create_time_off_type(
+    req: &CreateTimeOffTypeReq,
     status_allowed: &[i8],
 ) -> Result<(), String> {
     let _ = (req, status_allowed);
-    Err("未实现：validate_create_leave_type".to_string())
+    Err("未实现：validate_create_time_off_type".to_string())
 }
 
 /// 更新假期类型校验：规则同创建，另加主键检查。
 ///
 /// 追加规则：`id` = 0 → `假期类型 ID 必须大于 0`；其余字段文案与
-/// [`validate_create_leave_type`] 逐字一致。
+/// [`validate_create_time_off_type`] 逐字一致。
 //
-// 实现提示：除 id 检查外与创建共用同一组 `check_*` 小函数；`UpdateLeaveTypeReq` 与
-// `CreateLeaveTypeReq` 字段同名同型（多一个 `id`），拆一个 `&str`/`i8` 入参的共用内部函数即可。
+// 实现提示：除 id 检查外与创建共用同一组 `check_*` 小函数；`UpdateTimeOffTypeReq` 与
+// `CreateTimeOffTypeReq` 字段同名同型（多一个 `id`），拆一个 `&str`/`i8` 入参的共用内部函数即可。
 // 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn validate_update_leave_type(
-    req: &UpdateLeaveTypeReq,
+pub fn validate_update_time_off_type(
+    req: &UpdateTimeOffTypeReq,
     status_allowed: &[i8],
 ) -> Result<(), String> {
     let _ = (req, status_allowed);
-    Err("未实现：validate_update_leave_type".to_string())
+    Err("未实现：validate_update_time_off_type".to_string())
 }
 
 /// 批量发放额度校验。
@@ -74,7 +74,7 @@ pub fn validate_update_leave_type(
 /// - 发放范围三选一：`all` = false 且 `employee_ids` 空且 `dept_id` 为 `None` →
 ///   `必须指定发放范围`；`all` = true 且同时给了 `employee_ids` / `dept_id` →
 ///   `all 与其他发放范围不能同时指定`；
-/// - `leave_type_id` = 0 → `假期类型 ID 必须大于 0`；
+/// - `time_off_type_id` = 0 → `假期类型 ID 必须大于 0`；
 /// - `minutes` ≤ 0 → `发放时长必须大于 0`（字段是分钟数，文案用「时长」不用「天数」）；
 /// - `reason` trim 后为空 → `发放依据不能为空`；`period` trim 后为空 → `归属周期不能为空`；
 /// - `employee_ids` 去重后长度 > 1000 → `单次发放人数不能超过 1000`；
@@ -99,8 +99,8 @@ mod tests {
     const STATUS_ALLOWED: &[i8] = &[0, 1];
 
     /// 合法假期类型请求基线：各用例只改被测字段，其余保持合法（避免副作用误报）。
-    fn valid_type_req() -> CreateLeaveTypeReq {
-        CreateLeaveTypeReq {
+    fn valid_type_req() -> CreateTimeOffTypeReq {
+        CreateTimeOffTypeReq {
             type_code: "annual".to_string(),
             type_name: "年假".to_string(),
             unit: 1,
@@ -120,7 +120,7 @@ mod tests {
             employee_ids: vec![1, 2],
             dept_id: None,
             all: false,
-            leave_type_id: 1,
+            time_off_type_id: 1,
             minutes: 2400,
             reason: "statutory".to_string(),
             period: "2026".to_string(),
@@ -131,8 +131,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_create_leave_type_reports_all_errors_joined_by_semicolon() {
-        let req = CreateLeaveTypeReq {
+    fn validate_create_time_off_type_reports_all_errors_joined_by_semicolon() {
+        let req = CreateTimeOffTypeReq {
             type_code: String::new(),
             type_name: String::new(),
             unit: 9,
@@ -140,7 +140,7 @@ mod tests {
             ..valid_type_req()
         };
 
-        let err = validate_create_leave_type(&req, STATUS_ALLOWED).unwrap_err();
+        let err = validate_create_time_off_type(&req, STATUS_ALLOWED).unwrap_err();
 
         assert!(err.contains("类型编码不能为空"), "缺少编码提示：{err}");
         assert!(err.contains("类型名称不能为空"), "缺少名称提示：{err}");
@@ -156,14 +156,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_create_leave_type_rejects_negative_min_unit_and_bad_code_charset() {
-        let req = CreateLeaveTypeReq {
+    fn validate_create_time_off_type_rejects_negative_min_unit_and_bad_code_charset() {
+        let req = CreateTimeOffTypeReq {
             type_code: "Annual-Leave".to_string(),
             min_unit_minutes: -30,
             ..valid_type_req()
         };
 
-        let err = validate_create_leave_type(&req, STATUS_ALLOWED).unwrap_err();
+        let err = validate_create_time_off_type(&req, STATUS_ALLOWED).unwrap_err();
 
         assert!(
             err.contains("类型编码只能包含小写字母、数字与下划线"),
@@ -182,7 +182,7 @@ mod tests {
             employee_ids: Vec::new(),
             dept_id: None,
             all: false,
-            leave_type_id: 0,
+            time_off_type_id: 0,
             ..valid_grant_req()
         };
         let err = validate_batch_create_grant(&req).unwrap_err();
@@ -223,8 +223,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_update_leave_type_rejects_zero_id() {
-        let req = UpdateLeaveTypeReq {
+    fn validate_update_time_off_type_rejects_zero_id() {
+        let req = UpdateTimeOffTypeReq {
             id: 0,
             type_code: "annual".to_string(),
             type_name: "年假".to_string(),
@@ -238,7 +238,7 @@ mod tests {
             remark: String::new(),
         };
 
-        let err = validate_update_leave_type(&req, STATUS_ALLOWED).unwrap_err();
+        let err = validate_update_time_off_type(&req, STATUS_ALLOWED).unwrap_err();
 
         assert!(
             err.contains("假期类型 ID 必须大于 0"),

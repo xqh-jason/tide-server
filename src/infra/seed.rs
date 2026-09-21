@@ -8,7 +8,7 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 
 use crate::entity::{
-    hr_leave_type, sys_api, sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role,
+    hr_time_off_type, sys_api, sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role,
     sys_role_menu, sys_user, sys_user_role,
 };
 use crate::utils::crypt;
@@ -629,11 +629,11 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("HrEmployee"),
         sort: 3,
     },
-    // 假期额度（业务域 `biz/hr/leave`）：假期管理目录 + 三个页面 + 按钮权限码。
+    // 假期额度（业务域 `biz/hr/time_off`）：假期管理目录 + 三个页面 + 按钮权限码。
     MenuSeed {
-        name: "HrLeave",
+        name: "HrTimeOff",
         title: "假期管理",
-        path: "/hr/leave",
+        path: "/hr/time-off",
         component: "",
         icon: "lucide:calendar-days",
         menu_type: 1,
@@ -642,91 +642,91 @@ const MENU_SEEDS: &[MenuSeed] = &[
         sort: 2,
     },
     MenuSeed {
-        name: "HrLeaveType",
+        name: "HrTimeOffType",
         title: "假期类型",
-        path: "/hr/leave/type",
-        component: "#/views/biz/hr/leave/type/index.vue",
+        path: "/hr/time-off/type",
+        component: "#/views/biz/hr/time-off/type/index.vue",
         icon: "lucide:tags",
         menu_type: 2,
         permission: "",
-        parent: Some("HrLeave"),
+        parent: Some("HrTimeOff"),
         sort: 1,
     },
     MenuSeed {
-        name: "HrLeaveTypeCreate",
+        name: "HrTimeOffTypeCreate",
         title: "类型新增",
         path: "",
         component: "",
         icon: "",
         menu_type: 3,
-        permission: "hr:leave-type:create",
-        parent: Some("HrLeaveType"),
+        permission: "hr:time-off-type:create",
+        parent: Some("HrTimeOffType"),
         sort: 1,
     },
     MenuSeed {
-        name: "HrLeaveTypeUpdate",
+        name: "HrTimeOffTypeUpdate",
         title: "类型修改",
         path: "",
         component: "",
         icon: "",
         menu_type: 3,
-        permission: "hr:leave-type:update",
-        parent: Some("HrLeaveType"),
+        permission: "hr:time-off-type:update",
+        parent: Some("HrTimeOffType"),
         sort: 2,
     },
     MenuSeed {
-        name: "HrLeaveTypeDelete",
+        name: "HrTimeOffTypeDelete",
         title: "类型删除",
         path: "",
         component: "",
         icon: "",
         menu_type: 3,
-        permission: "hr:leave-type:delete",
-        parent: Some("HrLeaveType"),
+        permission: "hr:time-off-type:delete",
+        parent: Some("HrTimeOffType"),
         sort: 3,
     },
     MenuSeed {
-        name: "HrLeaveGrant",
+        name: "HrTimeOffGrant",
         title: "额度发放",
-        path: "/hr/leave/grant",
-        component: "#/views/biz/hr/leave/grant/index.vue",
+        path: "/hr/time-off/grant",
+        component: "#/views/biz/hr/time-off/grant/index.vue",
         icon: "lucide:gift",
         menu_type: 2,
         permission: "",
-        parent: Some("HrLeave"),
+        parent: Some("HrTimeOff"),
         sort: 2,
     },
     MenuSeed {
-        name: "HrLeaveGrantCreate",
+        name: "HrTimeOffGrantCreate",
         title: "发放",
         path: "",
         component: "",
         icon: "",
         menu_type: 3,
-        permission: "hr:leave-grant:create",
-        parent: Some("HrLeaveGrant"),
+        permission: "hr:time-off-grant:create",
+        parent: Some("HrTimeOffGrant"),
         sort: 1,
     },
     MenuSeed {
-        name: "HrLeaveGrantCancel",
+        name: "HrTimeOffGrantCancel",
         title: "撤销发放",
         path: "",
         component: "",
         icon: "",
         menu_type: 3,
-        permission: "hr:leave-grant:cancel",
-        parent: Some("HrLeaveGrant"),
+        permission: "hr:time-off-grant:cancel",
+        parent: Some("HrTimeOffGrant"),
         sort: 2,
     },
     MenuSeed {
-        name: "HrLeaveBalance",
+        name: "HrTimeOffBalance",
         title: "额度查询",
-        path: "/hr/leave/balance",
-        component: "#/views/biz/hr/leave/balance/index.vue",
+        path: "/hr/time-off/balance",
+        component: "#/views/biz/hr/time-off/balance/index.vue",
         icon: "lucide:wallet",
         menu_type: 2,
         permission: "",
-        parent: Some("HrLeave"),
+        parent: Some("HrTimeOff"),
         sort: 3,
     },
 ];
@@ -1045,76 +1045,76 @@ const API_SEEDS: &[ApiSeed] = &[
         "员工档案删除",
         "员工档案",
     ),
-    // 假期额度（业务域 hr/leave）：与 DOMAINS 的 "hr/leave" 档位、菜单 HrLeave* 一一对应；
+    // 假期额度（业务域 hr/time-off）：与 DOMAINS 的 "hr/time-off" 档位、菜单 HrTimeOff* 一一对应；
     // 漏登 = 该端点 fail-open（未登记放行）。
     api(
-        "/api/v1/hr/leave/leave-type/list",
+        "/api/v1/hr/time-off/type/list",
         "POST",
         "假期类型列表查询",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-type/create",
+        "/api/v1/hr/time-off/type/create",
         "POST",
         "假期类型新增",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-type/update",
+        "/api/v1/hr/time-off/type/update",
         "POST",
         "假期类型修改",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-type/get",
+        "/api/v1/hr/time-off/type/get",
         "POST",
         "假期类型详情",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-type/delete",
+        "/api/v1/hr/time-off/type/delete",
         "POST",
         "假期类型删除",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-grant/list",
+        "/api/v1/hr/time-off/grant/list",
         "POST",
         "额度批次列表查询",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-grant/batch-create",
+        "/api/v1/hr/time-off/grant/batch-create",
         "POST",
         "额度批量发放",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-grant/get",
+        "/api/v1/hr/time-off/grant/get",
         "POST",
         "额度批次详情",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-grant/cancel",
+        "/api/v1/hr/time-off/grant/cancel",
         "POST",
         "额度批次撤销",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-balance/list",
+        "/api/v1/hr/time-off/balance/list",
         "POST",
         "额度账户列表查询",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-balance/get",
+        "/api/v1/hr/time-off/balance/get",
         "POST",
         "额度账户详情",
         "假期额度",
     ),
     api(
-        "/api/v1/hr/leave/leave-balance/logs",
+        "/api/v1/hr/time-off/balance/logs",
         "POST",
         "额度流水查询",
         "假期额度",
@@ -1134,7 +1134,7 @@ async fn find_menu_id_by_name(db: &DatabaseConnection, name: &str) -> anyhow::Re
 /// 查重、字典项按 `dictionary_id + value` 查重；只补缺、不覆盖运维改过的行）。
 ///
 /// 供业务域枚举使用（人事的 `employmentStatus` / `education`）。字符串枚举
-/// （如 `leaveGrantReason`）亦可复用本函数：`sys_dictionary_detail.value` 本就是
+/// （如 `timeOffGrantReason`）亦可复用本函数：`sys_dictionary_detail.value` 本就是
 /// 字符串列，`items` 的 `value` 写 `statutory` 这类编码即可。平台既有的
 /// `status` / `execResultStatus` 保留各自的历史迁移逻辑（旧编码原地改名、extend
 /// 回填），刻意不走本函数，改动前先读那两段注释。
@@ -1486,15 +1486,15 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     )
     .await?;
 
-    // 4.4 数据字典：假期发放依据（type=leaveGrantReason，字符串枚举）。
-    //     `hr_leave_grant.reason` 的展示与取值来源（校验侧只查非空，不查值域）。
-    const SEED_DICT_TYPE_LEAVE_GRANT_REASON: &str = "leaveGrantReason";
+    // 4.4 数据字典：假期发放依据（type=timeOffGrantReason，字符串枚举）。
+    //     `hr_time_off_grant.reason` 的展示与取值来源（校验侧只查非空，不查值域）。
+    const SEED_DICT_TYPE_LEAVE_GRANT_REASON: &str = "timeOffGrantReason";
     seed_int_dictionary(
         db,
         admin_id,
         SEED_DICT_TYPE_LEAVE_GRANT_REASON,
         "发放依据",
-        "假期额度发放依据（hr_leave_grant.reason）：法定年假 / 公司福利年假 / 司龄增补 / 上年结转 / 加班转调休 / 手工调整 / 离职补偿",
+        "假期额度发放依据（hr_time_off_grant.reason）：法定年假 / 公司福利年假 / 司龄增补 / 上年结转 / 加班转调休 / 手工调整 / 离职补偿",
         &[
             ("法定年假", "statutory", 1),
             ("公司福利年假", "company", 2),
@@ -1507,10 +1507,10 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     )
     .await?;
 
-    // 4.5 假期类型初始 7 类（业务域 hr/leave 的基线数据）。幂等口径：按 `type_code`
-    //     查重且**不加软删过滤**——`uk_hr_leave_type_code` 是单列唯一键，软删行仍占位
+    // 4.5 假期类型初始 7 类（业务域 hr/time-off 的基线数据）。幂等口径：按 `type_code`
+    //     查重且**不加软删过滤**——`uk_hr_time_off_type_code` 是单列唯一键，软删行仍占位
     //     （同 `sys_position.position_code`）；命中即跳过，不覆盖运维改过的行。
-    //     `status` = 1 启用（`leave::LEAVE_TYPE_ENABLED`）；`pay_ratio` 取 DDL 默认
+    //     `status` = 1 启用（`time_off::TIME_OFF_TYPE_ENABLED`）；`pay_ratio` 取 DDL 默认
     //     1000（全额计薪）、`remark` 留空，故此处不 Set。
     const SEED_LEAVE_TYPES: &[(&str, &str, i8, i8, i32, i8, i8)] = &[
         // (type_code, type_name, unit, balance_mode, min_unit_minutes, need_attachment, allow_negative)
@@ -1523,12 +1523,12 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         ("bereavement", "丧假", 1, 1, 480, 0, 0),
     ];
     for (code, name, unit, mode, min_minutes, need_attachment, allow_negative) in SEED_LEAVE_TYPES {
-        let existing = hr_leave_type::Entity::find()
-            .filter(hr_leave_type::Column::TypeCode.eq(*code))
+        let existing = hr_time_off_type::Entity::find()
+            .filter(hr_time_off_type::Column::TypeCode.eq(*code))
             .one(db)
             .await?;
         if existing.is_none() {
-            hr_leave_type::ActiveModel {
+            hr_time_off_type::ActiveModel {
                 type_code: Set(String::from(*code)),
                 type_name: Set(String::from(*name)),
                 unit: Set(*unit),
@@ -1592,15 +1592,15 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     // 5.2 假期额度过期作废（幂等按 job_name；调度器在 init_scheduler 装载，
     //     handler 由 task 注册表提供，见 task/mod.rs 的 handlers()）
     const SEED_LEAVE_EXPIRE_JOB_NAME: &str = "假期额度过期作废";
-    let leave_expire_job = sys_job::Entity::find()
+    let time_off_expire_job = sys_job::Entity::find()
         .filter(sys_job::Column::JobName.eq(SEED_LEAVE_EXPIRE_JOB_NAME))
         .one(db)
         .await?;
-    if leave_expire_job.is_none() {
+    if time_off_expire_job.is_none() {
         sys_job::ActiveModel {
             job_name: Set(SEED_LEAVE_EXPIRE_JOB_NAME.to_string()),
             cron_expr: Set("0 30 1 * * *".to_string()),
-            handler_name: Set(crate::task::leave_grant_expire::HANDLER_NAME.to_string()),
+            handler_name: Set(crate::task::time_off_grant_expire::HANDLER_NAME.to_string()),
             status: Set(1),
             remark: Set("每日 01:30:00 作废已过失效期的假期额度批次".to_string()),
             created_by: Set(admin_id),
@@ -2309,29 +2309,29 @@ mod tests {
             .unwrap();
     }
 
-    /// 假期额度域种子（业务域 `hr/leave`）：菜单父子链与组件路径、12 条端点登记、
+    /// 假期额度域种子（业务域 `hr/time-off`）：菜单父子链与组件路径、12 条端点登记、
     /// 发放依据字典、初始 7 类假期类型、过期作废任务行——连跑两次后每项都必须
     /// 恰好一份（幂等）。端点漏登 = 该端点 fail-open（未登记放行），所以断言的是
     /// 「12 条都在、都是 POST、都启用且未软删」，而不只是菜单存在。
     #[tokio::test]
-    async fn ensure_seed_leave_foundation_is_idempotent() {
+    async fn ensure_seed_time_off_foundation_is_idempotent() {
         let db = test_db().await;
         ensure_seed(&db).await.unwrap();
         ensure_seed(&db).await.unwrap();
 
         for path in [
-            "/api/v1/hr/leave/leave-type/list",
-            "/api/v1/hr/leave/leave-type/create",
-            "/api/v1/hr/leave/leave-type/update",
-            "/api/v1/hr/leave/leave-type/get",
-            "/api/v1/hr/leave/leave-type/delete",
-            "/api/v1/hr/leave/leave-grant/list",
-            "/api/v1/hr/leave/leave-grant/batch-create",
-            "/api/v1/hr/leave/leave-grant/get",
-            "/api/v1/hr/leave/leave-grant/cancel",
-            "/api/v1/hr/leave/leave-balance/list",
-            "/api/v1/hr/leave/leave-balance/get",
-            "/api/v1/hr/leave/leave-balance/logs",
+            "/api/v1/hr/time-off/type/list",
+            "/api/v1/hr/time-off/type/create",
+            "/api/v1/hr/time-off/type/update",
+            "/api/v1/hr/time-off/type/get",
+            "/api/v1/hr/time-off/type/delete",
+            "/api/v1/hr/time-off/grant/list",
+            "/api/v1/hr/time-off/grant/batch-create",
+            "/api/v1/hr/time-off/grant/get",
+            "/api/v1/hr/time-off/grant/cancel",
+            "/api/v1/hr/time-off/balance/list",
+            "/api/v1/hr/time-off/balance/get",
+            "/api/v1/hr/time-off/balance/logs",
         ] {
             let row = sys_api::Entity::find()
                 .filter(sys_api::Column::Path.eq(path))
@@ -2348,22 +2348,28 @@ mod tests {
             .await
             .unwrap()
             .expect("Hr 目录");
-        let leave_id = find_menu_id_by_name(&db, "HrLeave")
+        let time_off_id = find_menu_id_by_name(&db, "HrTimeOff")
             .await
             .unwrap()
-            .expect("HrLeave 菜单");
-        let leave = sys_menu::Entity::find_by_id(leave_id)
+            .expect("HrTimeOff 菜单");
+        let time_off_menu = sys_menu::Entity::find_by_id(time_off_id)
             .one(&db)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(leave.parent_id, hr_id, "假期管理应挂在人事管理目录下");
-        assert_eq!(leave.menu_type, 1, "假期管理应是目录菜单");
+        assert_eq!(
+            time_off_menu.parent_id, hr_id,
+            "假期管理应挂在人事管理目录下"
+        );
+        assert_eq!(time_off_menu.menu_type, 1, "假期管理应是目录菜单");
 
         for (name, component) in [
-            ("HrLeaveType", "#/views/biz/hr/leave/type/index.vue"),
-            ("HrLeaveGrant", "#/views/biz/hr/leave/grant/index.vue"),
-            ("HrLeaveBalance", "#/views/biz/hr/leave/balance/index.vue"),
+            ("HrTimeOffType", "#/views/biz/hr/time-off/type/index.vue"),
+            ("HrTimeOffGrant", "#/views/biz/hr/time-off/grant/index.vue"),
+            (
+                "HrTimeOffBalance",
+                "#/views/biz/hr/time-off/balance/index.vue",
+            ),
         ] {
             let id = find_menu_id_by_name(&db, name).await.unwrap().expect(name);
             let menu = sys_menu::Entity::find_by_id(id)
@@ -2371,24 +2377,36 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(menu.parent_id, leave_id, "{name} 应挂在假期管理目录下");
+            assert_eq!(menu.parent_id, time_off_id, "{name} 应挂在假期管理目录下");
             assert_eq!(menu.menu_type, 2, "{name} 应是页面菜单");
             assert_eq!(menu.component, component);
         }
 
         for (name, parent, permission) in [
-            ("HrLeaveTypeCreate", "HrLeaveType", "hr:leave-type:create"),
-            ("HrLeaveTypeUpdate", "HrLeaveType", "hr:leave-type:update"),
-            ("HrLeaveTypeDelete", "HrLeaveType", "hr:leave-type:delete"),
             (
-                "HrLeaveGrantCreate",
-                "HrLeaveGrant",
-                "hr:leave-grant:create",
+                "HrTimeOffTypeCreate",
+                "HrTimeOffType",
+                "hr:time-off-type:create",
             ),
             (
-                "HrLeaveGrantCancel",
-                "HrLeaveGrant",
-                "hr:leave-grant:cancel",
+                "HrTimeOffTypeUpdate",
+                "HrTimeOffType",
+                "hr:time-off-type:update",
+            ),
+            (
+                "HrTimeOffTypeDelete",
+                "HrTimeOffType",
+                "hr:time-off-type:delete",
+            ),
+            (
+                "HrTimeOffGrantCreate",
+                "HrTimeOffGrant",
+                "hr:time-off-grant:create",
+            ),
+            (
+                "HrTimeOffGrantCancel",
+                "HrTimeOffGrant",
+                "hr:time-off-grant:cancel",
             ),
         ] {
             let id = find_menu_id_by_name(&db, name).await.unwrap().expect(name);
@@ -2406,13 +2424,13 @@ mod tests {
             assert_eq!(button.permission, permission);
         }
 
-        // 发放依据字典：7 项，value 即 hr_leave_grant.reason 的编码
+        // 发放依据字典：7 项，value 即 hr_time_off_grant.reason 的编码
         let reason_dict = sys_dictionary::Entity::find()
-            .filter(sys_dictionary::Column::Type.eq("leaveGrantReason"))
+            .filter(sys_dictionary::Column::Type.eq("timeOffGrantReason"))
             .one(&db)
             .await
             .unwrap()
-            .expect("leaveGrantReason 字典应存在");
+            .expect("timeOffGrantReason 字典应存在");
         let mut reasons = sys_dictionary_detail::Entity::find()
             .filter(sys_dictionary_detail::Column::DictionaryId.eq(reason_dict.id))
             .all(&db)
@@ -2446,8 +2464,8 @@ mod tests {
             ("maternity", "产假", 1, 1, 480, 1, 0),
             ("bereavement", "丧假", 1, 1, 480, 0, 0),
         ] {
-            let rows = hr_leave_type::Entity::find()
-                .filter(hr_leave_type::Column::TypeCode.eq(code))
+            let rows = hr_time_off_type::Entity::find()
+                .filter(hr_time_off_type::Column::TypeCode.eq(code))
                 .all(&db)
                 .await
                 .unwrap();
@@ -2473,7 +2491,7 @@ mod tests {
         assert_eq!(jobs.len(), 1, "过期作废任务应恰好 1 行（幂等）");
         assert_eq!(
             jobs[0].handler_name,
-            crate::task::leave_grant_expire::HANDLER_NAME
+            crate::task::time_off_grant_expire::HANDLER_NAME
         );
     }
 }

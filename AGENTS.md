@@ -86,7 +86,7 @@ CORS 预检 204/403、`file/upload` 走 multipart + `file/download` 与 `site-co
 
 ### 路由装配（`DOMAINS` 登记表）
 `src/modules/mod.rs` 定义 `MountGuard { Public, Protected }`、`DomainMount { path, guard, routers }`、
-`const DOMAINS: &[DomainMount]`（内置 21 行 = 19 个平台档位 + 业务域 `hr/employee` / `hr/leave`，末行为 `hr/leave`）与 `all_domains(extra)`（内置在前、extra 追加）。
+`const DOMAINS: &[DomainMount]`（内置 21 行 = 19 个平台档位 + 业务域 `hr/employee` / `hr/time-off`，末行为 `hr/time-off`）与 `all_domains(extra)`（内置在前、extra 追加）。
 `src/infra/router.rs` 的 `mount_domains` 按表循环：`path` 为 `api/v1` 下的前缀，空串表示出口自带路径；
 `Protected` 行自动获得 `AuthRequired + OperationLog + ApiPermission` 三件套，**不用自己接鉴权**。
 `build(state)` = `build_with(state, &[])`；自定义域集合走 `infra::app::run_with_domains(config, EXTRA)`。
@@ -123,10 +123,12 @@ GitHub 的分支保护只能按 base 分支与状态检查过滤、没有「按�
 - `biz/hr/employee`（员工档案，表 `hr_employee`，端点 `/api/v1/hr/employee/{list,create,update,get,delete}`），
   字典 `employmentStatus` / `education`、菜单与 `API_SEEDS` 均已登记；建档案可勾选同事务创建登录账号
   （必须调 `user::service::create_user_in_tx`，不得调自持 `db.begin()` 的 `create_user`）。
-- `biz/hr/leave`（假期类型 + 额度账本，表 `hr_leave_type` / `hr_leave_grant` / `hr_leave_balance` /
-  `hr_leave_balance_log`，端点 `/api/v1/hr/leave/{leave-type,leave-grant,leave-balance}/*` 共 12 个），
-  字典 `leaveGrantReason`、菜单（`HrLeave` 目录 + 3 页 + 5 个按钮码）、12 条 `API_SEEDS`、定时任务
-  `leave_grant_expire`（每日 01:30 作废过期额度批次）均已登记。额度模型：**授予批次是事实来源**，
+- `biz/hr/time_off`（假期类型 + 额度账本，表 `hr_time_off_type` / `hr_time_off_grant` / `hr_time_off_balance` /
+  `hr_time_off_balance_log`，端点 `/api/v1/hr/time-off/{type,grant,balance}/*` 共 12 个），
+  字典 `timeOffGrantReason`、菜单（`HrTimeOff` 目录 + 3 页 + 5 个按钮码）、12 条 `API_SEEDS`、定时任务
+  `time_off_grant_expire`（每日 01:30 作废过期额度批次）均已登记。
+  **命名注意**：域名叫 `time-off`（Time Off = 假期/请假）；`hr_employee.leave_date` 是**离职日期**（另一个语义），
+  两者不要混读——域改名正是为了消除这个歧义。额度模型：**授予批次是事实来源**，
   聚合账户只做展示与行锁，流水 append-only；扣减走 FEFO + `lock_exclusive()`；账期 = 交易发生日 /
   发放生效日 / 批次 `effective_at` 的自然年。
 
@@ -137,12 +139,12 @@ src/lib.rs, src/main.rs        # 库入口（6 pub mod）/ 进程入口（tracin
 src/modules/mod.rs             # MountGuard / DomainMount / DOMAINS(21) / all_domains
 src/modules/system/<域>/       # 18 个平台域切片：api/service/repo/dto(+validate)
 src/modules/biz/hr/employee/   # 业务域切片（人事域员工档案）
-src/modules/biz/hr/leave/      # 业务域切片（假期类型 + 额度账本：批次/账户/流水 + 批量发放）
+src/modules/biz/hr/time_off/   # 业务域切片（假期类型 + 额度账本：批次/账户/流水 + 批量发放；路径 hr/time-off）
 src/infra/                     # app 启动管线、config、state、router 装配、catcher、seed
 src/middleware/                # InjectState / AuthRequired / OperationLog / ApiPermission / RequestTimeout / Cors
 src/entity/                    # 26 张表的 SeaORM 实体（全局共享，含跨域关系表）+ prelude；全库无物理外键
 src/utils/                     # error、response、request、page、user_ref、jwt、crypt、cache、check、datetime、text、serde_format
-src/task/                      # 定时任务注册表 + 4 个保留期清理任务 + 1 个业务任务（假期额度过期作废）
+src/task/                      # 定时任务注册表 + 4 个保留期清理任务 + 1 个业务任务（假期额度过期作废 = time_off_grant_expire）
 migrations/                    # 独立 crate：baseline + 追加迁移（DDL 事实来源）
 codegen/                       # 独立 crate：defs/*.json → entity + 四件套骨架
 docker/, Dockerfile, docker-compose.yml, .github/workflows/ci.yml
@@ -254,7 +256,7 @@ graphify query / graphify path / graphify explain
 4. **新端点必须登记到 `src/infra/seed.rs` 的 `API_SEEDS`**，否则接口授权对它 fail-open（未登记即放行）
 5. 新表迁移在 `migrations/` **追加**（不改已发布的 baseline，平台表相对顺序不动）
 6. 需要**人字段拼名**（`created_by_name` 之类）→ 在 `src/utils/user_ref.rs` 追加 `impl UserRefIds for <实体>::Model`，
-   并在响应 DTO 上实现 `UserRefNames`（先例：`hr_leave_grant::Model` / `LeaveGrantResp`）
+   并在响应 DTO 上实现 `UserRefNames`（先例：`hr_time_off_grant::Model` / `TimeOffGrantResp`）
 7. 需要**定时任务** → `src/task/<name>.rs` + `src/task/mod.rs` 三处追加（`pub mod` / `handler_defs()` /
    `handlers()`，并把既有守卫测试的断言补一行）+ 在 `seed.rs` 追加 `sys_job` 行（幂等按 `job_name`）
 
@@ -371,11 +373,11 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
 9. **`config.local.toml` 是死配置**：`Config::load` 只读 `config.toml` + `TIDE_*` 环境变量，写它没有任何效果。
 10. **Dockerfile 里 `TZ` 与 `/etc/localtime` 被硬编码**、compose 的 `mysql` 与 `backend` 都假定 `Asia/Shanghai`；
     改动时区要三处一起改。
-11. **账本型表不软删**：`hr_leave_grant` / `hr_leave_balance` / `hr_leave_balance_log` 是额度账本，**没有 `deleted_at`**
-    （作废走 `status` + 反向流水）。给它们加软删会与 `hr_leave_balance` 的 `(employee_id, leave_type_id, period)`
-    唯一键冲突——软删行仍占位，账户重建必然撞键。同理 `hr_leave_balance_log` 是 append-only：无 `updated_at` /
+11. **账本型表不软删**：`hr_time_off_grant` / `hr_time_off_balance` / `hr_time_off_balance_log` 是额度账本，**没有 `deleted_at`**
+    （作废走 `status` + 反向流水）。给它们加软删会与 `hr_time_off_balance` 的 `(employee_id, time_off_type_id, period)`
+    唯一键冲突——软删行仍占位，账户重建必然撞键。同理 `hr_time_off_balance_log` 是 append-only：无 `updated_at` /
     `updated_by`，冲正靠写反向 `delta` 记录，不改历史行。
-12. **额度扣减必须走 FEFO + 行锁**：`hr_leave_grant` 按 `(expire_at IS NULL, expire_at, id)` 取批次，
+12. **额度扣减必须走 FEFO + 行锁**：`hr_time_off_grant` 按 `(expire_at IS NULL, expire_at, id)` 取批次，
     用 `consume_grant_in_tx`（带 `remaining >= minutes` 护栏）；账户与批次「读 → 判断 → 写」前 `lock_exclusive()`。
     账本守恒（`Σ log.delta == granted + adjust − used − locked − expired`、`Σ 未失效批次 remaining == granted − used`）
-    是这两张表唯一的不变式，改动额度逻辑必须重跑 `cargo test --lib hr::leave`。
+    是这两张表唯一的不变式，改动额度逻辑必须重跑 `cargo test --lib hr::time_off`。

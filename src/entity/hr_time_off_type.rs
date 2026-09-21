@@ -3,7 +3,7 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
-#[sea_orm(table_name = "hr_leave_type")]
+#[sea_orm(table_name = "hr_time_off_type")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: u64,

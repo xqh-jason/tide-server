@@ -1,7 +1,7 @@
 //! 创建 HR 假期额度基座 4 张表：假期类型 + 授予批次 + 聚合账户 + 流水。
 //!
 //! - 账本三表（grant / balance / log）**无 `deleted_at`**：额度行不软删，
-//!   作废走 `status` + 反向流水（软删占位会让 `(employee_id, leave_type_id, period)`
+//!   作废走 `status` + 反向流水（软删占位会让 `(employee_id, time_off_type_id, period)`
 //!   唯一键在重建账户时冲突）；
 //! - `employee_id` 指向 `hr_employee.id`（逻辑外键，全库无物理外键）；
 //! - 幂等：逐表探测 `information_schema`，**只为缺失的表建表**（DDL 不在事务里，
@@ -14,13 +14,13 @@ use sea_orm_migration::sea_orm::Statement;
 pub struct Migration;
 
 const TABLES: [&str; 4] = [
-    "hr_leave_type",
-    "hr_leave_grant",
-    "hr_leave_balance",
-    "hr_leave_balance_log",
+    "hr_time_off_type",
+    "hr_time_off_grant",
+    "hr_time_off_balance",
+    "hr_time_off_balance_log",
 ];
 
-const CREATE_LEAVE_TYPE: &str = r#"CREATE TABLE `hr_leave_type` (
+const CREATE_LEAVE_TYPE: &str = r#"CREATE TABLE `hr_time_off_type` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '假期类型主键',
   `type_code` varchar(32) NOT NULL COMMENT '类型编码（单列唯一，含软删占位）',
   `type_name` varchar(64) NOT NULL COMMENT '类型名称',
@@ -38,16 +38,16 @@ const CREATE_LEAVE_TYPE: &str = r#"CREATE TABLE `hr_leave_type` (
   `updated_by` bigint unsigned NOT NULL DEFAULT '0' COMMENT '更新人 ID',
   `deleted_at` datetime DEFAULT NULL COMMENT '软删除时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_hr_leave_type_code` (`type_code`),
-  KEY `idx_hr_leave_type_deleted_status` (`deleted_at`, `status`)
+  UNIQUE KEY `uk_hr_time_off_type_code` (`type_code`),
+  KEY `idx_hr_time_off_type_deleted_status` (`deleted_at`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='假期类型（带规则的业务主表，不进字典）'"#;
 
-const CREATE_LEAVE_GRANT: &str = r#"CREATE TABLE `hr_leave_grant` (
+const CREATE_LEAVE_GRANT: &str = r#"CREATE TABLE `hr_time_off_grant` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '额度授予批次主键',
   `employee_id` bigint unsigned NOT NULL COMMENT '员工档案 ID（hr_employee.id）',
-  `leave_type_id` bigint unsigned NOT NULL COMMENT '假期类型 ID',
+  `time_off_type_id` bigint unsigned NOT NULL COMMENT '假期类型 ID',
   `source` tinyint NOT NULL COMMENT '来源：1 发放 2 手工调整 3 加班转调休',
-  `reason` varchar(32) NOT NULL DEFAULT '' COMMENT '发放依据（字典 leaveGrantReason）',
+  `reason` varchar(32) NOT NULL DEFAULT '' COMMENT '发放依据（字典 timeOffGrantReason）',
   `period` varchar(16) NOT NULL DEFAULT '' COMMENT '归属周期（如 2026）',
   `minutes` int NOT NULL COMMENT '授予分钟数（恒正）',
   `remaining_minutes` int NOT NULL COMMENT '剩余可用分钟数',
@@ -60,14 +60,14 @@ const CREATE_LEAVE_GRANT: &str = r#"CREATE TABLE `hr_leave_grant` (
   `created_by` bigint unsigned NOT NULL DEFAULT '0' COMMENT '创建人 ID',
   `updated_by` bigint unsigned NOT NULL DEFAULT '0' COMMENT '更新人 ID',
   PRIMARY KEY (`id`),
-  KEY `idx_hr_leave_grant_fefo` (`employee_id`, `leave_type_id`, `status`, `expire_at`),
-  KEY `idx_hr_leave_grant_idempotent` (`employee_id`, `leave_type_id`, `reason`, `period`)
+  KEY `idx_hr_time_off_grant_fefo` (`employee_id`, `time_off_type_id`, `status`, `expire_at`),
+  KEY `idx_hr_time_off_grant_idempotent` (`employee_id`, `time_off_type_id`, `reason`, `period`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='额度授予批次（账本事实来源，不软删）'"#;
 
-const CREATE_LEAVE_BALANCE: &str = r#"CREATE TABLE `hr_leave_balance` (
+const CREATE_LEAVE_BALANCE: &str = r#"CREATE TABLE `hr_time_off_balance` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '额度账户（聚合行）',
   `employee_id` bigint unsigned NOT NULL COMMENT '员工档案 ID（hr_employee.id）',
-  `leave_type_id` bigint unsigned NOT NULL COMMENT '假期类型 ID',
+  `time_off_type_id` bigint unsigned NOT NULL COMMENT '假期类型 ID',
   `period` varchar(16) NOT NULL COMMENT '账期（自然年，如 2026）',
   `granted_minutes` int NOT NULL DEFAULT '0' COMMENT '累计授予',
   `used_minutes` int NOT NULL DEFAULT '0' COMMENT '累计实扣',
@@ -79,15 +79,15 @@ const CREATE_LEAVE_BALANCE: &str = r#"CREATE TABLE `hr_leave_balance` (
   `created_by` bigint unsigned NOT NULL DEFAULT '0' COMMENT '创建人 ID',
   `updated_by` bigint unsigned NOT NULL DEFAULT '0' COMMENT '更新人 ID',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_hr_leave_balance_account` (`employee_id`, `leave_type_id`, `period`),
-  KEY `idx_hr_leave_balance_type` (`leave_type_id`, `period`)
+  UNIQUE KEY `uk_hr_time_off_balance_account` (`employee_id`, `time_off_type_id`, `period`),
+  KEY `idx_hr_time_off_balance_type` (`time_off_type_id`, `period`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='额度账户聚合行（展示与扣减加锁）'"#;
 
-const CREATE_LEAVE_BALANCE_LOG: &str = r#"CREATE TABLE `hr_leave_balance_log` (
+const CREATE_LEAVE_BALANCE_LOG: &str = r#"CREATE TABLE `hr_time_off_balance_log` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '额度流水（append-only，无软删）',
   `balance_id` bigint unsigned NOT NULL COMMENT '账户 ID',
   `employee_id` bigint unsigned NOT NULL COMMENT '员工档案 ID（冗余，便于按人查询）',
-  `leave_type_id` bigint unsigned NOT NULL COMMENT '假期类型 ID',
+  `time_off_type_id` bigint unsigned NOT NULL COMMENT '假期类型 ID',
   `grant_id` bigint unsigned NOT NULL DEFAULT '0' COMMENT '授予批次 ID；0=账户级操作',
   `biz_type` tinyint NOT NULL COMMENT '1 授予 2 手工调整 3 请假预占 4 审批实扣 5 驳回释放 6 过期作废',
   `delta_minutes` int NOT NULL COMMENT '变动分钟数（正加负减）',
@@ -99,8 +99,8 @@ const CREATE_LEAVE_BALANCE_LOG: &str = r#"CREATE TABLE `hr_leave_balance_log` (
   `remark` varchar(255) NOT NULL DEFAULT '' COMMENT '备注',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (`id`),
-  KEY `idx_hr_leave_balance_log_account` (`balance_id`, `id`),
-  KEY `idx_hr_leave_balance_log_employee` (`employee_id`, `leave_type_id`, `id`)
+  KEY `idx_hr_time_off_balance_log_account` (`balance_id`, `id`),
+  KEY `idx_hr_time_off_balance_log_employee` (`employee_id`, `time_off_type_id`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='额度流水（append-only：冲正靠反向记录，不改历史行）'"#;
 
 #[async_trait::async_trait]
@@ -109,10 +109,10 @@ impl MigrationTrait for Migration {
         let conn = manager.get_connection();
         // 自愈式幂等：缺表即补、不缺即跳（DDL 不在事务里，中途失败后重跑必须能补齐剩余表）
         for (table, ddl) in [
-            ("hr_leave_type", CREATE_LEAVE_TYPE),
-            ("hr_leave_grant", CREATE_LEAVE_GRANT),
-            ("hr_leave_balance", CREATE_LEAVE_BALANCE),
-            ("hr_leave_balance_log", CREATE_LEAVE_BALANCE_LOG),
+            ("hr_time_off_type", CREATE_LEAVE_TYPE),
+            ("hr_time_off_grant", CREATE_LEAVE_GRANT),
+            ("hr_time_off_balance", CREATE_LEAVE_BALANCE),
+            ("hr_time_off_balance_log", CREATE_LEAVE_BALANCE_LOG),
         ] {
             if !table_exists(conn, manager.get_database_backend(), table).await? {
                 conn.execute_unprepared(ddl).await?;

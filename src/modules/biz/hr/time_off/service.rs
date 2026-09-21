@@ -12,10 +12,10 @@
 //!   批次级并发护栏在 `repo::consume_grant_in_tx` 的 `remaining_minutes >= minutes` 条件里；
 //! - 账户账期（`period`）口径见下文「账户账期」一节——一个账户 = 一个自然年的额度桶。
 //!
-//! # 账本口径（`hr_leave_balance_log.delta_minutes`）
+//! # 账本口径（`hr_time_off_balance_log.delta_minutes`）
 //!
 //! `delta_minutes` 恒等于该动作对**可用余额**的影响（= `after_minutes − before_minutes`），
-//! 与 `hr_leave_balance_log` 的 `before_minutes` / `after_minutes` 列注释同构：
+//! 与 `hr_time_off_balance_log` 的 `before_minutes` / `after_minutes` 列注释同构：
 //!
 //! | biz_type | delta | 账户字段变化 | 可用余额变化 |
 //! |---|---|---|---|
@@ -29,10 +29,10 @@
 //! 因此「流水净额 == 账户净额」的不变式 A 对任意操作序列都成立；实扣写 0 而非 `−m`，
 //! 是为了不与预占的 `−m` 重复计数（预占已经扣过可用）。
 //!
-//! # 账户账期（`hr_leave_balance.period`）
+//! # 账户账期（`hr_time_off_balance.period`）
 //!
 //! 账户账期 = **交易发生日 / 发放生效日的自然年**：
-//! - `grant_leave_in_tx` 取 `effective_at` 的自然年——`hr_leave_grant.period` 只是**归属标记**
+//! - `grant_time_off_in_tx` 取 `effective_at` 的自然年——`hr_time_off_grant.period` 只是**归属标记**
 //!   （幂等键与展示用），**不决定账户**；
 //! - `lock` / `consume` / `release` 取各自 `on_date` 的自然年；`expire` 取批次
 //!   `effective_at` 的自然年——必须与它发放时入账的账户同桶（作废若落到 `today`
@@ -51,7 +51,7 @@
 //! 记录型假别（只记录不扣额度，如种子里的 `personal` 事假 / `sick` 病假）**没有额度概念**：
 //! - 调用方（P2 请假 service）在提交时读假别 `balance_mode`，为 `BALANCE_MODE_RECORD_ONLY`
 //!   时整条额度链路跳过——不 lock / 不 consume / 不 release / 不写流水；
-//! - 原语本层保留**防御性 no-op**：[`lock_leave_in_tx`] / [`consume_locked_in_tx`] /
+//! - 原语本层保留**防御性 no-op**：[`lock_time_off_in_tx`] / [`consume_locked_in_tx`] /
 //!   [`release_locked_in_tx`] 读到 `balance_mode = 0` 直接 `Ok(())`（不建账户、不写流水），
 //!   [`available_minutes`] 返回 `Ok(0)`。
 //!
@@ -62,10 +62,12 @@ use std::collections::HashMap;
 use sea_orm::DatabaseTransaction;
 use sea_orm::entity::prelude::*;
 
-use crate::entity::{hr_leave_balance, hr_leave_balance_log, hr_leave_grant, hr_leave_type};
-use crate::modules::biz::hr::leave::dto::{
-    BatchCreateGrantReq, BatchCreateGrantResp, CreateLeaveTypeReq, LeaveBalanceListReq,
-    LeaveBalanceLogListReq, LeaveGrantListReq, LeaveTypeListReq, UpdateLeaveTypeReq,
+use crate::entity::{
+    hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
+};
+use crate::modules::biz::hr::time_off::dto::{
+    BatchCreateGrantReq, BatchCreateGrantResp, CreateTimeOffTypeReq, TimeOffBalanceListReq,
+    TimeOffBalanceLogListReq, TimeOffGrantListReq, TimeOffTypeListReq, UpdateTimeOffTypeReq,
 };
 use crate::utils::PageData;
 use crate::utils::error::AppError;
@@ -75,7 +77,7 @@ use crate::utils::error::AppError;
 /// 发放额度：幂等键（员工 × 假别 × 依据 × 周期）命中即复用，否则建批次 + 记账户 + 写流水。
 ///
 /// 返回批次 ID。调用方（[`batch_create_grants_in_tx`] / P2 请假 / P4 加班）负责事务边界。
-// 实现提示：① 幂等探测 `repo::find_grant_by_idempotent_key(txn, employee_id, leave_type_id, reason, period)`，
+// 实现提示：① 幂等探测 `repo::find_grant_by_idempotent_key(txn, employee_id, time_off_type_id, reason, period)`，
 // 命中直接返回其 `id`（不重复累加任何账户字段）；② 账户加锁读
 // `repo::find_balance_by_account_for_update`，账期取 `effective_at` 的自然年
 // （`format!("{}", effective_at.year())`，需 `use chrono::Datelike`），为 `None` 则
@@ -90,11 +92,11 @@ use crate::utils::error::AppError;
 #[cfg_attr(not(test), allow(dead_code))]
 // 成对原语的入参集合固定；拆参数结构体会让跨域调用方多一层构造，收益不足
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn grant_leave_in_tx(
+pub(crate) async fn grant_time_off_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
     employee_id: u64,
-    leave_type_id: u64,
+    time_off_type_id: u64,
     minutes: i32,
     source: i8,
     reason: &str,
@@ -106,7 +108,7 @@ pub(crate) async fn grant_leave_in_tx(
         txn,
         actor_id,
         employee_id,
-        leave_type_id,
+        time_off_type_id,
         minutes,
         source,
         reason,
@@ -114,50 +116,50 @@ pub(crate) async fn grant_leave_in_tx(
         effective_at,
         expire_at,
     );
-    Err(AppError::Biz("未实现：grant_leave_in_tx".into()))
+    Err(AppError::Biz("未实现：grant_time_off_in_tx".into()))
 }
 
 /// 预占额度（审批中）：账户 `locked_minutes += minutes`，可用不足且假别 `allow_negative = 0` 时拒绝。
 ///
 /// 预占只动 `locked`，**不**动 `used`——实扣在审批通过时由 [`consume_locked_in_tx`] 完成。
-// 实现提示：⓪ 先读假别 `repo::find_leave_type_by_id(txn, leave_type_id)` 取 `balance_mode` 与
+// 实现提示：⓪ 先读假别 `repo::find_time_off_type_by_id(txn, time_off_type_id)` 取 `balance_mode` 与
 // `allow_negative`：`BALANCE_MODE_RECORD_ONLY` → 直接 `Ok(())`（记录型假别无额度概念，
 // 防御性 no-op，见文件头「记录型假别」）；① 账户加锁读
-// `repo::find_balance_by_account_for_update(txn, employee_id, leave_type_id, period)`，账期取
+// `repo::find_balance_by_account_for_update(txn, employee_id, time_off_type_id, period)`，账期取
 // `on_date` 的自然年；`None` → `AppError::Biz("额度账户不存在，请先发放额度")`；
 // ② 账户加锁读后即可用（`allow_negative` 已在 ⓪ 取到）；
 // ③ `available = granted + adjust − used − locked − expired`；`available < minutes` 且
 // `allow_negative == 0` → `AppError::Biz(format!("额度不足：可用 {available} 分钟，本次需要 {minutes} 分钟"))`
 // （`allow_negative == 1` 放行，允许负余额）；④ 账户 `locked_minutes += minutes` →
-// `repo::update_balance_in_tx`；⑤ 写流水：`biz_type = LOG_BIZ_LEAVE_LOCK`、`delta = −minutes`
+// `repo::update_balance_in_tx`；⑤ 写流水：`biz_type = LOG_BIZ_TIME_OFF_LOCK`、`delta = −minutes`
 // （预占把可用锁住，见文件头账本口径）、`grant_id = 0`（账户级动作）、`source_kind = 0` /
 // `source_id = 0`（本签名不带来源单据，P2 接入请假单后由调用方补）。
 // 骨架期：仅测试调用，实现函数体后删除本属性
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) async fn lock_leave_in_tx(
+pub(crate) async fn lock_time_off_in_tx(
     txn: &DatabaseTransaction,
     employee_id: u64,
-    leave_type_id: u64,
+    time_off_type_id: u64,
     minutes: i32,
     on_date: Date,
 ) -> Result<(), AppError> {
-    let _ = (txn, employee_id, leave_type_id, minutes, on_date);
-    Err(AppError::Biz("未实现：lock_leave_in_tx".into()))
+    let _ = (txn, employee_id, time_off_type_id, minutes, on_date);
+    Err(AppError::Biz("未实现：lock_time_off_in_tx".into()))
 }
 
 /// 实扣（审批通过）：FEFO 扣批次剩余，账户 `locked -= minutes`、`used += minutes`，可用不变。
 ///
 /// 批次归属：每个被扣的批次写一条流水（`grant_id` 指向它），供「这笔假扣的是哪个批次」追溯。
-// 实现提示：⓪ 读假别 `repo::find_leave_type_by_id(txn, leave_type_id)`：`balance_mode` 为
+// 实现提示：⓪ 读假别 `repo::find_time_off_type_by_id(txn, time_off_type_id)`：`balance_mode` 为
 // `BALANCE_MODE_RECORD_ONLY` → 直接 `Ok(())`（记录型假别无额度概念，防御性 no-op）；
-// ① `repo::find_active_grants_for_update(txn, employee_id, leave_type_id, on_date)` FEFO 加锁读；
+// ① `repo::find_active_grants_for_update(txn, employee_id, time_off_type_id, on_date)` FEFO 加锁读；
 // ② 账户加锁读（账期取 `on_date` 的自然年）——`locked_minutes -= minutes`、`used_minutes += minutes`，
 // 变动前后**可用值相同**；③ 循环扣批次：`take = min(剩余待扣, batch.remaining_minutes)` →
 // `repo::consume_grant_in_tx(txn, batch.id, take, actor_id)`（返回 `false` 说明并发下批次已被扣空，
 // 重新取批次或直接报错）；扣不满 `minutes` → `AppError::Biz("额度批次不足，请检查账本一致性")`；
 // ④ 每个被扣批次：`remaining_minutes == 0` 时
 // `repo::set_grant_status_in_tx(txn, batch.id, GRANT_STATUS_EXHAUSTED, actor_id)`，
-// 并写一条流水：`biz_type = LOG_BIZ_LEAVE_CONSUME`、`delta = 0`（locked→used，可用不变，
+// 并写一条流水：`biz_type = LOG_BIZ_TIME_OFF_CONSUME`、`delta = 0`（locked→used，可用不变，
 // 见文件头账本口径）、`grant_id = batch.id`、`source_kind` / `source_id` 原样入来源列；
 // ⑤ `grant_id` 之外的 `operator_id` 传 0（系统动作），P2 接入请假单后可改为审批人。
 // 骨架期：仅测试调用，实现函数体后删除本属性
@@ -165,7 +167,7 @@ pub(crate) async fn lock_leave_in_tx(
 pub(crate) async fn consume_locked_in_tx(
     txn: &DatabaseTransaction,
     employee_id: u64,
-    leave_type_id: u64,
+    time_off_type_id: u64,
     minutes: i32,
     source_kind: i8,
     source_id: u64,
@@ -174,7 +176,7 @@ pub(crate) async fn consume_locked_in_tx(
     let _ = (
         txn,
         employee_id,
-        leave_type_id,
+        time_off_type_id,
         minutes,
         source_kind,
         source_id,
@@ -184,19 +186,19 @@ pub(crate) async fn consume_locked_in_tx(
 }
 
 /// 释放预占（审批驳回 / 撤销）：账户 `locked -= minutes`，可用恢复，流水正向记恢复量。
-// 实现提示：⓪ 读假别 `repo::find_leave_type_by_id(txn, leave_type_id)`：`balance_mode` 为
+// 实现提示：⓪ 读假别 `repo::find_time_off_type_by_id(txn, time_off_type_id)`：`balance_mode` 为
 // `BALANCE_MODE_RECORD_ONLY` → 直接 `Ok(())`（记录型假别无额度概念，防御性 no-op）；
-// ① 账户加锁读 `repo::find_balance_by_account_for_update(txn, employee_id, leave_type_id, period)`，
+// ① 账户加锁读 `repo::find_balance_by_account_for_update(txn, employee_id, time_off_type_id, period)`，
 // 账期取 `on_date` 的自然年（`format!("{}", on_date.year())`）；`None` →
 // `AppError::Biz("额度账户不存在，请先发放额度")`；② 账户 `locked_minutes -= minutes` →
-// `repo::update_balance_in_tx`；③ 写流水：`biz_type = LOG_BIZ_LEAVE_RELEASE`、`delta = +minutes`
+// `repo::update_balance_in_tx`；③ 写流水：`biz_type = LOG_BIZ_TIME_OFF_RELEASE`、`delta = +minutes`
 // （可用恢复，见文件头账本口径）、`grant_id = 0`（账户级）、`source_kind` / `source_id` 原样入来源列。
 // 骨架期：仅测试调用，实现函数体后删除本属性
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn release_locked_in_tx(
     txn: &DatabaseTransaction,
     employee_id: u64,
-    leave_type_id: u64,
+    time_off_type_id: u64,
     minutes: i32,
     source_kind: i8,
     source_id: u64,
@@ -205,7 +207,7 @@ pub(crate) async fn release_locked_in_tx(
     let _ = (
         txn,
         employee_id,
-        leave_type_id,
+        time_off_type_id,
         minutes,
         source_kind,
         source_id,
@@ -241,8 +243,8 @@ pub(crate) async fn expire_grants_in_tx(
 /// `period` 为账期（自然年字符串，调用方按「单据发生日」解析）。返回 `i64`：账户各列是 `i32`，
 /// 相减可能越界，聚合口径一律升位到 `i64`。
 // 实现提示：① 本签名收 `&DatabaseTransaction`，与加锁读原语同型，直接复用
-// `repo::find_balance_by_account_for_update(txn, employee_id, leave_type_id, period)`（无需新 SQL）；
-// ② 账户 `None` 视为 0（未发放即无可用量）；③ 读假别 `repo::find_leave_type_by_id`：
+// `repo::find_balance_by_account_for_update(txn, employee_id, time_off_type_id, period)`（无需新 SQL）；
+// ② 账户 `None` 视为 0（未发放即无可用量）；③ 读假别 `repo::find_time_off_type_by_id`：
 // `balance_mode = BALANCE_MODE_RECORD_ONLY` → 返回 `Ok(0)`，并**加注释**
 // 「记录型假别无额度概念，调用方不应据此判定可否请假」（见文件头「记录型假别」）；
 // ④ `on_date` 当前不参与计算（签名保留，供后续「按有效期折算可用」口径），
@@ -252,17 +254,17 @@ pub(crate) async fn expire_grants_in_tx(
 pub(crate) async fn available_minutes(
     txn: &DatabaseTransaction,
     employee_id: u64,
-    leave_type_id: u64,
+    time_off_type_id: u64,
     period: &str,
     on_date: Date,
 ) -> Result<i64, AppError> {
-    let _ = (txn, employee_id, leave_type_id, period, on_date);
+    let _ = (txn, employee_id, time_off_type_id, period, on_date);
     Err(AppError::Biz("未实现：available_minutes".into()))
 }
 
 // —— 批量发放（service 编排：范围解析 + 逐人发放；测试要在 test_txn 里跑，故提供 _in_tx 变体）——
 
-/// 批量发放额度（事务内实现）：范围解析 → 逐人调用 [`grant_leave_in_tx`]。
+/// 批量发放额度（事务内实现）：范围解析 → 逐人调用 [`grant_time_off_in_tx`]。
 ///
 /// 幂等：命中「员工 × 假别 × 依据 × 周期」的人计入 `skipped` 并记入 `skipped_employee_ids`
 /// （**保持入参顺序**），供前端提示哪些人本周期已发放。
@@ -272,8 +274,8 @@ pub(crate) async fn available_minutes(
 // 否则直接用 `req.employee_ids`（去重后按入参顺序处理）；② 解析 `req.effective_at` /
 // `req.expire_at`（`chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")`，失败 →
 // `AppError::Biz(format!("日期格式不正确：{s}"))`）；③ 逐人先
-// `repo::find_grant_by_idempotent_key(txn, emp, req.leave_type_id, &req.reason, &req.period)` 探测：
-// 已存在 → `skipped += 1` + 记入 `skipped_employee_ids`；不存在 → `grant_leave_in_tx(...)` 后
+// `repo::find_grant_by_idempotent_key(txn, emp, req.time_off_type_id, &req.reason, &req.period)` 探测：
+// 已存在 → `skipped += 1` + 记入 `skipped_employee_ids`；不存在 → `grant_time_off_in_tx(...)` 后
 // `created += 1`；④ 返回 `BatchCreateGrantResp`。
 // 骨架期：仅测试调用，实现函数体后删除本属性
 #[cfg_attr(not(test), allow(dead_code))]
@@ -308,102 +310,102 @@ pub(crate) async fn fill_employee_names(
     Err(AppError::Biz("未实现：fill_employee_names".into()))
 }
 
-/// 批量取假期类型名：`hr_leave_type.id` → `type_name`（单表批量查，排除软删行）。
-// 实现提示：① 空入参返回空 map；② `repo::find_leave_types_by_ids(db, ids)` 单表批量查
+/// 批量取假期类型名：`hr_time_off_type.id` → `type_name`（单表批量查，排除软删行）。
+// 实现提示：① 空入参返回空 map；② `repo::find_time_off_types_by_ids(db, ids)` 单表批量查
 // （已按 `DeletedAt.is_null()` 排除软删；repo 是唯一数据访问层，本域不另写 SQL）；
 // ③ 回填 `id → type_name`；软删行不出现，调用方留空串。
 // 骨架期：任务 4 的 api 层接入后删除本属性
 #[allow(dead_code)]
-pub(crate) async fn fill_leave_type_names(
+pub(crate) async fn fill_time_off_type_names(
     db: &impl ConnectionTrait,
-    leave_type_ids: &[u64],
+    time_off_type_ids: &[u64],
 ) -> Result<HashMap<u64, String>, AppError> {
-    let _ = (db, leave_type_ids);
-    Err(AppError::Biz("未实现：fill_leave_type_names".into()))
+    let _ = (db, time_off_type_ids);
+    Err(AppError::Biz("未实现：fill_time_off_type_names".into()))
 }
 
 // —— 资源 CRUD：只读入口直连 db，自持事务的写入口走「三行事务」——
 
 /// 假期类型分页：请求参数组装为 repo 过滤条件后透传（keyword 同时模糊编码与名称）。
-// 实现提示：`repo::find_leave_type_page(db, &LeaveTypeFilter { keyword: req.keyword.clone(),
+// 实现提示：`repo::find_time_off_type_page(db, &TimeOffTypeFilter { keyword: req.keyword.clone(),
 // status: req.status }, req.page.page_index(), req.page.page_size())`；`*_by_name` 由 api 层经
 // `utils::user_ref::fill_user_names` 拼装，本层只回 `Model`。
-pub async fn page_leave_types(
+pub async fn page_time_off_types(
     db: &impl ConnectionTrait,
-    req: &LeaveTypeListReq,
-) -> Result<PageData<hr_leave_type::Model>, AppError> {
+    req: &TimeOffTypeListReq,
+) -> Result<PageData<hr_time_off_type::Model>, AppError> {
     let _ = (db, req);
-    Err(AppError::Biz("未实现：page_leave_types".into()))
+    Err(AppError::Biz("未实现：page_time_off_types".into()))
 }
 
 /// 创建假期类型（对外入口）：三行事务，成功后提交。
 // 实现提示：`let txn = db.begin().await?;` → ① 编码查重
-// `repo::find_leave_type_by_code_include_deleted(&txn, &req.type_code)` 命中即
+// `repo::find_time_off_type_by_code_include_deleted(&txn, &req.type_code)` 命中即
 // `AppError::Biz(format!("类型编码已存在：{}", req.type_code))`（软删行仍占唯一键，必须查含软删）；
-// ② 组装 `hr_leave_type::ActiveModel`（业务列全量 Set）→
-// `repo::create_leave_type_in_tx(&txn, model, actor_id)`；③ `txn.commit().await?`
+// ② 组装 `hr_time_off_type::ActiveModel`（业务列全量 Set）→
+// `repo::create_time_off_type_in_tx(&txn, model, actor_id)`；③ `txn.commit().await?`
 // （`?` 冒泡时事务 Drop 自动回滚，无需显式 rollback）；返回值原样回传。
-pub async fn create_leave_type(
+pub async fn create_time_off_type(
     db: &DatabaseConnection,
     actor_id: u64,
-    req: CreateLeaveTypeReq,
-) -> Result<hr_leave_type::Model, AppError> {
+    req: CreateTimeOffTypeReq,
+) -> Result<hr_time_off_type::Model, AppError> {
     let _ = (db, actor_id, req);
-    Err(AppError::Biz("未实现：create_leave_type".into()))
+    Err(AppError::Biz("未实现：create_time_off_type".into()))
 }
 
 /// 更新假期类型（对外入口）：三行事务，成功后提交。
-// 实现提示：① `repo::find_leave_type_by_id(&txn, req.id)` 判存在（软删视为不存在，
+// 实现提示：① `repo::find_time_off_type_by_id(&txn, req.id)` 判存在（软删视为不存在，
 // 不存在 → `AppError::Biz(format!("假期类型不存在：{}", req.id))`）；② 编码查重**排除自身**
-// （`find_leave_type_by_code_include_deleted` 命中且 `id != req.id` 才报「类型编码已存在」）；
-// ③ `repo::update_leave_type_in_tx(&txn, ActiveModel { id: Set(req.id), ..业务列 Set }, actor_id)`
+// （`find_time_off_type_by_code_include_deleted` 命中且 `id != req.id` 才报「类型编码已存在」）；
+// ③ `repo::update_time_off_type_in_tx(&txn, ActiveModel { id: Set(req.id), ..业务列 Set }, actor_id)`
 // （窄写，`created_by` 保持 NotSet）；④ commit。
-pub async fn update_leave_type(
+pub async fn update_time_off_type(
     db: &DatabaseConnection,
     actor_id: u64,
-    req: &UpdateLeaveTypeReq,
-) -> Result<hr_leave_type::Model, AppError> {
+    req: &UpdateTimeOffTypeReq,
+) -> Result<hr_time_off_type::Model, AppError> {
     let _ = (db, actor_id, req);
-    Err(AppError::Biz("未实现：update_leave_type".into()))
+    Err(AppError::Biz("未实现：update_time_off_type".into()))
 }
 
 /// 按 id 查假期类型详情（软删视为不存在）。
-// 实现提示：`repo::find_leave_type_by_id(db, id)` → `None` 即
+// 实现提示：`repo::find_time_off_type_by_id(db, id)` → `None` 即
 // `AppError::Biz(format!("假期类型不存在：{id}"))`；人名由 api 层经 `fill_user_names` 拼装。
-pub async fn get_leave_type(
+pub async fn get_time_off_type(
     db: &impl ConnectionTrait,
     id: u64,
-) -> Result<hr_leave_type::Model, AppError> {
+) -> Result<hr_time_off_type::Model, AppError> {
     let _ = (db, id);
-    Err(AppError::Biz("未实现：get_leave_type".into()))
+    Err(AppError::Biz("未实现：get_time_off_type".into()))
 }
 
 /// 删除假期类型（对外入口）：软删，三行事务，成功后提交。
 // 实现提示：① 引用检查（是否已有批次挂在该假别上）——建议 `repo::find_grant_page(&txn,
-// &LeaveGrantFilter { leave_type_id: Some(id), ..Default::default() }, 0, 1)` 非空即
+// &TimeOffGrantFilter { time_off_type_id: Some(id), ..Default::default() }, 0, 1)` 非空即
 // `AppError::Biz("该假期类型已有额度批次，不能删除")`（口径由产品定，也可改为允许删除）；
-// ② `repo::soft_delete_leave_type_in_tx(&txn, id, actor_id)` 返回 `false`（不存在 / 已软删）即
+// ② `repo::soft_delete_time_off_type_in_tx(&txn, id, actor_id)` 返回 `false`（不存在 / 已软删）即
 // `AppError::Biz(format!("假期类型不存在：{id}"))`；③ commit。
-pub async fn delete_leave_type(
+pub async fn delete_time_off_type(
     db: &DatabaseConnection,
     actor_id: u64,
     id: u64,
 ) -> Result<(), AppError> {
     let _ = (db, actor_id, id);
-    Err(AppError::Biz("未实现：delete_leave_type".into()))
+    Err(AppError::Biz("未实现：delete_time_off_type".into()))
 }
 
 /// 额度批次分页：请求参数组装为 repo 过滤条件后透传。
-// 实现提示：`repo::find_grant_page(db, &LeaveGrantFilter { employee_id: req.employee_id,
-// leave_type_id: req.leave_type_id, reason: req.reason.clone(), period: req.period.clone(),
+// 实现提示：`repo::find_grant_page(db, &TimeOffGrantFilter { employee_id: req.employee_id,
+// time_off_type_id: req.time_off_type_id, reason: req.reason.clone(), period: req.period.clone(),
 // status: req.status }, req.page.page_index(), req.page.page_size())`；`employee_name` /
-// `leave_type_name` 由 api 层经 [`fill_employee_names`] / [`fill_leave_type_names`] 批量回填。
-pub async fn page_leave_grants(
+// `time_off_type_name` 由 api 层经 [`fill_employee_names`] / [`fill_time_off_type_names`] 批量回填。
+pub async fn page_time_off_grants(
     db: &impl ConnectionTrait,
-    req: &LeaveGrantListReq,
-) -> Result<PageData<hr_leave_grant::Model>, AppError> {
+    req: &TimeOffGrantListReq,
+) -> Result<PageData<hr_time_off_grant::Model>, AppError> {
     let _ = (db, req);
-    Err(AppError::Biz("未实现：page_leave_grants".into()))
+    Err(AppError::Biz("未实现：page_time_off_grants".into()))
 }
 
 /// 批量发放额度（对外入口）：三行事务，成功后提交。
@@ -421,12 +423,12 @@ pub async fn batch_create_grants(
 /// 按 id 查额度批次详情。
 // 实现提示：`repo::find_grant_by_id(db, id)` → `None` 即
 // `AppError::Biz(format!("额度批次不存在：{id}"))`；人名回填同上。
-pub async fn get_leave_grant(
+pub async fn get_time_off_grant(
     db: &impl ConnectionTrait,
     id: u64,
-) -> Result<hr_leave_grant::Model, AppError> {
+) -> Result<hr_time_off_grant::Model, AppError> {
     let _ = (db, id);
-    Err(AppError::Biz("未实现：get_leave_grant".into()))
+    Err(AppError::Biz("未实现：get_time_off_grant".into()))
 }
 
 /// 撤销额度批次（对外入口）：三行事务，成功后提交。
@@ -443,50 +445,50 @@ pub async fn cancel_grant(db: &DatabaseConnection, actor_id: u64, id: u64) -> Re
 }
 
 /// 额度账户分页：请求参数组装为 repo 过滤条件后透传。
-// 实现提示：`repo::find_balance_page(db, &LeaveBalanceFilter { employee_id: req.employee_id,
-// leave_type_id: req.leave_type_id, period: req.period.clone() }, req.page.page_index(),
-// req.page.page_size())`；人名由 api 层经 [`fill_employee_names`] / [`fill_leave_type_names`] 回填。
-pub async fn page_leave_balances(
+// 实现提示：`repo::find_balance_page(db, &TimeOffBalanceFilter { employee_id: req.employee_id,
+// time_off_type_id: req.time_off_type_id, period: req.period.clone() }, req.page.page_index(),
+// req.page.page_size())`；人名由 api 层经 [`fill_employee_names`] / [`fill_time_off_type_names`] 回填。
+pub async fn page_time_off_balances(
     db: &impl ConnectionTrait,
-    req: &LeaveBalanceListReq,
-) -> Result<PageData<hr_leave_balance::Model>, AppError> {
+    req: &TimeOffBalanceListReq,
+) -> Result<PageData<hr_time_off_balance::Model>, AppError> {
     let _ = (db, req);
-    Err(AppError::Biz("未实现：page_leave_balances".into()))
+    Err(AppError::Biz("未实现：page_time_off_balances".into()))
 }
 
 /// 按 id 查额度账户详情。
 // 实现提示：`repo::find_balance_by_id(db, id)` → `None` 即
 // `AppError::Biz(format!("额度账户不存在：{id}"))`；人名回填同上。
-pub async fn get_leave_balance(
+pub async fn get_time_off_balance(
     db: &impl ConnectionTrait,
     id: u64,
-) -> Result<hr_leave_balance::Model, AppError> {
+) -> Result<hr_time_off_balance::Model, AppError> {
     let _ = (db, id);
-    Err(AppError::Biz("未实现：get_leave_balance".into()))
+    Err(AppError::Biz("未实现：get_time_off_balance".into()))
 }
 
 /// 额度流水分页：请求参数组装为 repo 过滤条件后透传（append-only 对账凭据）。
-// 实现提示：`repo::find_balance_log_page(db, &LeaveBalanceLogFilter { employee_id: req.employee_id,
-// leave_type_id: req.leave_type_id, biz_type: req.biz_type }, req.page.page_index(),
-// req.page.page_size())`；`employee_name` / `leave_type_name` / `operator_name` 由 api 层回填
+// 实现提示：`repo::find_balance_log_page(db, &TimeOffBalanceLogFilter { employee_id: req.employee_id,
+// time_off_type_id: req.time_off_type_id, biz_type: req.biz_type }, req.page.page_index(),
+// req.page.page_size())`；`employee_name` / `time_off_type_name` / `operator_name` 由 api 层回填
 // （`operator_name` 走 `utils::user_ref` 唯一管道）。
-pub async fn page_leave_balance_logs(
+pub async fn page_time_off_balance_logs(
     db: &impl ConnectionTrait,
-    req: &LeaveBalanceLogListReq,
-) -> Result<PageData<hr_leave_balance_log::Model>, AppError> {
+    req: &TimeOffBalanceLogListReq,
+) -> Result<PageData<hr_time_off_balance_log::Model>, AppError> {
     let _ = (db, req);
-    Err(AppError::Biz("未实现：page_leave_balance_logs".into()))
+    Err(AppError::Biz("未实现：page_time_off_balance_logs".into()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::entity::hr_employee;
-    use crate::modules::biz::hr::leave::dto::{BatchCreateGrantReq, LeaveBalanceLogFilter};
-    use crate::modules::biz::hr::leave::{
-        GRANT_SOURCE_ISSUE, GRANT_SOURCE_MANUAL, LOG_BIZ_GRANT, LOG_BIZ_LEAVE_RELEASE,
+    use crate::modules::biz::hr::time_off::dto::{BatchCreateGrantReq, TimeOffBalanceLogFilter};
+    use crate::modules::biz::hr::time_off::{
+        GRANT_SOURCE_ISSUE, GRANT_SOURCE_MANUAL, LOG_BIZ_GRANT, LOG_BIZ_TIME_OFF_RELEASE,
     };
-    use crate::modules::biz::hr::leave::{repo, service};
+    use crate::modules::biz::hr::time_off::{repo, service};
     use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -495,7 +497,7 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    /// 唯一后缀：同进程内并行用例必须互不相同，否则撞 `uk_hr_leave_type_code`。
+    /// 唯一后缀：同进程内并行用例必须互不相同，否则撞 `uk_hr_time_off_type_code`。
     ///
     /// 前缀用 `lt_service`：repo 测试模块用 `lt`，两个模块的 `SEQ` 各自从 0 起，
     /// 同进程并行跑全量测试时仅靠 `SEQ` 区分不开。
@@ -532,8 +534,8 @@ mod tests {
     }
 
     /// 测试用假期类型 ActiveModel（`type_code` 必须唯一，其余取最小值域）。
-    fn leave_type_model(type_code: String) -> hr_leave_type::ActiveModel {
-        hr_leave_type::ActiveModel {
+    fn time_off_type_model(type_code: String) -> hr_time_off_type::ActiveModel {
+        hr_time_off_type::ActiveModel {
             type_code: Set(type_code),
             type_name: Set("测试假别".to_owned()),
             unit: Set(1),
@@ -544,7 +546,7 @@ mod tests {
         }
     }
 
-    /// 直插一份员工档案 + 建一个假期类型，返回 (employee_id, leave_type_id)。
+    /// 直插一份员工档案 + 建一个假期类型，返回 (employee_id, time_off_type_id)。
     ///
     /// 员工行：`hr_employee` 的非空列都有 DDL 默认值，只需 `user_id`（用
     /// `unique_employee_id() + 10_000` 避开真实用户，`uk_hr_employee_user_id` 单列唯一）。
@@ -567,20 +569,20 @@ mod tests {
         .await
         .unwrap();
 
-        let mut model = leave_type_model(unique("lt_service"));
+        let mut model = time_off_type_model(unique("lt_service"));
         model.allow_negative = Set(allow_negative);
-        let leave_type = repo::create_leave_type_in_tx(txn, model, ACTOR_ID)
+        let time_off_type = repo::create_time_off_type_in_tx(txn, model, ACTOR_ID)
             .await
             .unwrap();
 
-        (employee.id, leave_type.id)
+        (employee.id, time_off_type.id)
     }
 
     #[tokio::test]
-    async fn grant_leave_creates_batch_and_account_and_log_in_one_call() {
+    async fn grant_time_off_creates_batch_and_account_and_log_in_one_call() {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type(&txn).await;
-        let grant_id = service::grant_leave_in_tx(
+        let grant_id = service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -605,7 +607,7 @@ mod tests {
         );
         let logs = repo::find_balance_log_page(
             &txn,
-            &LeaveBalanceLogFilter {
+            &TimeOffBalanceLogFilter {
                 employee_id: Some(emp),
                 ..Default::default()
             },
@@ -622,10 +624,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grant_leave_is_idempotent_for_same_reason_and_period() {
+    async fn grant_time_off_is_idempotent_for_same_reason_and_period() {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type(&txn).await;
-        let first = service::grant_leave_in_tx(
+        let first = service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -639,7 +641,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let second = service::grant_leave_in_tx(
+        let second = service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -668,7 +670,7 @@ mod tests {
     async fn lock_then_consume_moves_locked_to_used_and_consumes_fefo_batch() {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type(&txn).await;
-        let expiring = service::grant_leave_in_tx(
+        let expiring = service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -682,7 +684,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let _fresh = service::grant_leave_in_tx(
+        let _fresh = service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -696,7 +698,7 @@ mod tests {
         )
         .await
         .unwrap();
-        service::lock_leave_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
+        service::lock_time_off_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
             .await
             .unwrap();
         let locked = repo::find_balance_by_account_for_update(&txn, emp, ty, "2026")
@@ -727,12 +729,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lock_leave_rejects_when_available_is_insufficient_and_type_disallows_negative() {
+    async fn lock_time_off_rejects_when_available_is_insufficient_and_type_disallows_negative() {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type_with(&txn, 0 /* allow_negative */).await;
         // 先发一笔**不足额**的额度（240 < 480）：账户存在才可能走到「可用不足」分支，
         // 否则命中的是「账户不存在」文案，断言就失去区分力。
-        service::grant_leave_in_tx(
+        service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -746,7 +748,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = service::lock_leave_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
+        let err = service::lock_time_off_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
             .await
             .unwrap_err();
         assert!(
@@ -759,7 +761,7 @@ mod tests {
     async fn release_locked_restores_available_and_writes_release_log() {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type_with(&txn, 0).await;
-        service::grant_leave_in_tx(
+        service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -773,7 +775,7 @@ mod tests {
         )
         .await
         .unwrap();
-        service::lock_leave_in_tx(&txn, emp, ty, 240, date(2026, 2, 1))
+        service::lock_time_off_in_tx(&txn, emp, ty, 240, date(2026, 2, 1))
             .await
             .unwrap();
         service::release_locked_in_tx(&txn, emp, ty, 240, 2, 999, date(2026, 2, 1))
@@ -795,9 +797,9 @@ mod tests {
         );
         let logs = repo::find_balance_log_page(
             &txn,
-            &LeaveBalanceLogFilter {
+            &TimeOffBalanceLogFilter {
                 employee_id: Some(emp),
-                biz_type: Some(LOG_BIZ_LEAVE_RELEASE),
+                biz_type: Some(LOG_BIZ_TIME_OFF_RELEASE),
                 ..Default::default()
             },
             0,
@@ -818,7 +820,7 @@ mod tests {
     async fn expire_grants_zeroes_outdated_batches_and_is_idempotent() {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type(&txn).await;
-        let stale = service::grant_leave_in_tx(
+        let stale = service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -869,7 +871,7 @@ mod tests {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type(&txn).await;
         // 2025 年生效、2025 年底失效的当年既发即失效批次 → 入 2025 账期账户
-        let _stale = service::grant_leave_in_tx(
+        let _stale = service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -909,7 +911,7 @@ mod tests {
     async fn ledger_invariants_hold_after_grant_lock_consume() {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type_with(&txn, 0).await;
-        service::grant_leave_in_tx(
+        service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -923,7 +925,7 @@ mod tests {
         )
         .await
         .unwrap();
-        service::grant_leave_in_tx(
+        service::grant_time_off_in_tx(
             &txn,
             ACTOR_ID,
             emp,
@@ -937,7 +939,7 @@ mod tests {
         )
         .await
         .unwrap();
-        service::lock_leave_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
+        service::lock_time_off_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
             .await
             .unwrap();
         service::consume_locked_in_tx(&txn, emp, ty, 480, 2, 999, date(2026, 2, 1))
@@ -950,7 +952,7 @@ mod tests {
             .unwrap();
         let logs = repo::find_balance_log_page(
             &txn,
-            &LeaveBalanceLogFilter {
+            &TimeOffBalanceLogFilter {
                 employee_id: Some(emp),
                 ..Default::default()
             },
@@ -992,7 +994,7 @@ mod tests {
             employee_ids: vec![emp1, emp2],
             dept_id: None,
             all: false,
-            leave_type_id: ty,
+            time_off_type_id: ty,
             minutes: 4800,
             reason: "statutory".to_string(),
             period: "2026".to_string(),

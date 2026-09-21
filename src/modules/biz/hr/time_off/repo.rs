@@ -1,7 +1,7 @@
 //! 假期额度域数据访问原语（只拼 SQL：过滤 / 排序 / 分页 / 审计盖章 / 软删标记）。
 //!
 //! 约定：
-//! - `hr_leave_type` 是业务主表（软删），逐查询 `.filter(DeletedAt.is_null())`；
+//! - `hr_time_off_type` 是业务主表（软删），逐查询 `.filter(DeletedAt.is_null())`；
 //!   账本三表（grant / balance / log）**没有 `deleted_at` 列**，作废走 `status` + 反向流水；
 //! - 写原语一律 `*_in_tx`：只收 `&DatabaseTransaction`，不自行 begin/commit，
 //!   事务边界由 service 入口与测试外层事务负责；
@@ -15,9 +15,11 @@
 use sea_orm::DatabaseTransaction;
 use sea_orm::entity::prelude::*;
 
-use crate::entity::{hr_leave_balance, hr_leave_balance_log, hr_leave_grant, hr_leave_type};
-use crate::modules::biz::hr::leave::dto::{
-    LeaveBalanceFilter, LeaveBalanceLogFilter, LeaveGrantFilter, LeaveTypeFilter,
+use crate::entity::{
+    hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
+};
+use crate::modules::biz::hr::time_off::dto::{
+    TimeOffBalanceFilter, TimeOffBalanceLogFilter, TimeOffGrantFilter, TimeOffTypeFilter,
 };
 use crate::utils::PageData;
 
@@ -28,77 +30,77 @@ use crate::utils::PageData;
 // 实现提示：`Condition::all()` 累加可选条件 → `Entity::find().filter(cond)`
 // `.filter(Column::DeletedAt.is_null()).order_by_desc(Column::Id)` →
 // `crate::utils::paginate(select, db, page_index, page_size)`。
-pub async fn find_leave_type_page(
+pub async fn find_time_off_type_page(
     db: &impl ConnectionTrait,
-    filter: &LeaveTypeFilter,
+    filter: &TimeOffTypeFilter,
     page_index: u64,
     page_size: u64,
-) -> anyhow::Result<PageData<hr_leave_type::Model>> {
+) -> anyhow::Result<PageData<hr_time_off_type::Model>> {
     let _ = (db, filter, page_index, page_size);
-    anyhow::bail!("未实现：find_leave_type_page")
+    anyhow::bail!("未实现：find_time_off_type_page")
 }
 
 /// 按 id 查有效假期类型（排除软删）。
 // 实现提示：`Entity::find().filter(Column::Id.eq(id)).filter(Column::DeletedAt.is_null()).one(db)`。
-pub async fn find_leave_type_by_id(
+pub async fn find_time_off_type_by_id(
     db: &impl ConnectionTrait,
     id: u64,
-) -> anyhow::Result<Option<hr_leave_type::Model>> {
+) -> anyhow::Result<Option<hr_time_off_type::Model>> {
     let _ = (db, id);
-    anyhow::bail!("未实现：find_leave_type_by_id")
+    anyhow::bail!("未实现：find_time_off_type_by_id")
 }
 
 /// 按 ID 批量取假期类型（软删过滤：`DeletedAt.is_null()`；不分页；空入参直接返回空 `Vec`）。
 ///
-/// 供 service 列表响应批量取名（`fill_leave_type_names`）：单次查询，禁止逐行查库。
+/// 供 service 列表响应批量取名（`fill_time_off_type_names`）：单次查询，禁止逐行查库。
 // 实现提示：`ids` 为空直接 `return Ok(Vec::new())` → `Entity::find().filter(Column::Id.is_in(ids))`
 // `.filter(Column::DeletedAt.is_null()).all(db)`（顺序无要求，取名按 id 建 map 即可）。
-// 骨架期：收件方（service::fill_leave_type_names）落地前无调用方，非 test 构建允许未使用
+// 骨架期：收件方（service::fill_time_off_type_names）落地前无调用方，非 test 构建允许未使用
 #[cfg_attr(not(test), allow(dead_code))]
-pub async fn find_leave_types_by_ids(
+pub async fn find_time_off_types_by_ids(
     db: &impl ConnectionTrait,
     ids: &[u64],
-) -> anyhow::Result<Vec<hr_leave_type::Model>> {
+) -> anyhow::Result<Vec<hr_time_off_type::Model>> {
     let _ = (db, ids);
-    anyhow::bail!("未实现：find_leave_types_by_ids")
+    anyhow::bail!("未实现：find_time_off_types_by_ids")
 }
 
 /// 按 `type_code` 查假期类型——**含软删占位**（不过滤 `deleted_at`）。
 ///
-/// `uk_hr_leave_type_code` 是单列唯一键，软删行仍占位，查重必须能看到软删记录
+/// `uk_hr_time_off_type_code` 是单列唯一键，软删行仍占位，查重必须能看到软删记录
 /// （口径同 `sys_position.position_code`）；「编码已存在」的判定与文案在 service 层。
 // 实现提示：不加 `DeletedAt.is_null()` 过滤，`.one(db)` 取唯一命中。
-pub async fn find_leave_type_by_code_include_deleted(
+pub async fn find_time_off_type_by_code_include_deleted(
     db: &impl ConnectionTrait,
     code: &str,
-) -> anyhow::Result<Option<hr_leave_type::Model>> {
+) -> anyhow::Result<Option<hr_time_off_type::Model>> {
     let _ = (db, code);
-    anyhow::bail!("未实现：find_leave_type_by_code_include_deleted")
+    anyhow::bail!("未实现：find_time_off_type_by_code_include_deleted")
 }
 
 /// 事务内创建假期类型：审计盖章（创建人与更新人同源，均取 `actor_id`）。
 // 实现提示：`ActiveModel { created_by: Set(actor_id), updated_by: Set(actor_id), ..model }`
 // 后 `.insert(txn)`。
-pub async fn create_leave_type_in_tx(
+pub async fn create_time_off_type_in_tx(
     txn: &DatabaseTransaction,
-    model: hr_leave_type::ActiveModel,
+    model: hr_time_off_type::ActiveModel,
     actor_id: u64,
-) -> anyhow::Result<hr_leave_type::Model> {
+) -> anyhow::Result<hr_time_off_type::Model> {
     let _ = (txn, model, actor_id);
-    anyhow::bail!("未实现：create_leave_type_in_tx")
+    anyhow::bail!("未实现：create_time_off_type_in_tx")
 }
 
 /// 事务内更新假期类型（窄写）：只刷新更新人，`created_by` 保持 `NotSet` 不被覆盖。
 ///
 /// 入参 `model` 由 service 构造：只 Set 业务变更列，其余列留 `NotSet`。
 // 实现提示：`ActiveModel { updated_by: Set(actor_id), ..model }.update(txn)`。
-pub async fn update_leave_type_in_tx(
+pub async fn update_time_off_type_in_tx(
     txn: &DatabaseTransaction,
-    model: hr_leave_type::ActiveModel,
+    model: hr_time_off_type::ActiveModel,
     actor_id: u64,
-) -> anyhow::Result<hr_leave_type::Model> {
+) -> anyhow::Result<hr_time_off_type::Model> {
     let _ = (txn, model, actor_id);
-    anyhow::bail!("未实现：update_leave_type_in_tx")
+    anyhow::bail!("未实现：update_time_off_type_in_tx")
 }
 
 /// 事务内软删假期类型：只更新 `deleted_at` + `updated_by`。
@@ -107,13 +109,13 @@ pub async fn update_leave_type_in_tx(
 /// 「类型不存在」的判定与文案由 service 层负责。
 // 实现提示：`update_many()` + `Column::Id.eq(id)` + `Column::DeletedAt.is_null()`
 // （后者保证重复软删返回 false）+ `set(ActiveModel { deleted_at, updated_by, ..Default::default() })`。
-pub async fn soft_delete_leave_type_in_tx(
+pub async fn soft_delete_time_off_type_in_tx(
     txn: &DatabaseTransaction,
     id: u64,
     actor_id: u64,
 ) -> anyhow::Result<bool> {
     let _ = (txn, id, actor_id);
-    anyhow::bail!("未实现：soft_delete_leave_type_in_tx")
+    anyhow::bail!("未实现：soft_delete_time_off_type_in_tx")
 }
 
 /// FEFO 取批次：`status = 1`、`effective_at <= on_date`、
@@ -130,10 +132,10 @@ pub async fn soft_delete_leave_type_in_tx(
 pub async fn find_active_grants_for_update(
     txn: &DatabaseTransaction,
     employee_id: u64,
-    leave_type_id: u64,
+    time_off_type_id: u64,
     on_date: Date,
-) -> anyhow::Result<Vec<hr_leave_grant::Model>> {
-    let _ = (txn, employee_id, leave_type_id, on_date);
+) -> anyhow::Result<Vec<hr_time_off_grant::Model>> {
+    let _ = (txn, employee_id, time_off_type_id, on_date);
     anyhow::bail!("未实现：find_active_grants_for_update")
 }
 
@@ -150,7 +152,7 @@ pub async fn find_active_grants_for_update(
 pub async fn find_expired_grants_for_update(
     txn: &DatabaseTransaction,
     today: Date,
-) -> anyhow::Result<Vec<hr_leave_grant::Model>> {
+) -> anyhow::Result<Vec<hr_time_off_grant::Model>> {
     let _ = (txn, today);
     anyhow::bail!("未实现：find_expired_grants_for_update")
 }
@@ -159,9 +161,9 @@ pub async fn find_expired_grants_for_update(
 // 实现提示：`ActiveModel { created_by: Set(actor_id), updated_by: Set(actor_id), ..model }.insert(txn)`。
 pub async fn create_grant_in_tx(
     txn: &DatabaseTransaction,
-    model: hr_leave_grant::ActiveModel,
+    model: hr_time_off_grant::ActiveModel,
     actor_id: u64,
-) -> anyhow::Result<hr_leave_grant::Model> {
+) -> anyhow::Result<hr_time_off_grant::Model> {
     let _ = (txn, model, actor_id);
     anyhow::bail!("未实现：create_grant_in_tx")
 }
@@ -169,28 +171,28 @@ pub async fn create_grant_in_tx(
 /// 按幂等键（员工 × 假别 × 依据 × 周期）查批次——**含已用尽 / 已失效行**。
 ///
 /// 幂等判定必须能看到任何状态的历史批次，故不加 `status` 过滤。
-// 实现提示：四列精确过滤 + `.one(txn)`；`idx_hr_leave_grant_idempotent` 覆盖该查询。
+// 实现提示：四列精确过滤 + `.one(txn)`；`idx_hr_time_off_grant_idempotent` 覆盖该查询。
 pub async fn find_grant_by_idempotent_key(
     txn: &DatabaseTransaction,
     employee_id: u64,
-    leave_type_id: u64,
+    time_off_type_id: u64,
     reason: &str,
     period: &str,
-) -> anyhow::Result<Option<hr_leave_grant::Model>> {
-    let _ = (txn, employee_id, leave_type_id, reason, period);
+) -> anyhow::Result<Option<hr_time_off_grant::Model>> {
+    let _ = (txn, employee_id, time_off_type_id, reason, period);
     anyhow::bail!("未实现：find_grant_by_idempotent_key")
 }
 
-/// 分页 + 动态过滤批次（employee_id / leave_type_id / period / status 精确，
+/// 分页 + 动态过滤批次（employee_id / time_off_type_id / period / status 精确，
 /// reason 模糊），按 id 降序（新批次在前）。
 // 实现提示：`Condition::all()` 累加 → `.order_by_desc(Column::Id)` →
 // `crate::utils::paginate(select, db, page_index, page_size)`；账本表无软删列，不加 `DeletedAt` 过滤。
 pub async fn find_grant_page(
     db: &impl ConnectionTrait,
-    filter: &LeaveGrantFilter,
+    filter: &TimeOffGrantFilter,
     page_index: u64,
     page_size: u64,
-) -> anyhow::Result<PageData<hr_leave_grant::Model>> {
+) -> anyhow::Result<PageData<hr_time_off_grant::Model>> {
     let _ = (db, filter, page_index, page_size);
     anyhow::bail!("未实现：find_grant_page")
 }
@@ -200,7 +202,7 @@ pub async fn find_grant_page(
 pub async fn find_grant_by_id(
     db: &impl ConnectionTrait,
     id: u64,
-) -> anyhow::Result<Option<hr_leave_grant::Model>> {
+) -> anyhow::Result<Option<hr_time_off_grant::Model>> {
     let _ = (db, id);
     anyhow::bail!("未实现：find_grant_by_id")
 }
@@ -237,15 +239,15 @@ pub async fn set_grant_status_in_tx(
 
 /// 按账户唯一键（员工 × 假别 × 账期）加锁读账户，`lock_exclusive()`。
 ///
-/// 「读 → 判断 → 写」的额度原语专用：`uk_hr_leave_balance_account` 保证唯一命中。
+/// 「读 → 判断 → 写」的额度原语专用：`uk_hr_time_off_balance_account` 保证唯一命中。
 // 实现提示：三列精确过滤 + `.lock_exclusive()` + `.one(txn)`。
 pub async fn find_balance_by_account_for_update(
     txn: &DatabaseTransaction,
     employee_id: u64,
-    leave_type_id: u64,
+    time_off_type_id: u64,
     period: &str,
-) -> anyhow::Result<Option<hr_leave_balance::Model>> {
-    let _ = (txn, employee_id, leave_type_id, period);
+) -> anyhow::Result<Option<hr_time_off_balance::Model>> {
+    let _ = (txn, employee_id, time_off_type_id, period);
     anyhow::bail!("未实现：find_balance_by_account_for_update")
 }
 
@@ -254,20 +256,20 @@ pub async fn find_balance_by_account_for_update(
 pub async fn find_balance_by_id(
     db: &impl ConnectionTrait,
     id: u64,
-) -> anyhow::Result<Option<hr_leave_balance::Model>> {
+) -> anyhow::Result<Option<hr_time_off_balance::Model>> {
     let _ = (db, id);
     anyhow::bail!("未实现：find_balance_by_id")
 }
 
-/// 分页 + 动态过滤账户（employee_id / leave_type_id / period 精确），按 id 降序。
+/// 分页 + 动态过滤账户（employee_id / time_off_type_id / period 精确），按 id 降序。
 // 实现提示：`Condition::all()` 累加 → `.order_by_desc(Column::Id)` →
 // `crate::utils::paginate(select, db, page_index, page_size)`。
 pub async fn find_balance_page(
     db: &impl ConnectionTrait,
-    filter: &LeaveBalanceFilter,
+    filter: &TimeOffBalanceFilter,
     page_index: u64,
     page_size: u64,
-) -> anyhow::Result<PageData<hr_leave_balance::Model>> {
+) -> anyhow::Result<PageData<hr_time_off_balance::Model>> {
     let _ = (db, filter, page_index, page_size);
     anyhow::bail!("未实现：find_balance_page")
 }
@@ -278,8 +280,8 @@ pub async fn find_balance_page(
 // 实现提示：`model.insert(txn)`。
 pub async fn create_balance_in_tx(
     txn: &DatabaseTransaction,
-    model: hr_leave_balance::ActiveModel,
-) -> anyhow::Result<hr_leave_balance::Model> {
+    model: hr_time_off_balance::ActiveModel,
+) -> anyhow::Result<hr_time_off_balance::Model> {
     let _ = (txn, model);
     anyhow::bail!("未实现：create_balance_in_tx")
 }
@@ -290,9 +292,9 @@ pub async fn create_balance_in_tx(
 // 实现提示：`ActiveModel { updated_by: Set(actor_id), ..model }.update(txn)`。
 pub async fn update_balance_in_tx(
     txn: &DatabaseTransaction,
-    model: hr_leave_balance::ActiveModel,
+    model: hr_time_off_balance::ActiveModel,
     actor_id: u64,
-) -> anyhow::Result<hr_leave_balance::Model> {
+) -> anyhow::Result<hr_time_off_balance::Model> {
     let _ = (txn, model, actor_id);
     anyhow::bail!("未实现：update_balance_in_tx")
 }
@@ -303,22 +305,22 @@ pub async fn update_balance_in_tx(
 // 实现提示：`model.insert(txn)`。
 pub async fn create_balance_log_in_tx(
     txn: &DatabaseTransaction,
-    model: hr_leave_balance_log::ActiveModel,
-) -> anyhow::Result<hr_leave_balance_log::Model> {
+    model: hr_time_off_balance_log::ActiveModel,
+) -> anyhow::Result<hr_time_off_balance_log::Model> {
     let _ = (txn, model);
     anyhow::bail!("未实现：create_balance_log_in_tx")
 }
 
-/// 分页 + 动态过滤流水（employee_id / leave_type_id / biz_type 精确），
+/// 分页 + 动态过滤流水（employee_id / time_off_type_id / biz_type 精确），
 /// 按 id 降序（最新在前）。
 // 实现提示：`Condition::all()` 累加 → `.order_by_desc(Column::Id)` →
 // `crate::utils::paginate(select, db, page_index, page_size)`；流水表无软删列。
 pub async fn find_balance_log_page(
     db: &impl ConnectionTrait,
-    filter: &LeaveBalanceLogFilter,
+    filter: &TimeOffBalanceLogFilter,
     page_index: u64,
     page_size: u64,
-) -> anyhow::Result<PageData<hr_leave_balance_log::Model>> {
+) -> anyhow::Result<PageData<hr_time_off_balance_log::Model>> {
     let _ = (db, filter, page_index, page_size);
     anyhow::bail!("未实现：find_balance_log_page")
 }
@@ -327,7 +329,7 @@ pub async fn find_balance_log_page(
 mod tests {
     use super::*;
     use crate::entity::hr_employee;
-    use crate::modules::biz::hr::leave::repo;
+    use crate::modules::biz::hr::time_off::repo;
     use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -337,7 +339,7 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     /// 唯一后缀：同一进程内并行用例（repo / service 两个文件）必须互不相同，
-    /// 否则撞 `uk_hr_leave_type_code`。
+    /// 否则撞 `uk_hr_time_off_type_code`。
     fn unique(prefix: &str) -> String {
         format!(
             "{prefix}_{}_{}",
@@ -370,8 +372,8 @@ mod tests {
     }
 
     /// 测试用假期类型 ActiveModel（`type_code` 必须唯一，其余取最小值域）。
-    fn leave_type_model(type_code: String) -> hr_leave_type::ActiveModel {
-        hr_leave_type::ActiveModel {
+    fn time_off_type_model(type_code: String) -> hr_time_off_type::ActiveModel {
+        hr_time_off_type::ActiveModel {
             type_code: Set(type_code),
             type_name: Set("测试假别".to_owned()),
             unit: Set(1),
@@ -382,7 +384,7 @@ mod tests {
         }
     }
 
-    /// 直插一份员工档案 + 建一个假期类型，返回 (employee_id, leave_type_id)。
+    /// 直插一份员工档案 + 建一个假期类型，返回 (employee_id, time_off_type_id)。
     ///
     /// 员工行：`hr_employee` 的非空列都有 DDL 默认值，只需 `user_id`（用
     /// `unique_employee_id() + 10_000` 避开真实用户，`uk_hr_employee_user_id` 单列唯一）。
@@ -405,13 +407,13 @@ mod tests {
         .await
         .unwrap();
 
-        let mut model = leave_type_model(unique("lt"));
+        let mut model = time_off_type_model(unique("lt"));
         model.allow_negative = Set(allow_negative);
-        let leave_type = repo::create_leave_type_in_tx(txn, model, ACTOR_ID)
+        let time_off_type = repo::create_time_off_type_in_tx(txn, model, ACTOR_ID)
             .await
             .unwrap();
 
-        (employee.id, leave_type.id)
+        (employee.id, time_off_type.id)
     }
 
     /// 测试用批次 ActiveModel：`remaining_minutes = minutes`、`status = 1`、
@@ -419,13 +421,13 @@ mod tests {
     /// 审计列交给 repo 盖章。
     fn grant_model(
         employee_id: u64,
-        leave_type_id: u64,
+        time_off_type_id: u64,
         minutes: i32,
         expire_at: Option<Date>,
-    ) -> hr_leave_grant::ActiveModel {
-        hr_leave_grant::ActiveModel {
+    ) -> hr_time_off_grant::ActiveModel {
+        hr_time_off_grant::ActiveModel {
             employee_id: Set(employee_id),
-            leave_type_id: Set(leave_type_id),
+            time_off_type_id: Set(time_off_type_id),
             source: Set(2),
             reason: Set("manual".to_owned()),
             period: Set("2026".to_owned()),
@@ -468,30 +470,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn soft_delete_leave_type_hides_it_from_find_by_id() {
+    async fn soft_delete_time_off_type_hides_it_from_find_by_id() {
         let txn = test_txn().await;
         let (_, ty) = seed_employee_and_type(&txn).await;
 
         assert!(
-            repo::soft_delete_leave_type_in_tx(&txn, ty, ACTOR_ID)
+            repo::soft_delete_time_off_type_in_tx(&txn, ty, ACTOR_ID)
                 .await
                 .unwrap(),
             "首次软删必须返回 true"
         );
         assert!(
-            !repo::soft_delete_leave_type_in_tx(&txn, ty, ACTOR_ID)
+            !repo::soft_delete_time_off_type_in_tx(&txn, ty, ACTOR_ID)
                 .await
                 .unwrap(),
             "重复软删必须返回 false（已软删行不再命中）"
         );
         assert!(
-            !repo::soft_delete_leave_type_in_tx(&txn, ty + 900_000_000, ACTOR_ID)
+            !repo::soft_delete_time_off_type_in_tx(&txn, ty + 900_000_000, ACTOR_ID)
                 .await
                 .unwrap(),
             "不存在的 id 必须返回 false"
         );
         assert!(
-            repo::find_leave_type_by_id(&txn, ty)
+            repo::find_time_off_type_by_id(&txn, ty)
                 .await
                 .unwrap()
                 .is_none(),
@@ -500,29 +502,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_leave_type_stamps_both_audit_columns() {
+    async fn create_time_off_type_stamps_both_audit_columns() {
         let txn = test_txn().await;
-        let created =
-            repo::create_leave_type_in_tx(&txn, leave_type_model(unique("ltstamp")), ACTOR_ID)
-                .await
-                .unwrap();
+        let created = repo::create_time_off_type_in_tx(
+            &txn,
+            time_off_type_model(unique("ltstamp")),
+            ACTOR_ID,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(created.created_by, ACTOR_ID, "创建人必须由 repo 盖章");
         assert_eq!(created.updated_by, ACTOR_ID, "创建时更新人必须与创建人同源");
     }
 
     #[tokio::test]
-    async fn update_leave_type_keeps_created_by_and_unset_columns() {
+    async fn update_time_off_type_keeps_created_by_and_unset_columns() {
         let txn = test_txn().await;
-        let created =
-            repo::create_leave_type_in_tx(&txn, leave_type_model(unique("ltupdate")), ACTOR_ID)
-                .await
-                .unwrap();
+        let created = repo::create_time_off_type_in_tx(
+            &txn,
+            time_off_type_model(unique("ltupdate")),
+            ACTOR_ID,
+        )
+        .await
+        .unwrap();
         let other_actor = ACTOR_ID + 7;
 
-        let updated = repo::update_leave_type_in_tx(
+        let updated = repo::update_time_off_type_in_tx(
             &txn,
-            hr_leave_type::ActiveModel {
+            hr_time_off_type::ActiveModel {
                 id: Set(created.id),
                 type_name: Set("改后假别名".to_owned()),
                 ..Default::default()
@@ -542,43 +550,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_leave_type_page_filters_status_and_keyword() {
+    async fn find_time_off_type_page_filters_status_and_keyword() {
         let txn = test_txn().await;
         let kw = unique("ltpage");
 
         // 命中 type_code，启用
-        let mut by_code = leave_type_model(format!("{kw}_code"));
+        let mut by_code = time_off_type_model(format!("{kw}_code"));
         by_code.type_name = Set("与此无关的名称".to_owned());
-        let by_code = repo::create_leave_type_in_tx(&txn, by_code, ACTOR_ID)
+        let by_code = repo::create_time_off_type_in_tx(&txn, by_code, ACTOR_ID)
             .await
             .unwrap();
 
         // 只命中 type_name，启用
-        let mut by_name = leave_type_model(unique("ltpageother"));
+        let mut by_name = time_off_type_model(unique("ltpageother"));
         by_name.type_name = Set(format!("假别{kw}"));
-        let by_name = repo::create_leave_type_in_tx(&txn, by_name, ACTOR_ID)
+        let by_name = repo::create_time_off_type_in_tx(&txn, by_name, ACTOR_ID)
             .await
             .unwrap();
 
         // 命中 keyword 但已停用：只有 status 过滤能排除它
-        let mut disabled = leave_type_model(format!("{kw}_off"));
+        let mut disabled = time_off_type_model(format!("{kw}_off"));
         disabled.status = Set(0);
-        let disabled = repo::create_leave_type_in_tx(&txn, disabled, ACTOR_ID)
+        let disabled = repo::create_time_off_type_in_tx(&txn, disabled, ACTOR_ID)
             .await
             .unwrap();
 
         // 命中 keyword 但已软删：keyword 与 status 都必须排除它
-        let deleted =
-            repo::create_leave_type_in_tx(&txn, leave_type_model(format!("{kw}_del")), ACTOR_ID)
-                .await
-                .unwrap();
-        repo::soft_delete_leave_type_in_tx(&txn, deleted.id, ACTOR_ID)
+        let deleted = repo::create_time_off_type_in_tx(
+            &txn,
+            time_off_type_model(format!("{kw}_del")),
+            ACTOR_ID,
+        )
+        .await
+        .unwrap();
+        repo::soft_delete_time_off_type_in_tx(&txn, deleted.id, ACTOR_ID)
             .await
             .unwrap();
 
-        let all = repo::find_leave_type_page(
+        let all = repo::find_time_off_type_page(
             &txn,
-            &LeaveTypeFilter {
+            &TimeOffTypeFilter {
                 keyword: Some(kw.clone()),
                 ..Default::default()
             },
@@ -587,9 +598,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let enabled = repo::find_leave_type_page(
+        let enabled = repo::find_time_off_type_page(
             &txn,
-            &LeaveTypeFilter {
+            &TimeOffTypeFilter {
                 keyword: Some(kw.clone()),
                 status: Some(1),
             },
@@ -626,9 +637,9 @@ mod tests {
 
         let created = repo::create_balance_in_tx(
             &txn,
-            hr_leave_balance::ActiveModel {
+            hr_time_off_balance::ActiveModel {
                 employee_id: Set(emp),
-                leave_type_id: Set(ty),
+                time_off_type_id: Set(ty),
                 period: Set("2026".to_owned()),
                 ..Default::default()
             },
@@ -642,7 +653,7 @@ mod tests {
             .expect("建户后必须能按账户唯一键查到");
         assert_eq!(found.id, created.id);
         assert_eq!(found.employee_id, emp);
-        assert_eq!(found.leave_type_id, ty);
+        assert_eq!(found.time_off_type_id, ty);
         assert_eq!(found.period, "2026");
     }
 
@@ -652,9 +663,9 @@ mod tests {
         let (emp, ty) = seed_employee_and_type(&txn).await;
         let balance = repo::create_balance_in_tx(
             &txn,
-            hr_leave_balance::ActiveModel {
+            hr_time_off_balance::ActiveModel {
                 employee_id: Set(emp),
-                leave_type_id: Set(ty),
+                time_off_type_id: Set(ty),
                 period: Set("2026".to_owned()),
                 ..Default::default()
             },
@@ -667,10 +678,10 @@ mod tests {
         for (biz_type, delta) in [(1_i8, 480_i32), (1_i8, 240_i32), (3_i8, -120_i32)] {
             let log = repo::create_balance_log_in_tx(
                 &txn,
-                hr_leave_balance_log::ActiveModel {
+                hr_time_off_balance_log::ActiveModel {
                     balance_id: Set(balance.id),
                     employee_id: Set(emp),
-                    leave_type_id: Set(ty),
+                    time_off_type_id: Set(ty),
                     biz_type: Set(biz_type),
                     delta_minutes: Set(delta),
                     before_minutes: Set(0),
@@ -686,7 +697,7 @@ mod tests {
 
         let page = repo::find_balance_log_page(
             &txn,
-            &LeaveBalanceLogFilter {
+            &TimeOffBalanceLogFilter {
                 employee_id: Some(emp),
                 ..Default::default()
             },
@@ -701,7 +712,7 @@ mod tests {
 
         let granted = repo::find_balance_log_page(
             &txn,
-            &LeaveBalanceLogFilter {
+            &TimeOffBalanceLogFilter {
                 employee_id: Some(emp),
                 biz_type: Some(1),
                 ..Default::default()

@@ -3,7 +3,7 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
-#[sea_orm(table_name = "hr_leave_balance_log")]
+#[sea_orm(table_name = "hr_time_off_balance_log")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: u64,
@@ -12,7 +12,7 @@ pub struct Model {
     /// 员工档案 ID（冗余，便于按人查询）
     pub employee_id: u64,
     /// 假期类型 ID
-    pub leave_type_id: u64,
+    pub time_off_type_id: u64,
     /// 授予批次 ID；0=账户级操作
     pub grant_id: u64,
     /// 1 授予 2 手工调整 3 请假预占 4 审批实扣 5 驳回释放 6 过期作废
