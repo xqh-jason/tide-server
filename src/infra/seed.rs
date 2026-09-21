@@ -8,8 +8,8 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 
 use crate::entity::{
-    sys_api, sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role, sys_role_menu,
-    sys_user, sys_user_role,
+    hr_leave_type, sys_api, sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role,
+    sys_role_menu, sys_user, sys_user_role,
 };
 use crate::utils::crypt;
 
@@ -629,6 +629,106 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("HrEmployee"),
         sort: 3,
     },
+    // 假期额度（业务域 `biz/hr/leave`）：假期管理目录 + 三个页面 + 按钮权限码。
+    MenuSeed {
+        name: "HrLeave",
+        title: "假期管理",
+        path: "/hr/leave",
+        component: "",
+        icon: "lucide:calendar-days",
+        menu_type: 1,
+        permission: "",
+        parent: Some("Hr"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrLeaveType",
+        title: "假期类型",
+        path: "/hr/leave/type",
+        component: "#/views/biz/hr/leave/type/index.vue",
+        icon: "lucide:tags",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrLeave"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrLeaveTypeCreate",
+        title: "类型新增",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:leave-type:create",
+        parent: Some("HrLeaveType"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrLeaveTypeUpdate",
+        title: "类型修改",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:leave-type:update",
+        parent: Some("HrLeaveType"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrLeaveTypeDelete",
+        title: "类型删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:leave-type:delete",
+        parent: Some("HrLeaveType"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "HrLeaveGrant",
+        title: "额度发放",
+        path: "/hr/leave/grant",
+        component: "#/views/biz/hr/leave/grant/index.vue",
+        icon: "lucide:gift",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrLeave"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrLeaveGrantCreate",
+        title: "发放",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:leave-grant:create",
+        parent: Some("HrLeaveGrant"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrLeaveGrantCancel",
+        title: "撤销发放",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:leave-grant:cancel",
+        parent: Some("HrLeaveGrant"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrLeaveBalance",
+        title: "额度查询",
+        path: "/hr/leave/balance",
+        component: "#/views/biz/hr/leave/balance/index.vue",
+        icon: "lucide:wallet",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrLeave"),
+        sort: 3,
+    },
 ];
 
 /// API 种子定义：`path` 必须带 `/api/v1` 前缀且**写成规范化形式**（无尾斜杠、无重复
@@ -945,6 +1045,80 @@ const API_SEEDS: &[ApiSeed] = &[
         "员工档案删除",
         "员工档案",
     ),
+    // 假期额度（业务域 hr/leave）：与 DOMAINS 的 "hr/leave" 档位、菜单 HrLeave* 一一对应；
+    // 漏登 = 该端点 fail-open（未登记放行）。
+    api(
+        "/api/v1/hr/leave/leave-type/list",
+        "POST",
+        "假期类型列表查询",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-type/create",
+        "POST",
+        "假期类型新增",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-type/update",
+        "POST",
+        "假期类型修改",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-type/get",
+        "POST",
+        "假期类型详情",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-type/delete",
+        "POST",
+        "假期类型删除",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-grant/list",
+        "POST",
+        "额度批次列表查询",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-grant/batch-create",
+        "POST",
+        "额度批量发放",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-grant/get",
+        "POST",
+        "额度批次详情",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-grant/cancel",
+        "POST",
+        "额度批次撤销",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-balance/list",
+        "POST",
+        "额度账户列表查询",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-balance/get",
+        "POST",
+        "额度账户详情",
+        "假期额度",
+    ),
+    api(
+        "/api/v1/hr/leave/leave-balance/logs",
+        "POST",
+        "额度流水查询",
+        "假期额度",
+    ),
 ];
 
 /// 按 name 查菜单 id（不过滤软删，与 seed 的查重口径一致）。
@@ -959,7 +1133,9 @@ async fn find_menu_id_by_name(db: &DatabaseConnection, name: &str) -> anyhow::Re
 /// 播种一个「整数值」字典类型及其字典项，返回字典类型 id（幂等：类型按 `type`
 /// 查重、字典项按 `dictionary_id + value` 查重；只补缺、不覆盖运维改过的行）。
 ///
-/// 供业务域枚举使用（人事的 `employmentStatus` / `education`）。平台既有的
+/// 供业务域枚举使用（人事的 `employmentStatus` / `education`）。字符串枚举
+/// （如 `leaveGrantReason`）亦可复用本函数：`sys_dictionary_detail.value` 本就是
+/// 字符串列，`items` 的 `value` 写 `statutory` 这类编码即可。平台既有的
 /// `status` / `execResultStatus` 保留各自的历史迁移逻辑（旧编码原地改名、extend
 /// 回填），刻意不走本函数，改动前先读那两段注释。
 async fn seed_int_dictionary(
@@ -1310,6 +1486,67 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     )
     .await?;
 
+    // 4.4 数据字典：假期发放依据（type=leaveGrantReason，字符串枚举）。
+    //     `hr_leave_grant.reason` 的展示与取值来源（校验侧只查非空，不查值域）。
+    const SEED_DICT_TYPE_LEAVE_GRANT_REASON: &str = "leaveGrantReason";
+    seed_int_dictionary(
+        db,
+        admin_id,
+        SEED_DICT_TYPE_LEAVE_GRANT_REASON,
+        "发放依据",
+        "假期额度发放依据（hr_leave_grant.reason）：法定年假 / 公司福利年假 / 司龄增补 / 上年结转 / 加班转调休 / 手工调整 / 离职补偿",
+        &[
+            ("法定年假", "statutory", 1),
+            ("公司福利年假", "company", 2),
+            ("司龄增补", "seniority", 3),
+            ("上年结转", "carry", 4),
+            ("加班转调休", "comp", 5),
+            ("手工调整", "manual", 6),
+            ("离职补偿", "severance", 7),
+        ],
+    )
+    .await?;
+
+    // 4.5 假期类型初始 7 类（业务域 hr/leave 的基线数据）。幂等口径：按 `type_code`
+    //     查重且**不加软删过滤**——`uk_hr_leave_type_code` 是单列唯一键，软删行仍占位
+    //     （同 `sys_position.position_code`）；命中即跳过，不覆盖运维改过的行。
+    //     `status` = 1 启用（`leave::LEAVE_TYPE_ENABLED`）；`pay_ratio` 取 DDL 默认
+    //     1000（全额计薪）、`remark` 留空，故此处不 Set。
+    const SEED_LEAVE_TYPES: &[(&str, &str, i8, i8, i32, i8, i8)] = &[
+        // (type_code, type_name, unit, balance_mode, min_unit_minutes, need_attachment, allow_negative)
+        ("annual", "年假", 1, 1, 240, 0, 0),
+        ("comp", "调休", 2, 1, 60, 0, 0),
+        ("personal", "事假", 1, 0, 240, 0, 0),
+        ("sick", "病假", 1, 0, 240, 1, 0),
+        ("marriage", "婚假", 1, 1, 480, 1, 0),
+        ("maternity", "产假", 1, 1, 480, 1, 0),
+        ("bereavement", "丧假", 1, 1, 480, 0, 0),
+    ];
+    for (code, name, unit, mode, min_minutes, need_attachment, allow_negative) in SEED_LEAVE_TYPES {
+        let existing = hr_leave_type::Entity::find()
+            .filter(hr_leave_type::Column::TypeCode.eq(*code))
+            .one(db)
+            .await?;
+        if existing.is_none() {
+            hr_leave_type::ActiveModel {
+                type_code: Set(String::from(*code)),
+                type_name: Set(String::from(*name)),
+                unit: Set(*unit),
+                balance_mode: Set(*mode),
+                min_unit_minutes: Set(*min_minutes),
+                require_attachment: Set(*need_attachment),
+                allow_negative: Set(*allow_negative),
+                status: Set(1),
+                // 种子数据的操作人统一记为 admin 自己
+                created_by: Set(admin_id),
+                updated_by: Set(admin_id),
+                ..Default::default()
+            }
+            .insert(db)
+            .await?;
+        }
+    }
+
     // 5. 示例定时任务：登录日志每日清理（幂等按 job_name；调度器在 init_scheduler 装载）
     const SEED_JOB_NAME: &str = "登录日志每日清理";
     let sample_job = sys_job::Entity::find()
@@ -1344,6 +1581,28 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             handler_name: Set(crate::task::refresh_token_cleanup::HANDLER_NAME.to_string()),
             status: Set(1),
             remark: Set("每日 04:30:00 清理过期超 30 天的登录刷新凭证".to_string()),
+            created_by: Set(admin_id),
+            updated_by: Set(admin_id),
+            ..Default::default()
+        }
+        .insert(db)
+        .await?;
+    }
+
+    // 5.2 假期额度过期作废（幂等按 job_name；调度器在 init_scheduler 装载，
+    //     handler 由 task 注册表提供，见 task/mod.rs 的 handlers()）
+    const SEED_LEAVE_EXPIRE_JOB_NAME: &str = "假期额度过期作废";
+    let leave_expire_job = sys_job::Entity::find()
+        .filter(sys_job::Column::JobName.eq(SEED_LEAVE_EXPIRE_JOB_NAME))
+        .one(db)
+        .await?;
+    if leave_expire_job.is_none() {
+        sys_job::ActiveModel {
+            job_name: Set(SEED_LEAVE_EXPIRE_JOB_NAME.to_string()),
+            cron_expr: Set("0 30 1 * * *".to_string()),
+            handler_name: Set(crate::task::leave_grant_expire::HANDLER_NAME.to_string()),
+            status: Set(1),
+            remark: Set("每日 01:30:00 作废已过失效期的假期额度批次".to_string()),
             created_by: Set(admin_id),
             updated_by: Set(admin_id),
             ..Default::default()
@@ -2048,5 +2307,173 @@ mod tests {
             .exec(&db)
             .await
             .unwrap();
+    }
+
+    /// 假期额度域种子（业务域 `hr/leave`）：菜单父子链与组件路径、12 条端点登记、
+    /// 发放依据字典、初始 7 类假期类型、过期作废任务行——连跑两次后每项都必须
+    /// 恰好一份（幂等）。端点漏登 = 该端点 fail-open（未登记放行），所以断言的是
+    /// 「12 条都在、都是 POST、都启用且未软删」，而不只是菜单存在。
+    #[tokio::test]
+    async fn ensure_seed_leave_foundation_is_idempotent() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+        ensure_seed(&db).await.unwrap();
+
+        for path in [
+            "/api/v1/hr/leave/leave-type/list",
+            "/api/v1/hr/leave/leave-type/create",
+            "/api/v1/hr/leave/leave-type/update",
+            "/api/v1/hr/leave/leave-type/get",
+            "/api/v1/hr/leave/leave-type/delete",
+            "/api/v1/hr/leave/leave-grant/list",
+            "/api/v1/hr/leave/leave-grant/batch-create",
+            "/api/v1/hr/leave/leave-grant/get",
+            "/api/v1/hr/leave/leave-grant/cancel",
+            "/api/v1/hr/leave/leave-balance/list",
+            "/api/v1/hr/leave/leave-balance/get",
+            "/api/v1/hr/leave/leave-balance/logs",
+        ] {
+            let row = sys_api::Entity::find()
+                .filter(sys_api::Column::Path.eq(path))
+                .filter(sys_api::Column::Method.eq("POST"))
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("{path} 必须登记在 sys_api"));
+            assert_eq!(row.status, 1, "{path} 种子应为启用");
+            assert!(row.deleted_at.is_none(), "{path} 不应是软删占位行");
+        }
+
+        let hr_id = find_menu_id_by_name(&db, "Hr")
+            .await
+            .unwrap()
+            .expect("Hr 目录");
+        let leave_id = find_menu_id_by_name(&db, "HrLeave")
+            .await
+            .unwrap()
+            .expect("HrLeave 菜单");
+        let leave = sys_menu::Entity::find_by_id(leave_id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(leave.parent_id, hr_id, "假期管理应挂在人事管理目录下");
+        assert_eq!(leave.menu_type, 1, "假期管理应是目录菜单");
+
+        for (name, component) in [
+            ("HrLeaveType", "#/views/biz/hr/leave/type/index.vue"),
+            ("HrLeaveGrant", "#/views/biz/hr/leave/grant/index.vue"),
+            ("HrLeaveBalance", "#/views/biz/hr/leave/balance/index.vue"),
+        ] {
+            let id = find_menu_id_by_name(&db, name).await.unwrap().expect(name);
+            let menu = sys_menu::Entity::find_by_id(id)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(menu.parent_id, leave_id, "{name} 应挂在假期管理目录下");
+            assert_eq!(menu.menu_type, 2, "{name} 应是页面菜单");
+            assert_eq!(menu.component, component);
+        }
+
+        for (name, parent, permission) in [
+            ("HrLeaveTypeCreate", "HrLeaveType", "hr:leave-type:create"),
+            ("HrLeaveTypeUpdate", "HrLeaveType", "hr:leave-type:update"),
+            ("HrLeaveTypeDelete", "HrLeaveType", "hr:leave-type:delete"),
+            (
+                "HrLeaveGrantCreate",
+                "HrLeaveGrant",
+                "hr:leave-grant:create",
+            ),
+            (
+                "HrLeaveGrantCancel",
+                "HrLeaveGrant",
+                "hr:leave-grant:cancel",
+            ),
+        ] {
+            let id = find_menu_id_by_name(&db, name).await.unwrap().expect(name);
+            let button = sys_menu::Entity::find_by_id(id)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap();
+            let parent_id = find_menu_id_by_name(&db, parent)
+                .await
+                .unwrap()
+                .expect(parent);
+            assert_eq!(button.parent_id, parent_id, "{name} 应挂在 {parent} 下");
+            assert_eq!(button.menu_type, 3, "{name} 应是按钮");
+            assert_eq!(button.permission, permission);
+        }
+
+        // 发放依据字典：7 项，value 即 hr_leave_grant.reason 的编码
+        let reason_dict = sys_dictionary::Entity::find()
+            .filter(sys_dictionary::Column::Type.eq("leaveGrantReason"))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("leaveGrantReason 字典应存在");
+        let mut reasons = sys_dictionary_detail::Entity::find()
+            .filter(sys_dictionary_detail::Column::DictionaryId.eq(reason_dict.id))
+            .all(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|item| item.value)
+            .collect::<Vec<_>>();
+        reasons.sort();
+        assert_eq!(
+            reasons,
+            vec![
+                "carry",
+                "comp",
+                "company",
+                "manual",
+                "seniority",
+                "severance",
+                "statutory"
+            ],
+            "发放依据字典应恰好 7 项且不重复"
+        );
+
+        // 初始 7 类假期类型：type_code 各 1 行、启用、值等于基线表
+        for (code, type_name, unit, mode, min_minutes, need_attachment, allow_negative) in [
+            ("annual", "年假", 1, 1, 240, 0, 0),
+            ("comp", "调休", 2, 1, 60, 0, 0),
+            ("personal", "事假", 1, 0, 240, 0, 0),
+            ("sick", "病假", 1, 0, 240, 1, 0),
+            ("marriage", "婚假", 1, 1, 480, 1, 0),
+            ("maternity", "产假", 1, 1, 480, 1, 0),
+            ("bereavement", "丧假", 1, 1, 480, 0, 0),
+        ] {
+            let rows = hr_leave_type::Entity::find()
+                .filter(hr_leave_type::Column::TypeCode.eq(code))
+                .all(&db)
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1, "假期类型 {code} 应恰好 1 行（幂等）");
+
+            let row = &rows[0];
+            assert_eq!(row.type_name, type_name);
+            assert_eq!(row.unit, unit);
+            assert_eq!(row.balance_mode, mode);
+            assert_eq!(row.min_unit_minutes, min_minutes);
+            assert_eq!(row.require_attachment, need_attachment);
+            assert_eq!(row.allow_negative, allow_negative);
+            assert_eq!(row.status, 1, "假期类型 {code} 应为启用");
+            assert!(row.deleted_at.is_none(), "种子假期类型 {code} 不应软删");
+        }
+
+        // 过期作废任务：1 行且 handler 名与 task 注册表一致
+        let jobs = sys_job::Entity::find()
+            .filter(sys_job::Column::JobName.eq("假期额度过期作废"))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(jobs.len(), 1, "过期作废任务应恰好 1 行（幂等）");
+        assert_eq!(
+            jobs[0].handler_name,
+            crate::task::leave_grant_expire::HANDLER_NAME
+        );
     }
 }

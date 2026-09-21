@@ -44,6 +44,26 @@ pub async fn find_by_user_id_include_deleted(
     Ok(employee)
 }
 
+/// 按员工 ID 批量取档案（用于额度列表 / 流水的员工名拼装）。
+///
+/// 软删过滤：`DeletedAt.is_null()`；不分页（调用方传已去重的 ID 集合）。
+/// 空数组直接返回空 `Vec`——不发 `IN ()` 语句（那是 SQL 语法错误）。
+pub async fn find_by_ids(
+    db: &impl ConnectionTrait,
+    ids: &[u64],
+) -> anyhow::Result<Vec<hr_employee::Model>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let employees = hr_employee::Entity::find()
+        .filter(hr_employee::Column::Id.is_in(ids.iter().copied()))
+        .filter(hr_employee::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+    Ok(employees)
+}
+
 /// 分页 + 动态过滤：keyword 模糊备注 / 紧急联系人，状态与学历精确，
 /// 审计人 / 时间范围过滤，按 id 降序（新档案在前），恒排除软删。
 ///
@@ -573,5 +593,26 @@ mod tests {
             .unwrap();
         assert_eq!(stamped.updated_by, ACTOR_ID, "软删应盖章更新人");
         assert!(stamped.deleted_at.is_some(), "软删应写入 deleted_at");
+    }
+
+    /// 批量取名入口：只回命中的有效档案（软删行不算命中），空入参不走 `IN ()`。
+    #[tokio::test]
+    async fn find_by_ids_returns_only_live_rows_for_requested_ids() {
+        let db = test_txn().await;
+        let first = seed_employee(&db, unique_user_id(), None).await;
+        let second = seed_employee(&db, unique_user_id(), None).await;
+        let deleted = seed_employee(&db, unique_user_id(), Some(now())).await;
+
+        let empty = find_by_ids(&db, &[]).await.unwrap();
+        assert!(empty.is_empty(), "空入参应直接返回空集合");
+
+        let found = find_by_ids(&db, &[first.id, second.id, deleted.id])
+            .await
+            .unwrap();
+        let mut ids: Vec<u64> = found.iter().map(|model| model.id).collect();
+        ids.sort_unstable();
+        let mut expected = [first.id, second.id];
+        expected.sort_unstable();
+        assert_eq!(ids, expected, "只应返回命中的有效档案（软删行不计入）");
     }
 }
