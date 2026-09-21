@@ -10,6 +10,19 @@
 //!
 //! **本文件当前是桩**：函数体一律返回 `Err(AppError::Biz("未实现：<函数名>"))`，
 //! 由作者按每个函数的 `// 实现提示` 补齐；端点行为随任务 5 端到端验收。
+//!
+//! 骨架期口径：`use` 只写**签名本身需要**的项（`AppError` 例外——桩函数体就在用它）；
+//! 实现才需要的 import 刻意不写，以免触发 `-D warnings` 的未使用 import，清单见下：
+//!
+//! ```ignore
+//! use crate::infra::state::AppState;
+//! use crate::middleware::auth::AuthUser;
+//! use crate::modules::biz::hr::leave::service as leave_service;
+//! use crate::modules::biz::hr::leave::validate;
+//! use crate::modules::system::dictionary::service as dictionary_service;
+//! use crate::utils::ApiResponse;
+//! use crate::utils::user_ref::fill_user_names;
+//! ```
 
 use salvo::oapi::endpoint;
 use salvo::prelude::*;
@@ -22,19 +35,6 @@ use crate::modules::biz::hr::leave::dto::{
 use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
 use crate::utils::{ApiResult, IdReq, PageResult};
-
-// 桩阶段：import 一次写全（与 employee/api.rs 同款清单），函数体补齐后即可直接用，
-// 因此未消费的 import 由下面这行 allow 兜住——**函数体补齐时连同本行一起删除**。
-#[allow(unused_imports)]
-use crate::{
-    infra::state::AppState,
-    middleware::auth::AuthUser,
-    modules::{
-        biz::hr::leave::{service as leave_service, validate},
-        system::dictionary::service as dictionary_service,
-    },
-    utils::{ApiResponse, user_ref::fill_user_names},
-};
 
 /// 假期类型列表（POST + JSON body）。
 //

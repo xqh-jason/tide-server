@@ -13,8 +13,9 @@
 //! **本模块当前是桩**：函数体一律返回 `Err("未实现：<函数名>")`，由作者按各函数的
 //! `// 实现提示` 补齐；下方 4 条测试保持红灯即交接信号（原因恒为 `未实现：…`）。
 //!
-//! 三个函数上的 `#[allow(dead_code)]` 是桩阶段必需品：调用方 `api.rs` 的函数体尚未接上，
-//! 非测试构建下它们没有任何用户；**`api.rs` 的函数体补齐时一并删除这三个属性**。
+//! 三个函数上的 `#[cfg_attr(not(test), allow(dead_code))]` 是骨架期必需品：调用方 `api.rs`
+//! 的函数体尚未接上，非测试构建下它们没有任何用户（test 构建下由下方用例覆盖）；
+//! **`api.rs` 的函数体补齐时一并删除这三个属性**。
 
 use crate::modules::biz::hr::leave::dto::{
     BatchCreateGrantReq, CreateLeaveTypeReq, UpdateLeaveTypeReq,
@@ -40,7 +41,8 @@ use crate::modules::biz::hr::leave::dto::{
 // 一组 `check_*` 私有小函数（必填 / 长度 / 值域，值域文案 `仅允许：1 / 2` 形式）+ `join_errors`；
 // `status` 走 `crate::utils::check::check_status(req.status, status_allowed)
 // .map_err(|e| errors.push(e)).ok();`（返回 `Result<(), String>`，非 `AppError`）。
-#[allow(dead_code)]
+// 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn validate_create_leave_type(
     req: &CreateLeaveTypeReq,
     status_allowed: &[i8],
@@ -56,7 +58,8 @@ pub fn validate_create_leave_type(
 //
 // 实现提示：除 id 检查外与创建共用同一组 `check_*` 小函数；`UpdateLeaveTypeReq` 与
 // `CreateLeaveTypeReq` 字段同名同型（多一个 `id`），拆一个 `&str`/`i8` 入参的共用内部函数即可。
-#[allow(dead_code)]
+// 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn validate_update_leave_type(
     req: &UpdateLeaveTypeReq,
     status_allowed: &[i8],
@@ -81,7 +84,8 @@ pub fn validate_update_leave_type(
 //
 // 实现提示：日期解析用 `chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")`（同 employee 域）；
 // 员工 ID 去重计数用 `crate::utils::check` 或就地 `HashSet`（`duplicate_ids` 是查重、不是去重）。
-#[allow(dead_code)]
+// 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn validate_batch_create_grant(req: &BatchCreateGrantReq) -> Result<(), String> {
     let _ = req;
     Err("未实现：validate_batch_create_grant".to_string())
@@ -216,5 +220,29 @@ mod tests {
                 "minutes={minutes} 未拦住：{err}"
             );
         }
+    }
+
+    #[test]
+    fn validate_update_leave_type_rejects_zero_id() {
+        let req = UpdateLeaveTypeReq {
+            id: 0,
+            type_code: "annual".to_string(),
+            type_name: "年假".to_string(),
+            unit: 1,
+            balance_mode: 1,
+            min_unit_minutes: 240,
+            require_attachment: 0,
+            allow_negative: 0,
+            pay_ratio: 1000,
+            status: 1,
+            remark: String::new(),
+        };
+
+        let err = validate_update_leave_type(&req, STATUS_ALLOWED).unwrap_err();
+
+        assert!(
+            err.contains("假期类型 ID 必须大于 0"),
+            "缺少 id 校验提示：{err}"
+        );
     }
 }
