@@ -48,6 +48,21 @@ pub async fn find_leave_type_by_id(
     anyhow::bail!("未实现：find_leave_type_by_id")
 }
 
+/// 按 ID 批量取假期类型（软删过滤：`DeletedAt.is_null()`；不分页；空入参直接返回空 `Vec`）。
+///
+/// 供 service 列表响应批量取名（`fill_leave_type_names`）：单次查询，禁止逐行查库。
+// 实现提示：`ids` 为空直接 `return Ok(Vec::new())` → `Entity::find().filter(Column::Id.is_in(ids))`
+// `.filter(Column::DeletedAt.is_null()).all(db)`（顺序无要求，取名按 id 建 map 即可）。
+// 骨架期：收件方（service::fill_leave_type_names）落地前无调用方，非 test 构建允许未使用
+#[cfg_attr(not(test), allow(dead_code))]
+pub async fn find_leave_types_by_ids(
+    db: &impl ConnectionTrait,
+    ids: &[u64],
+) -> anyhow::Result<Vec<hr_leave_type::Model>> {
+    let _ = (db, ids);
+    anyhow::bail!("未实现：find_leave_types_by_ids")
+}
+
 /// 按 `type_code` 查假期类型——**含软删占位**（不过滤 `deleted_at`）。
 ///
 /// `uk_hr_leave_type_code` 是单列唯一键，软删行仍占位，查重必须能看到软删记录
@@ -120,6 +135,24 @@ pub async fn find_active_grants_for_update(
 ) -> anyhow::Result<Vec<hr_leave_grant::Model>> {
     let _ = (txn, employee_id, leave_type_id, on_date);
     anyhow::bail!("未实现：find_active_grants_for_update")
+}
+
+/// 扫描需作废的过期批次：`expire_at < today`、`remaining_minutes > 0`、`status = 1`，
+/// `lock_exclusive()`，按 `expire_at asc, id asc` 返回（expire job 用）。
+///
+/// 幂等护栏在条件里：已作废批次 `remaining_minutes = 0`，重复执行不再命中。
+// 实现提示：`Entity::find().filter(Column::ExpireAt.lt(today))`
+// `.filter(Column::RemainingMinutes.gt(0)).filter(Column::Status.eq(1))`
+// `.order_by_asc(Column::ExpireAt).order_by_asc(Column::Id).lock_exclusive().all(txn)`；
+// `expire_at` 为 NULL 的批次不满足 `lt(today)`，天然不入候选。
+// 骨架期：收件方（service::expire_grants_in_tx）落地前无调用方，非 test 构建允许未使用
+#[cfg_attr(not(test), allow(dead_code))]
+pub async fn find_expired_grants_for_update(
+    txn: &DatabaseTransaction,
+    today: Date,
+) -> anyhow::Result<Vec<hr_leave_grant::Model>> {
+    let _ = (txn, today);
+    anyhow::bail!("未实现：find_expired_grants_for_update")
 }
 
 /// 事务内创建批次：审计盖章（创建人与更新人同源，均取 `actor_id`）。

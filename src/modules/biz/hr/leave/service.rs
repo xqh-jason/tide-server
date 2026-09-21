@@ -10,8 +10,7 @@
 //!   B：`Σ 未失效批次的 remaining_minutes == granted − used`；
 //! - 扣减恒定 FEFO（先到期先扣）：顺序由 `repo::find_active_grants_for_update` 保证，
 //!   批次级并发护栏在 `repo::consume_grant_in_tx` 的 `remaining_minutes >= minutes` 条件里；
-//! - 账户账期（`period`）口径：发放取批次 `effective_at` 的自然年，预占 / 实扣 / 释放 /
-//!   过期取单据发生日（`on_date`）的自然年——一个账户 = 一个自然年的额度桶。
+//! - 账户账期（`period`）口径见下文「账户账期」一节——一个账户 = 一个自然年的额度桶。
 //!
 //! # 账本口径（`hr_leave_balance_log.delta_minutes`）
 //!
@@ -29,6 +28,19 @@
 //!
 //! 因此「流水净额 == 账户净额」的不变式 A 对任意操作序列都成立；实扣写 0 而非 `−m`，
 //! 是为了不与预占的 `−m` 重复计数（预占已经扣过可用）。
+//!
+//! # 账户账期（`hr_leave_balance.period`）
+//!
+//! 账户账期 = **交易发生日 / 发放生效日的自然年**：
+//! - `grant_leave_in_tx` 取 `effective_at` 的自然年——`hr_leave_grant.period` 只是**归属标记**
+//!   （幂等键与展示用），**不决定账户**；
+//! - `lock` / `consume` / `release` / `expire` 取各自 `on_date` / `today` 的自然年。
+//!
+//! 反例（为什么结转批次不能拿 `period` 定账户）：上一年度结转的额度批次 `period = "2025"`、
+//! `effective_at = 2026-01-01`，它在本年度可用，必须计入 `2026` 账期的 `granted`——
+//! 若按 `period` 落进 `2025` 账户，本年度的可用额度会凭空少一块，且 FEFO 扣减（不按账期过滤）
+//! 扣掉它的剩余时，A / B 两条不变式必然破。（测试 `lock_then_consume_…` 的
+//! `granted == 960`、`expire_…` 的 `expired == 480` 就是把这条口径钉死的断言。）
 
 use std::collections::HashMap;
 
@@ -61,7 +73,7 @@ use crate::utils::error::AppError;
 // `source_kind` = 4（手工）/ 1（系统任务，按调用场景）、`operator_id = actor_id`。
 // 骨架期：仅测试调用，实现函数体后删除本属性
 #[cfg_attr(not(test), allow(dead_code))]
-// 入参即业务事实（发放五要素 + 生效 / 失效日），拆 DTO 只会多一层搬运，故放行该 lint
+// 成对原语的入参集合固定；拆参数结构体会让跨域调用方多一层构造，收益不足
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn grant_leave_in_tx(
     txn: &DatabaseTransaction,
@@ -152,11 +164,11 @@ pub(crate) async fn consume_locked_in_tx(
 }
 
 /// 释放预占（审批驳回 / 撤销）：账户 `locked -= minutes`，可用恢复，流水正向记恢复量。
-// 实现提示：① 账户加锁读，账期取**当前自然年**（`chrono::Local::now().date_naive()`）——
-// 本签名不带日期，若 P2 出现「跨年挂起单据释放」场景需补 `on_date` 入参以免打错年度的桶；
-// ② 账户 `locked_minutes -= minutes` → `repo::update_balance_in_tx`；
-// ③ 写流水：`biz_type = LOG_BIZ_LEAVE_RELEASE`、`delta = +minutes`（可用恢复，
-// 见文件头账本口径）、`grant_id = 0`（账户级）、`source_kind` / `source_id` 原样入来源列。
+// 实现提示：① 账户加锁读 `repo::find_balance_by_account_for_update(txn, employee_id, leave_type_id, period)`，
+// 账期取 `on_date` 的自然年（`format!("{}", on_date.year())`）；`None` →
+// `AppError::Biz("额度账户不存在，请先发放额度")`；② 账户 `locked_minutes -= minutes` →
+// `repo::update_balance_in_tx`；③ 写流水：`biz_type = LOG_BIZ_LEAVE_RELEASE`、`delta = +minutes`
+// （可用恢复，见文件头账本口径）、`grant_id = 0`（账户级）、`source_kind` / `source_id` 原样入来源列。
 // 骨架期：仅测试调用，实现函数体后删除本属性
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn release_locked_in_tx(
@@ -166,6 +178,7 @@ pub(crate) async fn release_locked_in_tx(
     minutes: i32,
     source_kind: i8,
     source_id: u64,
+    on_date: Date,
 ) -> Result<(), AppError> {
     let _ = (
         txn,
@@ -174,6 +187,7 @@ pub(crate) async fn release_locked_in_tx(
         minutes,
         source_kind,
         source_id,
+        on_date,
     );
     Err(AppError::Biz("未实现：release_locked_in_tx".into()))
 }
@@ -181,10 +195,10 @@ pub(crate) async fn release_locked_in_tx(
 /// 批量作废过期批次（定时任务调用）：`expire_at < today` 且仍有剩余的批次归零 + 置失效 + 记流水。
 ///
 /// 返回本次作废的批次数。幂等靠 `remaining_minutes > 0` 的扫描条件——重复跑不会二次记账。
-// 实现提示：① 扫描候选（建议在 `repo.rs` 追加 `find_expired_grants_for_update(txn, today)`：
-// `status = GRANT_STATUS_ACTIVE` + `expire_at < today` + `remaining_minutes > 0` + `lock_exclusive()`；
-// 本任务只交付签名，不代写该 repo 原语）；② 逐条：账户加锁读（**账期取批次 `effective_at` 的自然年**，
-// 与发放时的入账口径一致，取批次 `period` 字段会打错桶）`expired_minutes += remaining` →
+// 实现提示：① `repo::find_expired_grants_for_update(txn, today)` 加锁扫描候选
+// （`expire_at < today` + `remaining_minutes > 0` + `status = 1`，按 `expire_at asc, id asc`）；
+// ② 逐条：账户加锁读（**账期取批次 `effective_at` 的自然年**，见文件头「账户账期」，
+// 取批次 `period` 字段会打错桶）`expired_minutes += remaining` →
 // 批次 `remaining_minutes` 归零 + `repo::set_grant_status_in_tx(txn, id, GRANT_STATUS_EXPIRED, 0)`
 // （系统任务，actor_id 传 0）；③ 每批次写一条流水：`biz_type = LOG_BIZ_EXPIRE`、
 // `delta = −remaining`（作废减少可用，见文件头账本口径）、`grant_id` = 批次 id、
@@ -248,14 +262,16 @@ pub(crate) async fn batch_create_grants_in_tx(
 
 // —— 批量取名 helper（列表 / 详情响应用；单次查询，禁止逐行查库）——
 
-/// 批量取员工名：`hr_employee.id` → `sys_user.nickname`（跨域读 employee 域 repo + user 域查名管道）。
-/// 返回 id → 昵称映射；查不到的人（软删档案/用户）不出现，调用方留空串。
+/// 批量取员工名：`hr_employee.id` → `sys_user.username`（跨域读 employee 域 repo + user 域查名管道）。
+/// 返回 id → 用户名映射；查不到的人（软删档案/用户）不出现，调用方留空串。
+///
+/// 与平台唯一拼名管道口径一致（映射 `sys_user.username`，employee 域 `EmployeeResp` 走同一条）；
+/// 若将来要显示昵称，需另开设计（给 `utils::user_ref` 增加昵称口径），本域不自建查询。
 // 实现提示：① 空入参直接返回空 map；② 按 ID 批量取档案（`ids` 去重后）——任务 4 在 employee 域
 // 追加 `repo::find_by_ids(db, ids) -> anyhow::Result<Vec<hr_employee::Model>>`（本任务不代写）；
 // ③ 取到的 `hr_employee.user_id` 交给全项目唯一查名管道
-// `crate::utils::user_ref::find_user_name_map_by_ids`（现映射 `sys_user.username`；若产品口径要
-// `nickname`，改造该唯一管道而不是在本域另写查询）；④ 回填 `hr_employee.id → 名称`。
-// 禁止逐行查库：列表响应必须一次批量查询。
+// `crate::utils::user_ref::find_user_name_map_by_ids`（映射 `sys_user.username`）；④ 回填
+// `hr_employee.id → 名称`。禁止逐行查库：列表响应必须一次批量查询。
 // 骨架期：任务 4 的 api 层接入后删除本属性
 #[allow(dead_code)]
 pub(crate) async fn fill_employee_names(
@@ -267,9 +283,8 @@ pub(crate) async fn fill_employee_names(
 }
 
 /// 批量取假期类型名：`hr_leave_type.id` → `type_name`（单表批量查，排除软删行）。
-// 实现提示：① 空入参返回空 map；② 单表批量查（`Column::Id.is_in(ids)` +
-// `Column::DeletedAt.is_null()`）——建议在 `repo.rs` 追加
-// `find_leave_type_by_ids(db, ids)` 由本函数调用（repo 是唯一数据访问层，本域不另写 SQL）；
+// 实现提示：① 空入参返回空 map；② `repo::find_leave_types_by_ids(db, ids)` 单表批量查
+// （已按 `DeletedAt.is_null()` 排除软删；repo 是唯一数据访问层，本域不另写 SQL）；
 // ③ 回填 `id → type_name`；软删行不出现，调用方留空串。
 // 骨架期：任务 4 的 api 层接入后删除本属性
 #[allow(dead_code)]
@@ -719,7 +734,7 @@ mod tests {
         service::lock_leave_in_tx(&txn, emp, ty, 240, date(2026, 2, 1))
             .await
             .unwrap();
-        service::release_locked_in_tx(&txn, emp, ty, 240, 2, 999)
+        service::release_locked_in_tx(&txn, emp, ty, 240, 2, 999, date(2026, 2, 1))
             .await
             .unwrap();
 
