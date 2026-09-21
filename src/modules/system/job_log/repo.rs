@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, QueryOrder, QuerySelect};
+use sea_orm::{Condition, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_job_log, sys_job_log::Model};
 use crate::modules::system::job_log::dto::JobLogFilter;
@@ -119,9 +119,8 @@ pub async fn soft_delete_batch(db: &impl ConnectionTrait, ids: &[u64]) -> anyhow
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::ActiveModelTrait;
+    use sea_orm::Database;
     use sea_orm::TransactionTrait;
-    use sea_orm::{Database, DatabaseConnection, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

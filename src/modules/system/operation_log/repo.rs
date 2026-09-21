@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, QueryOrder, QuerySelect};
+use sea_orm::{Condition, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_operation_log, sys_operation_log::Model};
 use crate::modules::system::operation_log::dto::OperationLogFilter;
@@ -123,8 +123,7 @@ pub async fn delete_created_before(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_operation_log;
-    use sea_orm::{ActiveModelTrait, Database, Set};
+    use sea_orm::Database;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

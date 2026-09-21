@@ -234,10 +234,6 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_operation_log;
-    use crate::infra::state::AppState;
-    use crate::middleware::auth::AuthUser;
-    use crate::utils::request::CapturedBody;
     use sea_orm::{ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};

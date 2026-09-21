@@ -1,6 +1,5 @@
 //! 系统域：健康检查等系统级接口（服务器监控已取消，定时任务在 job 域）。
 
-use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
 pub mod api;

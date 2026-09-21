@@ -185,7 +185,6 @@ mod tests {
     use std::sync::Arc;
 
     use crate::entity::sys_refresh_token;
-    use crate::infra::state::AppState;
     use crate::utils::cache::MemoryCache;
 
     /// 构造 AppState（真库 + 内存 cache + 空转调度器）。

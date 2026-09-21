@@ -5,7 +5,6 @@
 //! handler 只做三件事：取状态（`AppState`）/ 取操作人（`AuthUser`）→ 预取值域（字典）
 //! → 调 validate + service → 拼显示名（`fill_user_names`）。业务规则不写在这里。
 
-use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::modules::biz::hr::employee::dto::{

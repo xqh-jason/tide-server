@@ -1,4 +1,4 @@
-use salvo::oapi::{self, EndpointOutRegister, ToSchema};
+use salvo::oapi;
 use salvo::prelude::*;
 use serde::Serialize;
 

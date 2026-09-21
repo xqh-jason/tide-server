@@ -119,10 +119,10 @@ fn deny(res: &mut Response, ctrl: &mut FlowCtrl) {
 mod tests {
     use super::*;
     use crate::entity::{sys_api, sys_role, sys_role_api, sys_user, sys_user_role};
-    use crate::infra::state::AppState;
     use crate::utils::cache::MemoryCache;
+    use sea_orm::ActiveValue::Set;
+    use sea_orm::Database;
     use sea_orm::entity::prelude::*;
-    use sea_orm::{ActiveValue::Set, Database, DatabaseConnection};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 

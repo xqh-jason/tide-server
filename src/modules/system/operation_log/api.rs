@@ -1,6 +1,5 @@
 //! 操作日志 handler（codegen 生成后裁剪：只读 + 删除 + 批量删除）。
 
-use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;

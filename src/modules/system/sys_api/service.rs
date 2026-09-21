@@ -201,9 +201,7 @@ pub async fn find_by_ids_for_update(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_api, sys_role, sys_role_api};
-    use crate::modules::system::sys_api::dto::{CreateApiReq, UpdateApiReq};
-    use crate::utils::error::AppError;
+    use crate::entity::{sys_role, sys_role_api};
     use sea_orm::{
         ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, PaginatorTrait,
         QueryFilter, Set,

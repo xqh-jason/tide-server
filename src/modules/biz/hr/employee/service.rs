@@ -176,7 +176,7 @@ mod tests {
     use super::*;
     use crate::modules::biz::hr::employee::dto::CreateAccountReq;
     use crate::modules::system::user::service as user_service;
-    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+    use sea_orm::{ActiveModelTrait, Database, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// 既有测试统一用种子 admin（id=1）作 actor。

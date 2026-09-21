@@ -1,6 +1,5 @@
 //! 认证域：登录。JWT 校验在认证中间件（含黑名单检查），接口级授权在 middleware/api_permission。
 
-use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
 use crate::middleware::{auth::AuthRequired, op_log::OperationLog};

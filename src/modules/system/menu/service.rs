@@ -366,11 +366,10 @@ pub(crate) async fn delete_menu_in_tx(txn: &DatabaseTransaction, id: u64) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role};
+    use crate::entity::{sys_role, sys_role_menu, sys_user, sys_user_role};
     use crate::modules::system::menu::dto::{CreateMenuReq, UpdateMenuReq};
-    use crate::utils::error::AppError;
     use chrono::Local;
-    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter};
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -397,7 +396,6 @@ mod tests {
     /// 注意：`create_menu` / `update_menu` 已是自开事务的对外入口（收 `&DatabaseConnection`），
     /// 域内测试统一调用 `_in_tx` 版本以复用本夹具的回滚隔离。
     async fn test_txn() -> sea_orm::DatabaseTransaction {
-        use sea_orm::TransactionTrait;
         test_db().await.begin().await.unwrap()
     }
 

@@ -3,8 +3,7 @@ use crate::entity::{sys_role, sys_user, sys_user_dept, sys_user_position, sys_us
 use crate::modules::system::user::dto::UserFilter;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::sea_query::Expr;
-use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
+use sea_orm::{Condition, DatabaseTransaction, QueryOrder, QuerySelect};
 
 /// 查询单个有效用户（排除软删除）。
 pub async fn find_by_id(db: &impl ConnectionTrait, id: u64) -> anyhow::Result<Option<Model>> {
@@ -361,7 +360,7 @@ pub(crate) async fn replace_user_positions_in_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{ActiveModelTrait, Database, Set};
+    use sea_orm::Database;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -944,7 +943,6 @@ mod tests {
 
         let base = chrono::Local::now().naive_local();
         // update_many 盖不同的审计人与时间：避免为测试改各域 seed 夹具
-        use sea_orm::sea_query::Expr;
         for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
             sys_user::Entity::update_many()
                 .filter(sys_user::Column::Id.eq(row))

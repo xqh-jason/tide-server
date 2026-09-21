@@ -114,11 +114,11 @@ pub async fn delete_refresh_token_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_refresh_token, sys_user};
+    use crate::entity::sys_user;
     use crate::modules::system::refresh_token::dto::{RefreshTokenFilter, RefreshTokenResp};
     use crate::utils::PageQuery;
     use crate::utils::user_ref::fill_user_names;
-    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

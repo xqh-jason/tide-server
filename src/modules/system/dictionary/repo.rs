@@ -746,7 +746,6 @@ mod tests {
 
         let base = chrono::Local::now().naive_local();
         // update_many 盖不同的审计人与时间：避免为测试改各域 seed 夹具
-        use sea_orm::sea_query::Expr;
         for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
             sys_dictionary::Entity::update_many()
                 .filter(sys_dictionary::Column::Id.eq(row))
@@ -907,7 +906,6 @@ mod tests {
         )
         .await;
         let base = chrono::Local::now().naive_local();
-        use sea_orm::sea_query::Expr;
         for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
             sys_dictionary_detail::Entity::update_many()
                 .filter(sys_dictionary_detail::Column::Id.eq(row))

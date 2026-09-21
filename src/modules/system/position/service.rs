@@ -221,7 +221,7 @@ pub async fn delete_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+    use sea_orm::{ActiveModelTrait, Database};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// 既有测试统一用种子 admin（id=1）作 actor。
@@ -244,7 +244,6 @@ mod tests {
 
     /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
     async fn test_txn() -> DatabaseTransaction {
-        use sea_orm::TransactionTrait;
         test_db().await.begin().await.unwrap()
     }
 

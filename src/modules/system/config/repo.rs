@@ -4,7 +4,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, QueryOrder};
+use sea_orm::{Condition, QueryOrder};
 
 use crate::entity::{sys_config, sys_site_config};
 use crate::modules::system::config::dto::ConfigFilter;
@@ -150,7 +150,6 @@ pub async fn update_site_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_config;
     use sea_orm::{
         ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
     };
@@ -262,7 +261,6 @@ mod tests {
         let b = seed_config(&db, &format!("{kw}b"), base, None).await;
 
         // update_many 盖不同的审计人与时间：避免为测试改各域 seed 夹具
-        use sea_orm::sea_query::Expr;
         for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
             sys_config::Entity::update_many()
                 .filter(sys_config::Column::Id.eq(row))
@@ -330,7 +328,6 @@ mod tests {
         .await;
 
         // update_many 盖不同的审计人：避免为测试改各域 seed 夹具
-        use sea_orm::sea_query::Expr;
         for (row, by) in [(a.id, 7_i64), (b.id, 8_i64)] {
             sys_config::Entity::update_many()
                 .filter(sys_config::Column::Id.eq(row))

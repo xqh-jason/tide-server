@@ -4,7 +4,7 @@
 //! `EndpointOutRegister`，因此本文件为 `AppError` 实现这两个 trait，错误统一输出
 //! `{code, data, message}` 契约体（`code`: 1 成功 / 0 失败，与 vben successCode=1 对齐）。
 
-use salvo::oapi::{self, EndpointOutRegister, ToSchema};
+use salvo::oapi;
 use salvo::prelude::*;
 
 use crate::utils::response::ApiResponse;

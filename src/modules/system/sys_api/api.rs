@@ -1,5 +1,4 @@
 use salvo::prelude::*;
-use salvo::{Depot, oapi::endpoint};
 
 use crate::middleware::auth::AuthUser;
 use crate::modules::system::dictionary::service as dict_service;

@@ -3,7 +3,6 @@
 //! 端点（受保护，`/api/v1/dept/*`）：`POST {list,create,update,get,delete}`；
 //! `list` 返回树（不分页），负责人列表按 `sys_user_dept.is_leader` 拼装。
 
-use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
 pub mod api;

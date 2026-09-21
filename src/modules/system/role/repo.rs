@@ -1,6 +1,6 @@
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
+use sea_orm::{Condition, DatabaseTransaction, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_role, sys_role_api, sys_role_menu};
 use crate::modules::system::role::dto::RoleFilter;
@@ -305,8 +305,8 @@ pub async fn find_all_enabled(db: &impl ConnectionTrait) -> anyhow::Result<Vec<s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_api, sys_menu, sys_role_api, sys_role_menu};
-    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use crate::entity::{sys_api, sys_menu};
+    use sea_orm::Database;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -800,7 +800,6 @@ mod tests {
         let b = seed_role(&db, &unique("audit_nokw_b"), 1, None).await;
 
         // update_many 盖不同的审计人：避免为测试改各域 seed 夹具
-        use sea_orm::sea_query::Expr;
         for (row, by) in [(a.id, 7_i64), (b.id, 8_i64)] {
             sys_role::Entity::update_many()
                 .filter(sys_role::Column::Id.eq(row))
@@ -838,7 +837,6 @@ mod tests {
 
         let base = chrono::Local::now().naive_local();
         // update_many 盖不同的审计人与时间：避免为测试改各域 seed 夹具
-        use sea_orm::sea_query::Expr;
         for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
             sys_role::Entity::update_many()
                 .filter(sys_role::Column::Id.eq(row))

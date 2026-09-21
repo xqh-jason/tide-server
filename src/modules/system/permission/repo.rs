@@ -1,7 +1,7 @@
 //! 权限数据访问层。
 
 use sea_orm::entity::prelude::*;
-use sea_orm::{ConnectionTrait, QueryOrder, QuerySelect};
+use sea_orm::{QueryOrder, QuerySelect};
 
 use crate::entity::{sys_api, sys_menu, sys_role_api, sys_role_menu};
 
@@ -101,8 +101,8 @@ pub async fn exists_role_api(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_api, sys_menu, sys_role, sys_role_api, sys_role_menu};
-    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use crate::entity::sys_role;
+    use sea_orm::{Database, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

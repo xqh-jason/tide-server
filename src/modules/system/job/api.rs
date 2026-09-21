@@ -1,6 +1,5 @@
 //! 定时任务 handler（codegen 生成后裁剪：CRUD + 状态翻转 + 立即执行）。
 
-use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;

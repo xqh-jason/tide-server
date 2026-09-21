@@ -1,6 +1,6 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-09-19（置顶新增最高规则：AI 只写测试与骨架、实现由作者手写；二轮复查：CODE MAP 引用计数全表重测，统一为 grep -ro/-rl 可复现口径；hr 分支：`DOMAINS` 增至 20 行（`biz/hr/employee`），CODE MAP 计数与种子条数同步）
+**Updated:** 2026-09-21（import 去重：删 168 处重复引入，`AppError` 527 / `AppState` 200 / `SUPER_ROLE_KEY` 40 计数重测；2026-09-19 置顶新增最高规则：AI 只写测试与骨架、实现由作者手写；二轮复查：CODE MAP 引用计数全表重测，统一为 grep -ro/-rl 可复现口径；hr 分支：`DOMAINS` 增至 20 行（`biz/hr/employee`），CODE MAP 计数与种子条数同步）
 
 ## 最高规则（优先于本文件其余全部内容）
 
@@ -70,8 +70,8 @@ Location 相对 `src/`。
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `AppError` | enum | `utils/error.rs:21` | 532 / 39 | 唯一业务错误；收 1213/1205 |
-| `AppState` | struct | `infra/state.rs:12` | 203 / 32 | config+db+cache+scheduler |
+| `AppError` | enum | `utils/error.rs:21` | 527 / 39 | 唯一业务错误；收 1213/1205 |
+| `AppState` | struct | `infra/state.rs:12` | 200 / 32 | config+db+cache+scheduler |
 | `ApiResponse<T>` | struct | `utils/response.rs:11` | 145 / 26 | `{code,data,message}` 包裹 |
 | `JsonBody<T>` | extractor | `utils/request.rs:66` | 122 / 21 | 手写提取器 + 字段级报错 |
 | `ApiResult<T>` | alias | `utils/mod.rs:24` | 117 / 18 | handler 返回类型 |
@@ -80,7 +80,7 @@ Location 相对 `src/`。
 | `PageQuery` | struct | `utils/page.rs:13` | 60 / 24 | 分页入参；`page_size` `clamp(1,1000)` |
 | `PageResult<T>` | struct | `utils/page.rs:39` | 49 / 16 | 分页出参 |
 | `paginate` | fn | `utils/page.rs:91` | 19 / 16 | 分页执行；各域 repo 统一调用 |
-| `SUPER_ROLE_KEY` | const | `modules/system/permission/mod.rs:19` | 41 / 9 | 超管保留字：短路 + 改名保护 |
+| `SUPER_ROLE_KEY` | const | `modules/system/permission/mod.rs:19` | 40 / 9 | 超管保留字：短路 + 改名保护 |
 | `enabled_int_values` | fn | `modules/system/dictionary/service.rs:214` | 37 / 20 | 值域校验允许值唯一来源 |
 | `DOMAINS` | const 表 | `modules/mod.rs:84` | 29 / 9 | 20 行内置路由装配入口 |
 | `all_domains` | fn | `modules/mod.rs:258` | 7 / 2 | 合并内置域与额外传入的域（无 extra 时等于内置） |

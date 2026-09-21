@@ -5,7 +5,6 @@ pub mod repo;
 pub mod service;
 mod validate;
 
-use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
 /// 角色端点：`POST /api/v1/role/{list,create,update,get,delete,update-status,list-all,list-all-enabled}`。

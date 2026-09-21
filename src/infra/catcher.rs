@@ -73,7 +73,6 @@ fn friendly_message(code: StatusCode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use salvo::oapi::endpoint;
     use salvo::oapi::extract::JsonBody;
     use salvo::test::{ResponseExt, TestClient};
     use serde::Deserialize;

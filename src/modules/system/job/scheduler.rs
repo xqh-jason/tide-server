@@ -290,7 +290,6 @@ fn truncate_bytes(s: String) -> String {
 mod tests {
     use super::*;
     use crate::utils::cache::{Cache, MemoryCache};
-    use tokio_cron_scheduler::JobScheduler;
 
     /// 调度 smoke（green infra 测试，不依赖业务实现）：验证 tokio-cron-scheduler
     /// 在本运行时真实触发。独立 Scheduler 实例 + 秒级任务写 cache + 宽松窗口。

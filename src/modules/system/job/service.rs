@@ -200,7 +200,6 @@ mod tests {
     use crate::modules::system::job::scheduler::job_uuid;
     use crate::utils::cache::MemoryCache;
     use sea_orm::{Database, DatabaseConnection};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use tokio_cron_scheduler::JobScheduler;
 

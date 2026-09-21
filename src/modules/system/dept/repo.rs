@@ -13,8 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::sea_query::Expr;
-use sea_orm::{ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
+use sea_orm::{DatabaseTransaction, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_dept, sys_user, sys_user_dept};
 
@@ -377,8 +376,7 @@ pub async fn find_leaders_by_dept_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_dept;
-    use sea_orm::{ActiveValue::Set, Database, TransactionTrait};
+    use sea_orm::{Database, TransactionTrait};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

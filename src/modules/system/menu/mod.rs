@@ -4,7 +4,6 @@
 //! - `user_routes()`：`POST /api/v1/user/menus`（vben 动态路由契约，挂在 user 组下）
 //! - `routes()`：`POST /api/v1/menu/{list,create,update,get,delete}`（管理端点，挂在 menu 组下）
 
-use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
 pub mod api;
