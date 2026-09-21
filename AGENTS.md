@@ -89,14 +89,26 @@ CORS 预检 204/403、`file/upload` 走 multipart + `file/download` 与 `site-co
 `Protected` 行自动获得 `AuthRequired + OperationLog + ApiPermission` 三件套，**不用自己接鉴权**。
 `build(state)` = `build_with(state, &[])`；自定义域集合走 `infra::app::run_with_domains(config, EXTRA)`。
 
-### 业务域与分支（`hr` 分支）
+### 业务域与分支（`main` / `hr`）
 
-平台与业务用**两个长期分支 + 单向合并**承载：`main → hr` 允许，`hr → main` 永久禁止（分支保护兜底）。
+平台与业务用**两个长期分支 + 单向合并**承载：`main → hr` 允许，`hr → main` 永久禁止。
 
 - `main`：纯平台（开源消费方 clone/部署拿到的就是它），不含任何业务源码；
 - `hr`：唯一自用部署 = 平台 + 人事域。业务只以**追加**方式落地：新增
   `src/modules/biz/<模块>/<域>/…` 与 `migrations/src/m_*.rs`；对既有文件的改动限于
   `src/entity/mod.rs`、`src/modules/biz/mod.rs`、`DOMAINS`、`src/infra/seed.rs` 四处**追加行**。
+
+GitHub 的分支保护只能按 base 分支与状态检查过滤、没有「按源分支过滤」的规则，因此这条纪律由三处硬约束合成：
+
+| 层 | 位置 | 作用 |
+|---|---|---|
+| 分支保护 | `main`（`enforce_admins: true`、require PR、required checks `fmt + clippy` / `真库集成测试` / `禁 hr→main 合并`、禁 force push / 禁删除） | 挡直接 push 与 force push |
+| CODEOWNERS | `.github/CODEOWNERS`（`* @xqh-jason`） | 任何进 `main` 的 PR 都落到 owner 名下 |
+| CI job | `ci.yml` 的 `guard-merge-direction`（job 名 `禁 hr→main 合并`） | `head=hr` 且 `base=main` 的 PR 直接失败 |
+
+注意三点：owner 必须写 `@用户名`（裸名被当邮箱解析 = 没有 owner）；`guard-merge-direction` 刻意
+`if: always()` 让 check 名在每次 CI 出现，否则挂不上 required checks；`main` 受保护后**平台修复也要走
+分支 → PR → CI 绿 → 合并**（`enforce_admins: true` 下管理员无法直接 push），`hr` 分支保持可直推。
 
 纪律：平台修复**一律先落 `main`** 再合并下来，禁止直接在 `hr` 改平台代码（紧急热修需双写并尽快回流）；
 `main` 每次发版后立即 `git merge main`，别攒 —— `AGENTS.md` 这类文档两分支都会改，攒久了必冲突。
