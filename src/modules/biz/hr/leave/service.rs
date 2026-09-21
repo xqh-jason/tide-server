@@ -34,13 +34,17 @@
 //! 账户账期 = **交易发生日 / 发放生效日的自然年**：
 //! - `grant_leave_in_tx` 取 `effective_at` 的自然年——`hr_leave_grant.period` 只是**归属标记**
 //!   （幂等键与展示用），**不决定账户**；
-//! - `lock` / `consume` / `release` / `expire` 取各自 `on_date` / `today` 的自然年。
+//! - `lock` / `consume` / `release` 取各自 `on_date` 的自然年；`expire` 取批次
+//!   `effective_at` 的自然年——必须与它发放时入账的账户同桶（作废若落到 `today`
+//!   的年度，批次的剩余被清零而原授予桶仍留下可用量，跨年作废时 A / B 不变式必破）。
 //!
 //! 反例（为什么结转批次不能拿 `period` 定账户）：上一年度结转的额度批次 `period = "2025"`、
 //! `effective_at = 2026-01-01`，它在本年度可用，必须计入 `2026` 账期的 `granted`——
 //! 若按 `period` 落进 `2025` 账户，本年度的可用额度会凭空少一块，且 FEFO 扣减（不按账期过滤）
-//! 扣掉它的剩余时，A / B 两条不变式必然破。（测试 `lock_then_consume_…` 的
-//! `granted == 960`、`expire_…` 的 `expired == 480` 就是把这条口径钉死的断言。）
+//! 扣掉它的剩余时，A / B 两条不变式必然破。测试里：`lock_then_consume_…` 的 `granted == 960`
+//! 钉死了「结转批次入本年度账户」；`expire_…` 的 `expired == 480` 因 `today`（2026-04-01）与批次
+//! `effective_at`（2026-01-01）同年度，只钉死「作废不按 `period` 字段入账」；真正区分
+//! 「与授予同桶」和「按 `today` 入账」的是用例 `expire_grants_books_to_the_same_account_as_the_grant_across_years`。
 
 use std::collections::HashMap;
 
@@ -197,8 +201,9 @@ pub(crate) async fn release_locked_in_tx(
 /// 返回本次作废的批次数。幂等靠 `remaining_minutes > 0` 的扫描条件——重复跑不会二次记账。
 // 实现提示：① `repo::find_expired_grants_for_update(txn, today)` 加锁扫描候选
 // （`expire_at < today` + `remaining_minutes > 0` + `status = 1`，按 `expire_at asc, id asc`）；
-// ② 逐条：账户加锁读（**账期取批次 `effective_at` 的自然年**，见文件头「账户账期」，
-// 取批次 `period` 字段会打错桶）`expired_minutes += remaining` →
+// ② 逐条：账户加锁读（**账期取批次 `effective_at` 的自然年**——必须与发放时入账的账户同桶：
+// 取 `today` 在跨年作废时会把「批次清零」与「授予桶」拆进两个年度，取批次 `period` 字段则与
+// 授予口径不一致，两者都会破文件头「账户账期」的不变式）`expired_minutes += remaining` →
 // 批次 `remaining_minutes` 归零 + `repo::set_grant_status_in_tx(txn, id, GRANT_STATUS_EXPIRED, 0)`
 // （系统任务，actor_id 传 0）；③ 每批次写一条流水：`biz_type = LOG_BIZ_EXPIRE`、
 // `delta = −remaining`（作废减少可用，见文件头账本口径）、`grant_id` = 批次 id、
@@ -704,6 +709,22 @@ mod tests {
     async fn lock_leave_rejects_when_available_is_insufficient_and_type_disallows_negative() {
         let txn = test_txn().await;
         let (emp, ty) = seed_employee_and_type_with(&txn, 0 /* allow_negative */).await;
+        // 先发一笔**不足额**的额度（240 < 480）：账户存在才可能走到「可用不足」分支，
+        // 否则命中的是「账户不存在」文案，断言就失去区分力。
+        service::grant_leave_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            240,
+            GRANT_SOURCE_ISSUE,
+            "statutory",
+            "2026",
+            date(2026, 1, 1),
+            None,
+        )
+        .await
+        .unwrap();
         let err = service::lock_leave_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
             .await
             .unwrap_err();
@@ -817,6 +838,49 @@ mod tests {
                 == 3
                 && again <= done,
             "重复作废必须幂等"
+        );
+    }
+
+    /// 跨年作废的入账口径：`expire` 必须回到**批次发放时入账的那个年度账户**，
+    /// 不能按 `today` 建/记另一个年度的桶（否则批次被清零而原授予桶仍留可用量，不变式破）。
+    #[tokio::test]
+    async fn expire_grants_books_to_the_same_account_as_the_grant_across_years() {
+        let txn = test_txn().await;
+        let (emp, ty) = seed_employee_and_type(&txn).await;
+        // 2025 年生效、2025 年底失效的结转批次 → 入 2025 账期账户
+        let _stale = service::grant_leave_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            480,
+            GRANT_SOURCE_ISSUE,
+            "carry",
+            "2025",
+            date(2025, 1, 1),
+            Some(date(2025, 12, 31)),
+        )
+        .await
+        .unwrap();
+
+        service::expire_grants_in_tx(&txn, date(2026, 4, 1))
+            .await
+            .unwrap();
+
+        let bal_2025 = repo::find_balance_by_account_for_update(&txn, emp, ty, "2025")
+            .await
+            .unwrap()
+            .expect("2025 年账户必须存在");
+        assert_eq!(
+            bal_2025.expired_minutes, 480,
+            "作废必须记在批次入账的同一年度账户（2025）"
+        );
+        assert!(
+            repo::find_balance_by_account_for_update(&txn, emp, ty, "2026")
+                .await
+                .unwrap()
+                .is_none(),
+            "跨年作废不得在 2026 年凭空建桶"
         );
     }
 
