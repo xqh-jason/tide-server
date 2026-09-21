@@ -4,9 +4,12 @@
 //! - entity 不直接暴露给接口，响应体一律经 `From<Model>` 转换；
 //! - 请求体永不接受 `*_by` / `*_name`（审计字段由 repo 盖章、人名字段由 service 拼装）；
 //! - 时间字段一律 `String`（DTO 层不做解析，解析在 service）；
-//! - `employee_name` / `leave_type_name` / `operator_name` 由 service 批量拼装后回填，
-//!   `From<Model>` 里留空串；
+//! - `employee_name` / `leave_type_name` / `operator_name` 由 service 批量拼装后回填；
+//!   `created_by_name` / `updated_by_name` 由平台唯一管道 `utils::user_ref::fill_user_names`
+//!   经 `UserRefNames` 填充（`From<Model>` 里一律留空串）；
 //! - quota 单位为分钟（`i32`），「天 ↔ 分钟」换算在前端按假别 `unit` / `min_unit_minutes` 完成。
+
+use std::collections::HashMap;
 
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
@@ -14,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::entity::{hr_leave_balance, hr_leave_balance_log, hr_leave_grant, hr_leave_type};
 use crate::utils::PageQuery;
 use crate::utils::serde_format::format_datetime;
+use crate::utils::user_ref::UserRefNames;
 
 /// 日期格式化：`yyyy-MM-dd`（额度批次的生效 / 失效日）。
 fn fmt_date(d: chrono::NaiveDate) -> String {
@@ -125,13 +129,17 @@ pub struct LeaveTypeResp {
     pub created_at: String,
     /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
     pub updated_at: String,
-    /// 创建人显示名（service 批量拼装）
+    /// 创建人 ID（sys_user.id）
+    pub created_by: u64,
+    /// 更新人 ID（sys_user.id）
+    pub updated_by: u64,
+    /// 创建人显示名（`fill_user_names` 批量拼装）
     pub created_by_name: String,
-    /// 更新人显示名（service 批量拼装）
+    /// 更新人显示名（`fill_user_names` 批量拼装）
     pub updated_by_name: String,
 }
 
-/// `hr_leave_type::Model` → `LeaveTypeResp` 字段搬运（人名字段留空待 service 拼装）。
+/// `hr_leave_type::Model` → `LeaveTypeResp` 字段搬运（人名字段留空待 `fill_user_names` 拼装）。
 impl From<hr_leave_type::Model> for LeaveTypeResp {
     fn from(m: hr_leave_type::Model) -> Self {
         Self {
@@ -148,9 +156,19 @@ impl From<hr_leave_type::Model> for LeaveTypeResp {
             remark: m.remark,
             created_at: format_datetime(m.created_at),
             updated_at: format_datetime(m.updated_at),
+            created_by: m.created_by,
+            updated_by: m.updated_by,
             created_by_name: String::new(),
             updated_by_name: String::new(),
         }
+    }
+}
+
+/// 按名称映射填充创建人 / 更新人显示名（查不到给空串）。
+impl UserRefNames for LeaveTypeResp {
+    fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
+        self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
+        self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
     }
 }
 
@@ -262,13 +280,17 @@ pub struct LeaveGrantResp {
     pub remark: String,
     /// 创建时间（`yyyy-MM-dd HH:mm:ss`）
     pub created_at: String,
-    /// 创建人显示名（service 批量拼装）
+    /// 创建人 ID（sys_user.id）
+    pub created_by: u64,
+    /// 更新人 ID（sys_user.id）
+    pub updated_by: u64,
+    /// 创建人显示名（`fill_user_names` 批量拼装）
     pub created_by_name: String,
-    /// 更新人显示名（service 批量拼装）
+    /// 更新人显示名（`fill_user_names` 批量拼装）
     pub updated_by_name: String,
 }
 
-/// `hr_leave_grant::Model` → `LeaveGrantResp` 字段搬运（人名字段留空待 service 拼装）。
+/// `hr_leave_grant::Model` → `LeaveGrantResp` 字段搬运（人名字段留空待拼装）。
 impl From<hr_leave_grant::Model> for LeaveGrantResp {
     fn from(m: hr_leave_grant::Model) -> Self {
         Self {
@@ -287,9 +309,19 @@ impl From<hr_leave_grant::Model> for LeaveGrantResp {
             status: m.status,
             remark: m.remark,
             created_at: format_datetime(m.created_at),
+            created_by: m.created_by,
+            updated_by: m.updated_by,
             created_by_name: String::new(),
             updated_by_name: String::new(),
         }
+    }
+}
+
+/// 按名称映射填充创建人 / 更新人显示名（查不到给空串）。
+impl UserRefNames for LeaveGrantResp {
+    fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
+        self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
+        self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
     }
 }
 
@@ -348,9 +380,17 @@ pub struct LeaveBalanceResp {
     pub available_minutes: i64,
     /// 更新时间（`yyyy-MM-dd HH:mm:ss`）
     pub updated_at: String,
+    /// 创建人 ID（sys_user.id）
+    pub created_by: u64,
+    /// 更新人 ID（sys_user.id）
+    pub updated_by: u64,
+    /// 创建人显示名（`fill_user_names` 批量拼装）
+    pub created_by_name: String,
+    /// 更新人显示名（`fill_user_names` 批量拼装）
+    pub updated_by_name: String,
 }
 
-/// `hr_leave_balance::Model` → `LeaveBalanceResp` 字段搬运。
+/// `hr_leave_balance::Model` → `LeaveBalanceResp` 字段搬运（人名字段留空待拼装）。
 impl From<hr_leave_balance::Model> for LeaveBalanceResp {
     fn from(m: hr_leave_balance::Model) -> Self {
         Self {
@@ -370,7 +410,19 @@ impl From<hr_leave_balance::Model> for LeaveBalanceResp {
                 - i64::from(m.locked_minutes)
                 - i64::from(m.expired_minutes),
             updated_at: format_datetime(m.updated_at),
+            created_by: m.created_by,
+            updated_by: m.updated_by,
+            created_by_name: String::new(),
+            updated_by_name: String::new(),
         }
+    }
+}
+
+/// 按名称映射填充创建人 / 更新人显示名（查不到给空串）。
+impl UserRefNames for LeaveBalanceResp {
+    fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
+        self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
+        self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
     }
 }
 
@@ -429,7 +481,7 @@ pub struct LeaveBalanceLogResp {
     pub source_id: u64,
     /// 操作人 ID（0=系统）
     pub operator_id: u64,
-    /// 操作人显示名（service 批量拼装）
+    /// 操作人显示名（`fill_user_names` 批量拼装）
     pub operator_name: String,
     /// 备注
     pub remark: String,
@@ -438,7 +490,7 @@ pub struct LeaveBalanceLogResp {
 }
 
 /// `hr_leave_balance_log::Model` → `LeaveBalanceLogResp` 字段搬运
-/// （人名字段留空待 service 拼装；流水无 `updated_at`）。
+/// （人名字段留空待拼装；流水无 `updated_at`）。
 impl From<hr_leave_balance_log::Model> for LeaveBalanceLogResp {
     fn from(m: hr_leave_balance_log::Model) -> Self {
         Self {
@@ -459,5 +511,15 @@ impl From<hr_leave_balance_log::Model> for LeaveBalanceLogResp {
             remark: m.remark,
             created_at: format_datetime(m.created_at),
         }
+    }
+}
+
+/// 按名称映射填充操作人显示名（查不到给空串）。
+///
+/// 流水表是 append-only：**没有** `created_by` / `updated_by` 审计人字段对，
+/// 唯一的人字段是 `operator_id`（0=系统，查不到自然给空串）。
+impl UserRefNames for LeaveBalanceLogResp {
+    fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
+        self.operator_name = names.get(&self.operator_id).cloned().unwrap_or_default();
     }
 }

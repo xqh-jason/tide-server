@@ -8,9 +8,9 @@
 //!
 
 use crate::entity::{
-    hr_employee, sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job,
-    sys_menu, sys_operation_log, sys_position, sys_refresh_token, sys_role, sys_site_config,
-    sys_user,
+    hr_employee, hr_leave_balance, hr_leave_balance_log, hr_leave_grant, hr_leave_type, sys_api,
+    sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job, sys_menu,
+    sys_operation_log, sys_position, sys_refresh_token, sys_role, sys_site_config, sys_user,
 };
 use std::collections::HashMap;
 
@@ -154,6 +154,31 @@ impl UserRefIds for sys_operation_log::Model {
 impl UserRefIds for sys_refresh_token::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         vec![self.revoked_by]
+    }
+}
+
+impl UserRefIds for hr_leave_type::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_leave_grant::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_leave_balance::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_leave_balance_log::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        // append-only 流水表：无 created_by / updated_by 审计人字段对，唯一人字段是操作人
+        vec![self.operator_id]
     }
 }
 
@@ -390,5 +415,55 @@ mod tests {
         let mut ids = row.user_ref_ids();
         ids.sort_unstable();
         assert_eq!(ids, vec![3, 4, 7], "应收集创建人/更新人/关联账号三类 id");
+    }
+
+    /// HR 假期额度账本：批次收集审计人字段对；append-only 流水只收集操作人。
+    #[test]
+    fn user_ref_ids_covers_leave_ledger_entities() {
+        let grant = hr_leave_grant::Model {
+            id: 1,
+            employee_id: 2,
+            leave_type_id: 3,
+            source: 2,
+            reason: "manual".to_string(),
+            period: "2026".to_string(),
+            minutes: 480,
+            remaining_minutes: 240,
+            effective_at: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            expire_at: None,
+            status: 1,
+            remark: String::new(),
+            created_at: chrono::Local::now().naive_local(),
+            updated_at: chrono::Local::now().naive_local(),
+            created_by: 5,
+            updated_by: 6,
+        };
+        assert_eq!(
+            grant.user_ref_ids(),
+            vec![5, 6],
+            "批次应收集创建人 / 更新人 id"
+        );
+
+        let log = hr_leave_balance_log::Model {
+            id: 1,
+            balance_id: 2,
+            employee_id: 3,
+            leave_type_id: 4,
+            grant_id: 5,
+            biz_type: 1,
+            delta_minutes: 480,
+            before_minutes: 0,
+            after_minutes: 480,
+            source_kind: 0,
+            source_id: 0,
+            operator_id: 7,
+            remark: String::new(),
+            created_at: chrono::Local::now().naive_local(),
+        };
+        assert_eq!(
+            log.user_ref_ids(),
+            vec![7],
+            "流水应只收集操作人 id（无审计人字段对）"
+        );
     }
 }
