@@ -19,8 +19,20 @@ pub(crate) fn mask_middle(s: &str, keep_head: usize, keep_tail: usize) -> String
     // 1) 先把入参按 char 收集成 Vec<char>；
     // 2) chars.len() <= keep_head + keep_tail 时直接返回原串；
     // 3) 否则拼：首 keep_head 个字符 + "*".repeat(chars.len() - keep_head - keep_tail) + 尾 keep_tail 个字符。
-    let _ = (s, keep_head, keep_tail);
-    String::new()
+    let chars = s.chars().collect::<Vec<char>>();
+    let len = chars.len();
+
+    if len <= keep_head.saturating_add(keep_tail) {
+        return s.to_owned();
+    }
+
+    let mask_len = len - keep_head - keep_tail;
+    let mut out = String::with_capacity(len);
+    out.extend(chars.iter().take(keep_head).copied());
+    out.extend(std::iter::repeat('*').take(mask_len));
+    out.extend(chars.iter().skip(len - keep_tail).copied());
+
+    out
 }
 
 /// 日期格式化：`Option<NaiveDate>` → `Option<String>`（`yyyy-MM-dd`）。

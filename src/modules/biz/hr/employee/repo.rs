@@ -8,8 +8,8 @@
 //! 业务判断（存在性文案、查重决策、字段是否可改）不在本层：
 //! repo 只用 `Option` / `bool` 表达事实，文案与决策留给 service。
 
-use sea_orm::ConnectionTrait;
 use sea_orm::DatabaseTransaction;
+use sea_orm::entity::prelude::*;
 
 use crate::entity::hr_employee;
 use crate::modules::biz::hr::employee::dto::EmployeeFilter;
@@ -20,14 +20,12 @@ pub async fn find_by_id(
     db: &impl ConnectionTrait,
     id: u64,
 ) -> anyhow::Result<Option<hr_employee::Model>> {
-    // 实现提示：
-    // 1) `use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};`
-    // 2) `hr_employee::Entity::find()`
-    //      `.filter(hr_employee::Column::Id.eq(id))`
-    //      `.filter(hr_employee::Column::DeletedAt.is_null())`
-    //      `.one(db).await`
-    let _ = (db, id);
-    anyhow::bail!("未实现：find_by_id")
+    let employee = hr_employee::Entity::find()
+        .filter(hr_employee::Column::Id.eq(id))
+        .filter(hr_employee::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+    Ok(employee)
 }
 
 /// 按 `user_id` 查档案——**含软删占位**（不过滤 `deleted_at`）。
@@ -38,12 +36,11 @@ pub async fn find_by_user_id_include_deleted(
     db: &impl ConnectionTrait,
     user_id: u64,
 ) -> anyhow::Result<Option<hr_employee::Model>> {
-    // 实现提示：
-    // `hr_employee::Entity::find()`
-    //   `.filter(hr_employee::Column::UserId.eq(user_id))`
-    //   `.one(db).await` ——**不要**加 DeletedAt 过滤
-    let _ = (db, user_id);
-    anyhow::bail!("未实现：find_by_user_id_include_deleted")
+    let employee = hr_employee::Entity::find()
+        .filter(hr_employee::Column::UserId.eq(user_id))
+        .one(db)
+        .await?;
+    Ok(employee)
 }
 
 /// 分页 + 动态过滤：keyword 模糊备注 / 紧急联系人，状态与学历精确，
