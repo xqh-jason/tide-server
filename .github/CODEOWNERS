@@ -1,0 +1,11 @@
+# 默认 owner：本仓所有路径的改动都必须经 @xqh-jason review。
+#
+# 用途（配合 main 的分支保护）：`hr` 分支禁止向 `main` 合并（设计文档 §2 的
+# 单向合并纪律，仓库只允许 main → hr）。GitHub 的分支保护没有「按源分支过滤」
+# 的规则，因此这道约束由三处共同兜底：
+#   1. main 的分支保护：要求 PR、要求本文件声明的 Code Owner review、要求 CI 通过；
+#   2. 本文件：任何进 main 的 PR 都落到 @xqh-jason 名下；
+#   3. ci.yml 的「禁 hr→main 合并」job：head=hr 且 base=main 的 PR 直接失败。
+#
+# 注意：owner 必须写 `@用户名`；写成不带 `@` 的裸名会被 GitHub 当邮箱解析，等于没有 owner。
+* @xqh-jason

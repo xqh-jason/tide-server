@@ -20,6 +20,28 @@ env:
   TIDE_DATABASE__URL: "mysql://root:root@127.0.0.1:3306/tide_server?charset=utf8mb4&timezone=%2B08:00"
 
 jobs:
+  # 单向合并纪律的 policy-as-code 兜底：`hr` 分支永远不得合并回 `main`
+  # （设计文档 §2）。GitHub 的分支保护只能按 base 分支与状态检查过滤，
+  # 没有「按源分支过滤」的规则，所以把这条约束写成 job。
+  #
+  # 刻意 `if: always()` 让它在每次 CI（含 push 到 main / hr）都跑：required
+  # status check 只认近期出现过的 check 名，若只在 hr→main 的 PR 上跑，这个
+  # 名字在仓库里从未出现过，就没法挂到分支保护的必过检查上。
+  guard-merge-direction:
+    name: 禁 hr→main 合并
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 校验合并方向
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+            && [ "${{ github.base_ref }}" = "main" ] \
+            && [ "${{ github.head_ref }}" = "hr" ]; then
+            echo "::error::hr 分支禁止合并回 main（单向合并纪律：只允许 main → hr）"
+            exit 1
+          fi
+          echo "合并方向检查通过（非 hr→main）"
+
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest
