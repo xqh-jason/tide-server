@@ -2,7 +2,9 @@
 
 > 本文件是仓库**唯一**的知识文档。此前引用的各目录 `AGENTS.md`（`src/AGENTS.md`、`src/modules/system/AGENTS.md`、
 > `codegen/AGENTS.md`、`migrations/AGENTS.md` …）**在磁盘上不存在**，不要再去找、也不要再引用。
-> 约定变更请直接改本文件；本文件自身被 `.git/info/exclude` 排除（本地文件，不进提交）。
+> 约定变更请直接改本文件。**注意**：`.git/info/exclude` 里虽有 `AGENTS.md` 条目，但本文件**已被 git 跟踪**
+> （`git log -- AGENTS.md` 有历史提交），exclude 只影响未跟踪文件的发现、不阻止已跟踪文件的修改入提交——
+> 所以在两个分支上改动本文件都是正常提交，不需要特殊处理。
 > 文档里的硬数字（测试条数、种子条数、行号）随切片增长会腐烂：改代码时同步改数字，或改用不依赖数字的措辞。
 
 ## Project Overview
@@ -84,7 +86,7 @@ CORS 预检 204/403、`file/upload` 走 multipart + `file/download` 与 `site-co
 
 ### 路由装配（`DOMAINS` 登记表）
 `src/modules/mod.rs` 定义 `MountGuard { Public, Protected }`、`DomainMount { path, guard, routers }`、
-`const DOMAINS: &[DomainMount]`（内置 20 行，末行为业务域 `hr/employee`）与 `all_domains(extra)`（内置在前、extra 追加）。
+`const DOMAINS: &[DomainMount]`（内置 21 行 = 19 个平台档位 + 业务域 `hr/employee` / `hr/leave`，末行为 `hr/leave`）与 `all_domains(extra)`（内置在前、extra 追加）。
 `src/infra/router.rs` 的 `mount_domains` 按表循环：`path` 为 `api/v1` 下的前缀，空串表示出口自带路径；
 `Protected` 行自动获得 `AuthRequired + OperationLog + ApiPermission` 三件套，**不用自己接鉴权**。
 `build(state)` = `build_with(state, &[])`；自定义域集合走 `infra::app::run_with_domains(config, EXTRA)`。
@@ -95,8 +97,11 @@ CORS 预检 204/403、`file/upload` 走 multipart + `file/download` 与 `site-co
 
 - `main`：纯平台（开源消费方 clone/部署拿到的就是它），不含任何业务源码；
 - `hr`：唯一自用部署 = 平台 + 人事域。业务只以**追加**方式落地：新增
-  `src/modules/biz/<模块>/<域>/…` 与 `migrations/src/m_*.rs`；对既有文件的改动限于
-  `src/entity/mod.rs`、`src/modules/biz/mod.rs`、`DOMAINS`、`src/infra/seed.rs` 四处**追加行**。
+  `src/modules/biz/<模块>/<域>/…` 与 `migrations/src/m_*.rs`；对既有文件的改动限于**六处追加行**：
+  `src/entity/mod.rs`、`src/modules/biz/<模块>/mod.rs`、`DOMAINS`、`src/infra/seed.rs`，
+  以及两个「按需才动」的接线点 —— `src/task/mod.rs`（业务定时任务须在注册表登记：一行 `pub mod` +
+  `handler_defs()` + `handlers()`，并在既有守卫测试末尾补一行断言）与 `src/utils/user_ref.rs`
+  （业务实体须追加 `impl UserRefIds`，先例 `impl UserRefIds for hr_employee::Model`）。
 
 GitHub 的分支保护只能按 base 分支与状态检查过滤、没有「按源分支过滤」的规则，因此这条纪律由三处硬约束合成：
 
@@ -113,22 +118,31 @@ GitHub 的分支保护只能按 base 分支与状态检查过滤、没有「按�
 纪律：平台修复**一律先落 `main`** 再合并下来，禁止直接在 `hr` 改平台代码（紧急热修需双写并尽快回流）；
 `main` 每次发版后立即 `git merge main`，别攒 —— `AGENTS.md` 这类文档两分支都会改，攒久了必冲突。
 
-人事域现状：`biz/hr/employee`（员工档案，表 `hr_employee`，端点 `/api/v1/hr/employee/{list,create,update,get,delete}`），
-字典 `employmentStatus` / `education`、菜单与 `API_SEEDS` 均已登记；建档案可勾选同事务创建登录账号
-（必须调 `user::service::create_user_in_tx`，不得调自持 `db.begin()` 的 `create_user`）。
+人事域现状：
+
+- `biz/hr/employee`（员工档案，表 `hr_employee`，端点 `/api/v1/hr/employee/{list,create,update,get,delete}`），
+  字典 `employmentStatus` / `education`、菜单与 `API_SEEDS` 均已登记；建档案可勾选同事务创建登录账号
+  （必须调 `user::service::create_user_in_tx`，不得调自持 `db.begin()` 的 `create_user`）。
+- `biz/hr/leave`（假期类型 + 额度账本，表 `hr_leave_type` / `hr_leave_grant` / `hr_leave_balance` /
+  `hr_leave_balance_log`，端点 `/api/v1/hr/leave/{leave-type,leave-grant,leave-balance}/*` 共 12 个），
+  字典 `leaveGrantReason`、菜单（`HrLeave` 目录 + 3 页 + 5 个按钮码）、12 条 `API_SEEDS`、定时任务
+  `leave_grant_expire`（每日 01:30 作废过期额度批次）均已登记。额度模型：**授予批次是事实来源**，
+  聚合账户只做展示与行锁，流水 append-only；扣减走 FEFO + `lock_exclusive()`；账期 = 交易发生日 /
+  发放生效日 / 批次 `effective_at` 的自然年。
 
 ## Key Directories
 
 ```
 src/lib.rs, src/main.rs        # 库入口（6 pub mod）/ 进程入口（tracing + Config::load + run）
-src/modules/mod.rs             # MountGuard / DomainMount / DOMAINS(20) / all_domains
+src/modules/mod.rs             # MountGuard / DomainMount / DOMAINS(21) / all_domains
 src/modules/system/<域>/       # 18 个平台域切片：api/service/repo/dto(+validate)
-src/modules/biz/hr/employee/   # 业务域切片（人事域员工档案；后续业务从 biz/ 生长）
+src/modules/biz/hr/employee/   # 业务域切片（人事域员工档案）
+src/modules/biz/hr/leave/      # 业务域切片（假期类型 + 额度账本：批次/账户/流水 + 批量发放）
 src/infra/                     # app 启动管线、config、state、router 装配、catcher、seed
 src/middleware/                # InjectState / AuthRequired / OperationLog / ApiPermission / RequestTimeout / Cors
-src/entity/                    # 22 张表的 SeaORM 实体（全局共享，含跨域关系表）+ prelude；全库无物理外键
+src/entity/                    # 26 张表的 SeaORM 实体（全局共享，含跨域关系表）+ prelude；全库无物理外键
 src/utils/                     # error、response、request、page、user_ref、jwt、crypt、cache、check、datetime、text、serde_format
-src/task/                      # 定时任务注册表 + 4 个保留期清理任务
+src/task/                      # 定时任务注册表 + 4 个保留期清理任务 + 1 个业务任务（假期额度过期作废）
 migrations/                    # 独立 crate：baseline + 追加迁移（DDL 事实来源）
 codegen/                       # 独立 crate：defs/*.json → entity + 四件套骨架
 docker/, Dockerfile, docker-compose.yml, .github/workflows/ci.yml
@@ -233,12 +247,16 @@ graphify query / graphify path / graphify explain
 - 授权**只有一条通道**：`ApiPermission` → `permission::service::has_api_permission`。按钮权限码（`sys_menu.permission`）
   只控前端显隐，后端不再判定（2026-09-17 起），不要重建服务层按钮码校验。
 
-### 扩展一个新域（三步 + 两处登记）
+### 扩展一个新域（三步 + 按需登记）
 1. `src/entity/mod.rs` 加 `pub mod <表>;`（可用 `codegen` 生成实体与骨架）
 2. 容器 `mod.rs` 加 `pub mod <域>;`（`src/modules/biz/<模块>/mod.rs` 或 `src/modules/system/mod.rs`）
 3. `src/modules/mod.rs` 的 `DOMAINS` 追加一行（`MountGuard::Protected` 即自动获得三件套中间件）
 4. **新端点必须登记到 `src/infra/seed.rs` 的 `API_SEEDS`**，否则接口授权对它 fail-open（未登记即放行）
 5. 新表迁移在 `migrations/` **追加**（不改已发布的 baseline，平台表相对顺序不动）
+6. 需要**人字段拼名**（`created_by_name` 之类）→ 在 `src/utils/user_ref.rs` 追加 `impl UserRefIds for <实体>::Model`，
+   并在响应 DTO 上实现 `UserRefNames`（先例：`hr_leave_grant::Model` / `LeaveGrantResp`）
+7. 需要**定时任务** → `src/task/<name>.rs` + `src/task/mod.rs` 三处追加（`pub mod` / `handler_defs()` /
+   `handlers()`，并把既有守卫测试的断言补一行）+ 在 `seed.rs` 追加 `sys_job` 行（幂等按 `job_name`）
 
 ### 提交规范
 Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` / `chore` / `docs` / `test`，例如
@@ -260,7 +278,7 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
 | `src/utils/{error,response,request,page,user_ref}.rs` | `AppError` / `ApiResponse` / `JsonBody` / 分页 / 人字段拼装 |
 | `src/middleware/{auth,api_permission,op_log,request_timeout,cors}.rs` | 认证、接口授权、操作日志、超时、CORS |
 | `src/modules/system/job/scheduler.rs` | cron 调度：300s 超时 + `catch_unwind` + 写 `sys_job_log`，cron 用本地时区 |
-| `src/task/mod.rs` | 任务注册表 `handlers()` / `handler_defs()`；新增任务 = 新文件 + 一行登记 |
+| `src/task/mod.rs` | 任务注册表 `handlers()` / `handler_defs()`；新增任务 = 新文件 + 一行登记（**业务任务同样在此追加**，是第 5 个业务登记点） |
 | `config.toml` / `.env.example` | 运行配置默认值 / compose 变量（`TIDE_JWT_SECRET` 必设） |
 | `rust-toolchain.toml` / `clippy.toml` / `Cargo.toml` | 工具链钉死 / 测试放行 unwrap / lint 基线 |
 | `docker/entrypoint.sh` | 容器入口：`mkdir -p uploads` → `./migration up`（`RUN_MIGRATIONS=0` 可跳过）→ `exec ./tide-server` |
@@ -297,7 +315,7 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
 - **框架**：stock libtest + tokio，无 `sqlx::test` / `sea_orm` 测试宏 / `serial_test`，无 dev-dependencies。
 - **位置**：`#[cfg(test)] mod tests` **内联在业务文件里**（`repo.rs` / `service.rs` / `validate.rs` / `api.rs` /
   `middleware/*.rs` / `task/*.rs` / `utils/*.rs`）；**没有 `tests/` 目录、没有 fixtures 目录、全仓无 mock**。
-  `dto.rs` 从不写测试。当前规模（复核命令见下）：`src/` 68 个测试文件、约 520 条测试；
+  `dto.rs` 从不写测试。当前规模（复核命令见下）：`src/` 75 个测试文件、约 574 条测试（400 条 `#[tokio::test]` + 174 条 `#[test]`）；
   `codegen/` 另有纯 `#[test]`，根 `cargo test` 不会跑它（需 `cargo test --manifest-path codegen/Cargo.toml`）。
 - **属性选择**：纯逻辑用 `#[test]`；碰 DB / handler 用 `#[tokio::test]`（默认 `current_thread`）；
   真并发必须 `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`（忘了写就静默无法交错）。
@@ -353,3 +371,11 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
 9. **`config.local.toml` 是死配置**：`Config::load` 只读 `config.toml` + `TIDE_*` 环境变量，写它没有任何效果。
 10. **Dockerfile 里 `TZ` 与 `/etc/localtime` 被硬编码**、compose 的 `mysql` 与 `backend` 都假定 `Asia/Shanghai`；
     改动时区要三处一起改。
+11. **账本型表不软删**：`hr_leave_grant` / `hr_leave_balance` / `hr_leave_balance_log` 是额度账本，**没有 `deleted_at`**
+    （作废走 `status` + 反向流水）。给它们加软删会与 `hr_leave_balance` 的 `(employee_id, leave_type_id, period)`
+    唯一键冲突——软删行仍占位，账户重建必然撞键。同理 `hr_leave_balance_log` 是 append-only：无 `updated_at` /
+    `updated_by`，冲正靠写反向 `delta` 记录，不改历史行。
+12. **额度扣减必须走 FEFO + 行锁**：`hr_leave_grant` 按 `(expire_at IS NULL, expire_at, id)` 取批次，
+    用 `consume_grant_in_tx`（带 `remaining >= minutes` 护栏）；账户与批次「读 → 判断 → 写」前 `lock_exclusive()`。
+    账本守恒（`Σ log.delta == granted + adjust − used − locked − expired`、`Σ 未失效批次 remaining == granted − used`）
+    是这两张表唯一的不变式，改动额度逻辑必须重跑 `cargo test --lib hr::leave`。
