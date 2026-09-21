@@ -6,7 +6,7 @@ use crate::modules::system::menu::dto::MenuFilter;
 use crate::utils::PageData;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder, QuerySelect};
+use sea_orm::{Condition, DatabaseTransaction, QueryOrder, QuerySelect};
 use std::collections::HashSet;
 
 /// 查询全部启用菜单（超管全量菜单树用；按角色过滤见 `find_menus_by_role_ids`）。
@@ -271,9 +271,7 @@ pub async fn find_menus_by_role_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_menu;
-    use crate::modules::system::menu::dto::MenuFilter;
-    use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
+    use sea_orm::Database;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -677,7 +675,6 @@ mod tests {
 
         let base = chrono::Local::now().naive_local();
         // update_many 盖不同的审计人与时间：避免为测试改各域 seed 夹具
-        use sea_orm::sea_query::Expr;
         for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
             sys_menu::Entity::update_many()
                 .filter(sys_menu::Column::Id.eq(row))

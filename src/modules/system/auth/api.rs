@@ -4,7 +4,6 @@
 //! refresh token 只存 HttpOnly Cookie，不进任何响应体；salvo cookie feature
 //! 未启用（rsproxy 镜像缺版本先例），解析/拼装手写 header 字符串。
 
-use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;

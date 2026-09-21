@@ -6,7 +6,6 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::{
     sys_api, sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role, sys_role_menu,
@@ -1235,7 +1234,7 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{Database, DatabaseConnection};
+    use sea_orm::Database;
 
     async fn test_db() -> DatabaseConnection {
         let config = crate::infra::config::Config::load().unwrap();

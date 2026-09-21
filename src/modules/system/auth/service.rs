@@ -178,9 +178,8 @@ async fn record_login(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{sys_login_log, sys_refresh_token, sys_role, sys_user, sys_user_role};
+    use crate::entity::{sys_refresh_token, sys_role, sys_user, sys_user_role};
     use crate::utils::cache::MemoryCache;
-    use crate::utils::crypt;
     use sea_orm::{
         ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, QueryOrder, Set,
     };

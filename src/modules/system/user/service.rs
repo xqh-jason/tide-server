@@ -695,7 +695,6 @@ mod tests {
         sys_user_role,
     };
     use crate::modules::system::dept::repo as dept_repo;
-    use crate::modules::system::permission::{ADMIN_USERNAME, SUPER_ROLE_KEY};
     use crate::modules::system::position::repo as position_repo;
     use crate::modules::system::user::dto::UserDeptReq;
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter};
@@ -718,7 +717,6 @@ mod tests {
 
     /// 事务连接：测试结束（含 panic 时 Drop）自动 ROLLBACK，不留孤儿数据。
     async fn test_txn() -> sea_orm::DatabaseTransaction {
-        use sea_orm::TransactionTrait;
         test_db().await.begin().await.unwrap()
     }
 
@@ -1485,8 +1483,6 @@ mod tests {
     // 业务入口拆为 *_in_tx：被测逻辑不自行 begin/commit，测试在外层事务中执行，
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     async fn list_all_users_excludes_soft_deleted() {
-        use sea_orm::ActiveValue::Set;
-
         let txn = test_txn().await;
 
         let a = sys_user::ActiveModel {
@@ -1522,8 +1518,6 @@ mod tests {
     // 断言失败/panic 由事务 Drop 自动回滚，无需手写清理。
     // 测试名不能与被测函数同名，否则 tests 模块内遮蔽 super 导入的同名函数。
     async fn list_all_users_soft_deleted_still_visible() {
-        use sea_orm::ActiveValue::Set;
-
         let txn = test_txn().await;
 
         let a = sys_user::ActiveModel {

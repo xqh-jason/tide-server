@@ -3,7 +3,6 @@
 //! 路由挂载见 `src/infra/router.rs`：`/api/v1/dictionary`（类型）与
 //! `/api/v1/dictionary-detail`（字典项）两个路由组，均在 AuthRequired 之后。
 
-use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 
 pub mod api;

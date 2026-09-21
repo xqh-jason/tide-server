@@ -37,7 +37,6 @@ pub fn write_all(def: &DomainDef, root: &Path) -> anyhow::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::def::DomainDef;
 
     fn def() -> DomainDef {
         DomainDef::from_json(

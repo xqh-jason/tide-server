@@ -3,7 +3,6 @@
 //! 函数顺序 = `mod.rs` 路由挂载顺序：类型组 CRUD → `get-by-type`（特殊契约
 //! 端点，排在 CRUD 之后）→ 字典项组 CRUD。
 
-use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;

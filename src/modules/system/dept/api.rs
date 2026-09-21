@@ -2,7 +2,6 @@
 //!
 //! 函数顺序 = `mod.rs` 路由挂载顺序：`list → create → update → get → delete`。
 
-use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;

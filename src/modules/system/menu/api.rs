@@ -1,6 +1,5 @@
 //! 菜单域 handler。
 
-use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;

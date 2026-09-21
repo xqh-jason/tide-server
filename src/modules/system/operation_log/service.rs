@@ -63,9 +63,7 @@ pub async fn delete_operation_log_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_operation_log;
     use crate::utils::PageQuery;
-    use crate::utils::error::AppError;
     use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 

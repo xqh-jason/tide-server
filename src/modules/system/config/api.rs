@@ -3,7 +3,6 @@
 //! 端点顺序：参数 `list → create → update → get → delete`（POST + JSON body）；
 //! 网站设置 `get`（GET，公开）、`update`（POST，登录态，中间件在 site_routes 子路由）。
 
-use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;

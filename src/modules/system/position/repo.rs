@@ -5,8 +5,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::sea_query::Expr;
-use sea_orm::{Condition, ConnectionTrait, DatabaseTransaction, QueryOrder};
+use sea_orm::{Condition, DatabaseTransaction, QueryOrder};
 
 use crate::entity::{sys_position, sys_user_position};
 use crate::modules::system::position::dto::PositionFilter;

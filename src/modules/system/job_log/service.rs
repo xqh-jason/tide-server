@@ -56,9 +56,7 @@ pub async fn delete_job_log_batch(db: &impl ConnectionTrait, ids: &[u64]) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_job_log;
     use crate::utils::PageQuery;
-    use crate::utils::error::AppError;
     use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 

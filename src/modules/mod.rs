@@ -259,7 +259,6 @@ pub fn all_domains(extra: &[DomainMount]) -> Vec<DomainMount> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use salvo::prelude::Router;
 
     /// 额外域出口：模拟调用方传入的 `routes()`。
     fn external_routes() -> Router {

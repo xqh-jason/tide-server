@@ -2,7 +2,7 @@
 
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, QueryOrder};
+use sea_orm::{Condition, QueryOrder};
 
 use crate::entity::{sys_job, sys_job::Model};
 use crate::modules::system::job::dto::JobFilter;
@@ -266,7 +266,6 @@ mod tests {
         .unwrap();
 
         // update_many 盖不同的审计人与时间：避免为测试改 seed 夹具
-        use sea_orm::sea_query::Expr;
         for (row, by, offset) in [(a.id, 7_i64, -10), (b.id, 8_i64, -5)] {
             sys_job::Entity::update_many()
                 .filter(sys_job::Column::Id.eq(row))

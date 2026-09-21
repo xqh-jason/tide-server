@@ -5,7 +5,7 @@
 //! 由调用方（认证中间件 / auth service）基于 JOIN 出的用户行完成。
 
 use sea_orm::entity::prelude::*;
-use sea_orm::{Condition, ConnectionTrait, QueryOrder, QuerySelect};
+use sea_orm::{Condition, QueryOrder, QuerySelect};
 
 use crate::entity::{sys_refresh_token, sys_user};
 use crate::modules::system::refresh_token::dto::RefreshTokenFilter;
@@ -218,8 +218,7 @@ pub async fn delete_expired_before(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::sys_user;
-    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+    use sea_orm::{Database, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

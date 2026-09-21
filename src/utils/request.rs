@@ -17,8 +17,8 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 
 use salvo::extract::{Extractible, Metadata};
+use salvo::http::ParseError;
 use salvo::http::mime;
-use salvo::http::{ParseError, StatusError};
 use salvo::oapi::{
     Components, Content, EndpointArgRegister, Operation, RequestBody, ToRequestBody, ToSchema,
 };
@@ -394,7 +394,6 @@ fn variant_options(reason: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use salvo::oapi::endpoint;
     use salvo::prelude::*;
     use salvo::test::{ResponseExt, TestClient};
     use serde::Deserialize;

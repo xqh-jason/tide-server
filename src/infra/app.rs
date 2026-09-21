@@ -1,5 +1,3 @@
-use salvo::oapi::OpenApi;
-use salvo::oapi::swagger_ui::SwaggerUi;
 use salvo::prelude::*;
 
 use crate::infra::config::Config;

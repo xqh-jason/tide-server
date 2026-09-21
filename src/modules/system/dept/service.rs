@@ -406,8 +406,7 @@ pub async fn fill_dept_leaders(
 mod tests {
     use super::*;
     use crate::entity::sys_user_dept;
-    use crate::modules::system::dept::repo as dept_repo;
-    use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database, TransactionTrait};
+    use sea_orm::{ActiveModelTrait, Database};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);

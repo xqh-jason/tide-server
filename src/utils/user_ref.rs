@@ -151,9 +151,8 @@ impl UserRefIds for sys_refresh_token::Model {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
-    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
+    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;

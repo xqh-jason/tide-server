@@ -1,6 +1,6 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-09-19（置顶新增最高规则：AI 只写测试与骨架、实现由作者手写；二轮复查：CODE MAP 引用计数全表重测，统一为 grep -ro/-rl 可复现口径）
+**Updated:** 2026-09-21（import 去重：删 164 处重复引入；CODE MAP 复测 `AppError` 495 / `AppState` 196 / `SUPER_ROLE_KEY` 40，并修正三处陈旧行（`Config::load` 60/44、`DOMAINS` 24/6、`all_domains` 行号 252）；2026-09-19 置顶新增最高规则：AI 只写测试与骨架、实现由作者手写；二轮复查：CODE MAP 引用计数全表重测，统一为 grep -ro/-rl 可复现口径）
 
 ## 最高规则（优先于本文件其余全部内容）
 
@@ -70,20 +70,20 @@ Location 相对 `src/`。
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `AppError` | enum | `utils/error.rs:21` | 501 / 38 | 唯一业务错误；收 1213/1205 |
-| `AppState` | struct | `infra/state.rs:12` | 199 / 31 | config+db+cache+scheduler |
+| `AppError` | enum | `utils/error.rs:21` | 495 / 37 | 唯一业务错误；收 1213/1205 |
+| `AppState` | struct | `infra/state.rs:12` | 196 / 31 | config+db+cache+scheduler |
 | `ApiResponse<T>` | struct | `utils/response.rs:11` | 140 / 25 | `{code,data,message}` 包裹 |
 | `JsonBody<T>` | extractor | `utils/request.rs:66` | 116 / 20 | 手写提取器 + 字段级报错 |
 | `ApiResult<T>` | alias | `utils/mod.rs:24` | 111 / 17 | handler 返回类型 |
-| `Config::load` | fn | `infra/config.rs:237` | 61 / 45 | 配置装载；真库测试 DSN 源 |
+| `Config::load` | fn | `infra/config.rs:237` | 60 / 44 | 配置装载；真库测试 DSN 源 |
 | `fill_user_names` | fn | `utils/user_ref.rs:58` | 66 / 15 | 人字段显示名唯一管道 |
 | `PageQuery` | struct | `utils/page.rs:13` | 56 / 22 | 分页入参；`page_size` `clamp(1,1000)` |
 | `PageResult<T>` | struct | `utils/page.rs:39` | 46 / 15 | 分页出参 |
 | `paginate` | fn | `utils/page.rs:91` | 18 / 15 | 分页执行；各域 repo 统一调用 |
-| `SUPER_ROLE_KEY` | const | `modules/system/permission/mod.rs:19` | 41 / 9 | 超管保留字：短路 + 改名保护 |
+| `SUPER_ROLE_KEY` | const | `modules/system/permission/mod.rs:19` | 40 / 9 | 超管保留字：短路 + 改名保护 |
 | `enabled_int_values` | fn | `modules/system/dictionary/service.rs:214` | 31 / 18 | `status` 允许值唯一来源 |
-| `DOMAINS` | const 表 | `modules/mod.rs:84` | 24 / 7 | 19 行内置路由装配入口 |
-| `all_domains` | fn | `modules/mod.rs:259` | 7 / 2 | 合并内置域与额外传入的域（无 extra 时等于内置） |
+| `DOMAINS` | const 表 | `modules/mod.rs:84` | 24 / 6 | 19 行内置路由装配入口 |
+| `all_domains` | fn | `modules/mod.rs:252` | 7 / 2 | 合并内置域与额外传入的域（无 extra 时等于内置） |
 
 ## CONVENTIONS
 

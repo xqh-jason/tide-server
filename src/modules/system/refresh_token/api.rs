@@ -1,6 +1,5 @@
 //! 刷新凭证 handler（Protected 三件套挂载：AuthRequired → OperationLog → ApiPermission）。
 
-use salvo::oapi::endpoint;
 use salvo::prelude::*;
 
 use crate::infra::state::AppState;
