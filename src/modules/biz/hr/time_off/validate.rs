@@ -9,17 +9,124 @@
 //! 的返回（「状态取值不合法，仅允许：…」），不自己造句。
 //!
 //! 需要查库的规则（`type_code` 查重、假期类型存在性）留在 service 层。
-//!
-//! **本模块当前是桩**：函数体一律返回 `Err("未实现：<函数名>")`，由作者按各函数的
-//! `// 实现提示` 补齐；下方 5 条测试保持红灯即交接信号（原因恒为 `未实现：…`）。
-//!
-//! 三个函数上的 `#[cfg_attr(not(test), allow(dead_code))]` 是骨架期必需品：调用方 `api.rs`
-//! 的函数体尚未接上，非测试构建下它们没有任何用户（test 构建下由下方用例覆盖）；
-//! **`api.rs` 的函数体补齐时一并删除这三个属性**。
 
 use crate::modules::biz::hr::time_off::dto::{
     BatchCreateGrantReq, CreateTimeOffTypeReq, UpdateTimeOffTypeReq,
 };
+use crate::utils::check;
+
+/// 类型编码长度上限（对齐 `VARCHAR(32)`）。
+const TYPE_CODE_MAX: usize = 32;
+/// 类型名称长度上限（对齐 `VARCHAR(64)`）。
+const TYPE_NAME_MAX: usize = 64;
+/// 备注长度上限（对齐 `VARCHAR(255)`）。
+const REMARK_MAX: usize = 255;
+/// 单次批量发放人数上限。
+const MAX_BATCH_EMPLOYEES: usize = 1000;
+
+/// 创建 / 更新共用的字段视图（两个 DTO 除 `id` 外字段同名同型，抽视图避免复制粘贴）。
+struct TypeFields<'a> {
+    type_code: &'a str,
+    type_name: &'a str,
+    unit: i8,
+    balance_mode: i8,
+    min_unit_minutes: i32,
+    require_attachment: i8,
+    allow_negative: i8,
+    pay_ratio: i32,
+    status: i8,
+    remark: &'a str,
+}
+
+/// 必填文本：trim 后非空 + 长度上限（按 `char` 计，避免 UTF-8 边界误判）。
+fn check_required(s: &str, label: &str, max: usize, errors: &mut Vec<String>) {
+    if s.trim().is_empty() {
+        errors.push(format!("{label}不能为空"));
+    } else if s.chars().count() > max {
+        errors.push(format!("{label}长度不能超过 {max} 个字符"));
+    }
+}
+
+/// 值域检查：`{label}取值不合法，仅允许：a / b`。
+fn check_int_in(value: i8, allowed: &[i8], label: &str, errors: &mut Vec<String>) {
+    let allowed_ok = allowed.contains(&value);
+    if allowed_ok {
+        return;
+    }
+    let choices = allowed
+        .iter()
+        .map(i8::to_string)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    errors.push(format!("{label}取值不合法，仅允许：{choices}"));
+}
+
+/// 类型编码字符集：只允许小写字母 / 数字 / 下划线。
+fn check_type_code_charset(code: &str, errors: &mut Vec<String>) {
+    let code = code.trim();
+    if code.is_empty() {
+        return;
+    }
+    let ok = code
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !ok {
+        errors.push("类型编码只能包含小写字母、数字与下划线".to_string());
+    }
+}
+
+/// 创建 / 更新共用字段检查。
+fn check_type_fields(fields: TypeFields<'_>, status_allowed: &[i8]) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    check_required(fields.type_code, "类型编码", TYPE_CODE_MAX, &mut errors);
+    check_type_code_charset(fields.type_code, &mut errors);
+    check_required(fields.type_name, "类型名称", TYPE_NAME_MAX, &mut errors);
+    check_int_in(fields.unit, &[1, 2], "计量单位", &mut errors);
+    check_int_in(fields.balance_mode, &[0, 1], "额度模式", &mut errors);
+    if fields.min_unit_minutes <= 0 {
+        errors.push("最小请假单位必须大于 0".to_string());
+    }
+    check_int_in(
+        fields.require_attachment,
+        &[0, 1],
+        "是否必须上传附件",
+        &mut errors,
+    );
+    check_int_in(fields.allow_negative, &[0, 1], "是否允许超额", &mut errors);
+    if fields.pay_ratio < 0 {
+        errors.push("计薪比例不能小于 0".to_string());
+    }
+    if fields.remark.chars().count() > REMARK_MAX {
+        errors.push(format!("备注长度不能超过 {REMARK_MAX} 个字符"));
+    }
+    // 状态值域的唯一来源是平台字典，文案用 check_status 的返回，不自己造句
+    check::check_status(fields.status, status_allowed)
+        .map_err(|e| errors.push(e))
+        .ok();
+
+    errors
+}
+
+/// 解析 `yyyy-MM-dd`；空串或格式错都记一条 `{label}格式应为 yyyy-MM-dd`。
+fn parse_date(raw: &str, label: &str, errors: &mut Vec<String>) -> Option<chrono::NaiveDate> {
+    match chrono::NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d") {
+        Ok(date) => Some(date),
+        Err(_) => {
+            errors.push(format!("{label}格式应为 yyyy-MM-dd"));
+            None
+        }
+    }
+}
+
+/// 累积的错误用中文分号拼成一条消息。
+fn join_errors(errors: Vec<String>) -> Result<(), String> {
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
+}
 
 /// 创建假期类型校验。
 ///
@@ -42,13 +149,26 @@ use crate::modules::biz::hr::time_off::dto::{
 // `status` 走 `crate::utils::check::check_status(req.status, status_allowed)
 // .map_err(|e| errors.push(e)).ok();`（返回 `Result<(), String>`，非 `AppError`）。
 // 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn validate_create_time_off_type(
     req: &CreateTimeOffTypeReq,
     status_allowed: &[i8],
 ) -> Result<(), String> {
-    let _ = (req, status_allowed);
-    Err("未实现：validate_create_time_off_type".to_string())
+    let errors = check_type_fields(
+        TypeFields {
+            type_code: &req.type_code,
+            type_name: &req.type_name,
+            unit: req.unit,
+            balance_mode: req.balance_mode,
+            min_unit_minutes: req.min_unit_minutes,
+            require_attachment: req.require_attachment,
+            allow_negative: req.allow_negative,
+            pay_ratio: req.pay_ratio,
+            status: req.status,
+            remark: &req.remark,
+        },
+        status_allowed,
+    );
+    join_errors(errors)
 }
 
 /// 更新假期类型校验：规则同创建，另加主键检查。
@@ -59,13 +179,30 @@ pub fn validate_create_time_off_type(
 // 实现提示：除 id 检查外与创建共用同一组 `check_*` 小函数；`UpdateTimeOffTypeReq` 与
 // `CreateTimeOffTypeReq` 字段同名同型（多一个 `id`），拆一个 `&str`/`i8` 入参的共用内部函数即可。
 // 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn validate_update_time_off_type(
     req: &UpdateTimeOffTypeReq,
     status_allowed: &[i8],
 ) -> Result<(), String> {
-    let _ = (req, status_allowed);
-    Err("未实现：validate_update_time_off_type".to_string())
+    let mut errors = Vec::new();
+    if req.id == 0 {
+        errors.push("假期类型 ID 必须大于 0".to_string());
+    }
+    errors.extend(check_type_fields(
+        TypeFields {
+            type_code: &req.type_code,
+            type_name: &req.type_name,
+            unit: req.unit,
+            balance_mode: req.balance_mode,
+            min_unit_minutes: req.min_unit_minutes,
+            require_attachment: req.require_attachment,
+            allow_negative: req.allow_negative,
+            pay_ratio: req.pay_ratio,
+            status: req.status,
+            remark: &req.remark,
+        },
+        status_allowed,
+    ));
+    join_errors(errors)
 }
 
 /// 批量发放额度校验。
@@ -85,10 +222,48 @@ pub fn validate_update_time_off_type(
 // 实现提示：日期解析用 `chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")`（同 employee 域）；
 // 员工 ID 去重计数用 `crate::utils::check` 或就地 `HashSet`（`duplicate_ids` 是查重、不是去重）。
 // 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn validate_batch_create_grant(req: &BatchCreateGrantReq) -> Result<(), String> {
-    let _ = req;
-    Err("未实现：validate_batch_create_grant".to_string())
+    let mut errors = Vec::new();
+
+    // 发放范围三选一（互斥而非覆盖：`all` 与显式范围同时给出是语义冲突）
+    let has_explicit_scope = !req.employee_ids.is_empty() || req.dept_id.is_some();
+    if req.all && has_explicit_scope {
+        errors.push("all 与其他发放范围不能同时指定".to_string());
+    } else if !req.all && !has_explicit_scope {
+        errors.push("必须指定发放范围".to_string());
+    }
+
+    if req.time_off_type_id == 0 {
+        errors.push("假期类型 ID 必须大于 0".to_string());
+    }
+    if req.minutes <= 0 {
+        errors.push("发放时长必须大于 0".to_string());
+    }
+    if req.reason.trim().is_empty() {
+        errors.push("发放依据不能为空".to_string());
+    }
+    if req.period.trim().is_empty() {
+        errors.push("归属周期不能为空".to_string());
+    }
+
+    let unique_count = crate::utils::user_ref::dedup_ids(req.employee_ids.clone()).len();
+    if unique_count > MAX_BATCH_EMPLOYEES {
+        errors.push(format!("单次发放人数不能超过 {MAX_BATCH_EMPLOYEES}"));
+    }
+
+    let effective_at = parse_date(&req.effective_at, "生效日期", &mut errors);
+    let expire_at = req
+        .expire_at
+        .as_deref()
+        .map(|raw| parse_date(raw, "失效日期", &mut errors))
+        .unwrap_or(None);
+    if let (Some(effective_at), Some(expire_at)) = (effective_at, expire_at)
+        && expire_at < effective_at
+    {
+        errors.push("失效日期不能早于生效日期".to_string());
+    }
+
+    join_errors(errors)
 }
 
 #[cfg(test)]

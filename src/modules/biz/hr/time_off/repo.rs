@@ -12,8 +12,9 @@
 //! - 业务判断（存在性文案、额度是否足够、幂等决策）不在本层：
 //!   只用 `Option` / `bool` / `u64` / `PageData` 表达事实，文案与决策留给 service。
 
-use sea_orm::DatabaseTransaction;
+use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
+use sea_orm::{Condition, DatabaseTransaction, QueryOrder, QuerySelect};
 
 use crate::entity::{
     hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
@@ -36,8 +37,27 @@ pub async fn find_time_off_type_page(
     page_index: u64,
     page_size: u64,
 ) -> anyhow::Result<PageData<hr_time_off_type::Model>> {
-    let _ = (db, filter, page_index, page_size);
-    anyhow::bail!("未实现：find_time_off_type_page")
+    let mut cond = Condition::all();
+
+    if let Some(keyword) = &filter.keyword {
+        let like_keyword = format!("%{}%", keyword);
+        cond = cond.add(
+            Condition::any()
+                .add(hr_time_off_type::Column::TypeCode.like(like_keyword.clone()))
+                .add(hr_time_off_type::Column::TypeName.like(like_keyword)),
+        )
+    }
+
+    if let Some(status) = filter.status {
+        cond = cond.add(hr_time_off_type::Column::Status.eq(status));
+    }
+
+    let select = hr_time_off_type::Entity::find()
+        .filter(cond)
+        .filter(hr_time_off_type::Column::DeletedAt.is_null())
+        .order_by_desc(hr_time_off_type::Column::Id);
+
+    crate::utils::paginate(select, db, page_index, page_size).await
 }
 
 /// 按 id 查有效假期类型（排除软删）。
@@ -46,8 +66,12 @@ pub async fn find_time_off_type_by_id(
     db: &impl ConnectionTrait,
     id: u64,
 ) -> anyhow::Result<Option<hr_time_off_type::Model>> {
-    let _ = (db, id);
-    anyhow::bail!("未实现：find_time_off_type_by_id")
+    let model = hr_time_off_type::Entity::find()
+        .filter(hr_time_off_type::Column::Id.eq(id))
+        .filter(hr_time_off_type::Column::DeletedAt.is_null())
+        .one(db)
+        .await?;
+    Ok(model)
 }
 
 /// 按 ID 批量取假期类型（软删过滤：`DeletedAt.is_null()`；不分页；空入参直接返回空 `Vec`）。
@@ -55,14 +79,20 @@ pub async fn find_time_off_type_by_id(
 /// 供 service 列表响应批量取名（`fill_time_off_type_names`）：单次查询，禁止逐行查库。
 // 实现提示：`ids` 为空直接 `return Ok(Vec::new())` → `Entity::find().filter(Column::Id.is_in(ids))`
 // `.filter(Column::DeletedAt.is_null()).all(db)`（顺序无要求，取名按 id 建 map 即可）。
-// 骨架期：收件方（service::fill_time_off_type_names）落地前无调用方，非 test 构建允许未使用
-#[cfg_attr(not(test), allow(dead_code))]
 pub async fn find_time_off_types_by_ids(
     db: &impl ConnectionTrait,
     ids: &[u64],
 ) -> anyhow::Result<Vec<hr_time_off_type::Model>> {
-    let _ = (db, ids);
-    anyhow::bail!("未实现：find_time_off_types_by_ids")
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let models = hr_time_off_type::Entity::find()
+        .filter(hr_time_off_type::Column::Id.is_in(ids.iter().copied()))
+        .filter(hr_time_off_type::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+    Ok(models)
 }
 
 /// 按 `type_code` 查假期类型——**含软删占位**（不过滤 `deleted_at`）。
@@ -74,8 +104,11 @@ pub async fn find_time_off_type_by_code_include_deleted(
     db: &impl ConnectionTrait,
     code: &str,
 ) -> anyhow::Result<Option<hr_time_off_type::Model>> {
-    let _ = (db, code);
-    anyhow::bail!("未实现：find_time_off_type_by_code_include_deleted")
+    let model = hr_time_off_type::Entity::find()
+        .filter(hr_time_off_type::Column::TypeCode.eq(code))
+        .one(db)
+        .await?;
+    Ok(model)
 }
 
 /// 事务内创建假期类型：审计盖章（创建人与更新人同源，均取 `actor_id`）。
@@ -86,8 +119,13 @@ pub async fn create_time_off_type_in_tx(
     model: hr_time_off_type::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<hr_time_off_type::Model> {
-    let _ = (txn, model, actor_id);
-    anyhow::bail!("未实现：create_time_off_type_in_tx")
+    let active_model = hr_time_off_type::ActiveModel {
+        created_by: Set(actor_id),
+        updated_by: Set(actor_id),
+        ..model
+    };
+    let model = active_model.insert(txn).await?;
+    Ok(model)
 }
 
 /// 事务内更新假期类型（窄写）：只刷新更新人，`created_by` 保持 `NotSet` 不被覆盖。
@@ -99,8 +137,12 @@ pub async fn update_time_off_type_in_tx(
     model: hr_time_off_type::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<hr_time_off_type::Model> {
-    let _ = (txn, model, actor_id);
-    anyhow::bail!("未实现：update_time_off_type_in_tx")
+    let active_model = hr_time_off_type::ActiveModel {
+        updated_by: Set(actor_id),
+        ..model
+    };
+    let model = active_model.update(txn).await?;
+    Ok(model)
 }
 
 /// 事务内软删假期类型：只更新 `deleted_at` + `updated_by`。
@@ -114,8 +156,19 @@ pub async fn soft_delete_time_off_type_in_tx(
     id: u64,
     actor_id: u64,
 ) -> anyhow::Result<bool> {
-    let _ = (txn, id, actor_id);
-    anyhow::bail!("未实现：soft_delete_time_off_type_in_tx")
+    let now = chrono::Local::now().naive_local();
+
+    let result = hr_time_off_type::Entity::update_many()
+        .filter(hr_time_off_type::Column::Id.eq(id))
+        .filter(hr_time_off_type::Column::DeletedAt.is_null())
+        .set(hr_time_off_type::ActiveModel {
+            deleted_at: Set(Some(now)),
+            updated_by: Set(actor_id),
+            ..Default::default()
+        })
+        .exec(txn)
+        .await?;
+    Ok(result.rows_affected > 0)
 }
 
 /// FEFO 取批次：`status = 1`、`effective_at <= on_date`、
@@ -135,26 +188,62 @@ pub async fn find_active_grants_for_update(
     time_off_type_id: u64,
     on_date: Date,
 ) -> anyhow::Result<Vec<hr_time_off_grant::Model>> {
-    let _ = (txn, employee_id, time_off_type_id, on_date);
-    anyhow::bail!("未实现：find_active_grants_for_update")
+    let models = hr_time_off_grant::Entity::find()
+        .filter(hr_time_off_grant::Column::EmployeeId.eq(employee_id))
+        .filter(hr_time_off_grant::Column::TimeOffTypeId.eq(time_off_type_id))
+        .filter(hr_time_off_grant::Column::Status.eq(1))
+        .filter(hr_time_off_grant::Column::EffectiveAt.lte(on_date))
+        .filter(hr_time_off_grant::Column::RemainingMinutes.gt(0))
+        .filter(
+            hr_time_off_grant::Column::ExpireAt
+                .is_null()
+                .or(hr_time_off_grant::Column::ExpireAt.gte(on_date)),
+        )
+        .order_by_asc(Expr::cust("expire_at IS NULL"))
+        .order_by_asc(hr_time_off_grant::Column::ExpireAt)
+        .order_by_asc(hr_time_off_grant::Column::Id)
+        .lock_exclusive()
+        .all(txn)
+        .await?;
+    Ok(models)
 }
 
-/// 扫描需作废的过期批次：`expire_at < today`、`remaining_minutes > 0`、`status = 1`，
-/// `lock_exclusive()`，按 `expire_at asc, id asc` 返回（expire job 用）。
+/// 扫描需作废的过期批次（**不加锁**）：`expire_at < today`、`remaining_minutes > 0`、
+/// `status = 1`，按 `expire_at asc, id asc` 返回（expire job 用）。
 ///
-/// 幂等护栏在条件里：已作废批次 `remaining_minutes = 0`，重复执行不再命中。
-// 实现提示：`Entity::find().filter(Column::ExpireAt.lt(today))`
-// `.filter(Column::RemainingMinutes.gt(0)).filter(Column::Status.eq(1))`
-// `.order_by_asc(Column::ExpireAt).order_by_asc(Column::Id).lock_exclusive().all(txn)`；
-// `expire_at` 为 NULL 的批次不满足 `lt(today)`，天然不入候选。
-// 骨架期：收件方（service::expire_grants_in_tx）落地前无调用方，非 test 构建允许未使用
-#[cfg_attr(not(test), allow(dead_code))]
-pub async fn find_expired_grants_for_update(
+/// 刻意不加 `FOR UPDATE`：过期是「全表按条件扫 + 逐行处理」，大范围行锁会与并发的发放 /
+/// 预占互相等待甚至死锁（两个并发扫描会互等）。行级串行化交给调用方逐条
+/// [`find_grant_by_id_for_update`] + 重判状态完成，重复执行因此天然幂等。
+/// `expire_at` 为 NULL 的批次不满足 `lt(today)`，天然不入候选。
+pub async fn find_expired_grants(
     txn: &DatabaseTransaction,
     today: Date,
 ) -> anyhow::Result<Vec<hr_time_off_grant::Model>> {
-    let _ = (txn, today);
-    anyhow::bail!("未实现：find_expired_grants_for_update")
+    let models = hr_time_off_grant::Entity::find()
+        .filter(hr_time_off_grant::Column::ExpireAt.lt(today))
+        .filter(hr_time_off_grant::Column::RemainingMinutes.gt(0))
+        .filter(hr_time_off_grant::Column::Status.eq(1))
+        .order_by_asc(hr_time_off_grant::Column::ExpireAt)
+        .order_by_asc(hr_time_off_grant::Column::Id)
+        .all(txn)
+        .await?;
+    Ok(models)
+}
+
+/// 按 id 加锁读批次（`SELECT ... FOR UPDATE`）。
+///
+/// 「读 → 判断 → 写」的额度原语专用；逐行处理（如过期）时先 `find_*` 拿候选、
+/// 再逐条用本原语拿行锁并重判，避免宽范围加锁。
+pub async fn find_grant_by_id_for_update(
+    txn: &DatabaseTransaction,
+    id: u64,
+) -> anyhow::Result<Option<hr_time_off_grant::Model>> {
+    let model = hr_time_off_grant::Entity::find()
+        .filter(hr_time_off_grant::Column::Id.eq(id))
+        .lock_exclusive()
+        .one(txn)
+        .await?;
+    Ok(model)
 }
 
 /// 事务内创建批次：审计盖章（创建人与更新人同源，均取 `actor_id`）。
@@ -164,8 +253,13 @@ pub async fn create_grant_in_tx(
     model: hr_time_off_grant::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<hr_time_off_grant::Model> {
-    let _ = (txn, model, actor_id);
-    anyhow::bail!("未实现：create_grant_in_tx")
+    let model = hr_time_off_grant::ActiveModel {
+        created_by: Set(actor_id),
+        updated_by: Set(actor_id),
+        ..model
+    };
+    let model = model.insert(txn).await?;
+    Ok(model)
 }
 
 /// 按幂等键（员工 × 假别 × 依据 × 周期）查批次——**含已用尽 / 已失效行**。
@@ -179,8 +273,14 @@ pub async fn find_grant_by_idempotent_key(
     reason: &str,
     period: &str,
 ) -> anyhow::Result<Option<hr_time_off_grant::Model>> {
-    let _ = (txn, employee_id, time_off_type_id, reason, period);
-    anyhow::bail!("未实现：find_grant_by_idempotent_key")
+    let model = hr_time_off_grant::Entity::find()
+        .filter(hr_time_off_grant::Column::EmployeeId.eq(employee_id))
+        .filter(hr_time_off_grant::Column::TimeOffTypeId.eq(time_off_type_id))
+        .filter(hr_time_off_grant::Column::Reason.eq(reason))
+        .filter(hr_time_off_grant::Column::Period.eq(period))
+        .one(txn)
+        .await?;
+    Ok(model)
 }
 
 /// 分页 + 动态过滤批次（employee_id / time_off_type_id / period / status 精确，
@@ -193,8 +293,27 @@ pub async fn find_grant_page(
     page_index: u64,
     page_size: u64,
 ) -> anyhow::Result<PageData<hr_time_off_grant::Model>> {
-    let _ = (db, filter, page_index, page_size);
-    anyhow::bail!("未实现：find_grant_page")
+    let mut cond = Condition::all();
+    if let Some(employee_id) = filter.employee_id {
+        cond = cond.add(hr_time_off_grant::Column::EmployeeId.eq(employee_id));
+    }
+    if let Some(time_off_type_id) = filter.time_off_type_id {
+        cond = cond.add(hr_time_off_grant::Column::TimeOffTypeId.eq(time_off_type_id));
+    }
+    if let Some(period) = &filter.period {
+        cond = cond.add(hr_time_off_grant::Column::Period.eq(period));
+    }
+    if let Some(status) = filter.status {
+        cond = cond.add(hr_time_off_grant::Column::Status.eq(status));
+    }
+    if let Some(reason) = &filter.reason {
+        cond = cond.add(hr_time_off_grant::Column::Reason.like(format!("%{}%", reason)));
+    }
+    let select = hr_time_off_grant::Entity::find()
+        .filter(cond)
+        .order_by_desc(hr_time_off_grant::Column::Id);
+    let page = crate::utils::paginate(select, db, page_index, page_size).await?;
+    Ok(page)
 }
 
 /// 按 id 查批次（详情用，不加锁）。
@@ -203,8 +322,11 @@ pub async fn find_grant_by_id(
     db: &impl ConnectionTrait,
     id: u64,
 ) -> anyhow::Result<Option<hr_time_off_grant::Model>> {
-    let _ = (db, id);
-    anyhow::bail!("未实现：find_grant_by_id")
+    let model = hr_time_off_grant::Entity::find()
+        .filter(hr_time_off_grant::Column::Id.eq(id))
+        .one(db)
+        .await?;
+    Ok(model)
 }
 
 /// 扣批次剩余：`remaining_minutes >= minutes` 才更新，返回是否扣成功（并发护栏）。
@@ -220,8 +342,18 @@ pub async fn consume_grant_in_tx(
     minutes: i32,
     actor_id: u64,
 ) -> anyhow::Result<bool> {
-    let _ = (txn, grant_id, minutes, actor_id);
-    anyhow::bail!("未实现：consume_grant_in_tx")
+    let result = hr_time_off_grant::Entity::update_many()
+        .filter(hr_time_off_grant::Column::Id.eq(grant_id))
+        .filter(hr_time_off_grant::Column::RemainingMinutes.gte(minutes))
+        .col_expr(
+            hr_time_off_grant::Column::RemainingMinutes,
+            Expr::col(hr_time_off_grant::Column::RemainingMinutes).sub(minutes),
+        )
+        .col_expr(hr_time_off_grant::Column::UpdatedBy, Expr::value(actor_id))
+        .exec(txn)
+        .await?;
+
+    Ok(result.rows_affected > 0)
 }
 
 /// 事务内刷新批次状态（2 已用尽 / 3 已失效 / 4 已撤销），返回是否有行被更新。
@@ -233,8 +365,35 @@ pub async fn set_grant_status_in_tx(
     status: i8,
     actor_id: u64,
 ) -> anyhow::Result<bool> {
-    let _ = (txn, grant_id, status, actor_id);
-    anyhow::bail!("未实现：set_grant_status_in_tx")
+    let result = hr_time_off_grant::Entity::update_many()
+        .filter(hr_time_off_grant::Column::Id.eq(grant_id))
+        .col_expr(hr_time_off_grant::Column::Status, Expr::value(status))
+        .col_expr(hr_time_off_grant::Column::UpdatedBy, Expr::value(actor_id))
+        .exec(txn)
+        .await?;
+
+    Ok(result.rows_affected > 0)
+}
+
+/// 按账户唯一键（员工 × 假别 × 账期）**普通读**账户（不加锁，不加 `FOR UPDATE`）。
+///
+/// 用途：发放路径必须先判断账户是否存在——「存在才加锁读、不存在才插入」。
+/// 如果对**不存在**的行先 `SELECT ... FOR UPDATE`（在 RR 下取间隙锁）再 `INSERT`，
+/// 两个并发发放会各持同一间隙的间隙锁、再互相等待对方插入，形成死锁（MySQL 1213 →
+/// `操作冲突，请稍后重试`）。普通读不取锁，从根上避开这条路径。
+pub async fn find_balance_by_account(
+    db: &impl ConnectionTrait,
+    employee_id: u64,
+    time_off_type_id: u64,
+    period: &str,
+) -> anyhow::Result<Option<hr_time_off_balance::Model>> {
+    let model = hr_time_off_balance::Entity::find()
+        .filter(hr_time_off_balance::Column::EmployeeId.eq(employee_id))
+        .filter(hr_time_off_balance::Column::TimeOffTypeId.eq(time_off_type_id))
+        .filter(hr_time_off_balance::Column::Period.eq(period))
+        .one(db)
+        .await?;
+    Ok(model)
 }
 
 /// 按账户唯一键（员工 × 假别 × 账期）加锁读账户，`lock_exclusive()`。
@@ -247,8 +406,14 @@ pub async fn find_balance_by_account_for_update(
     time_off_type_id: u64,
     period: &str,
 ) -> anyhow::Result<Option<hr_time_off_balance::Model>> {
-    let _ = (txn, employee_id, time_off_type_id, period);
-    anyhow::bail!("未实现：find_balance_by_account_for_update")
+    let model = hr_time_off_balance::Entity::find()
+        .filter(hr_time_off_balance::Column::EmployeeId.eq(employee_id))
+        .filter(hr_time_off_balance::Column::TimeOffTypeId.eq(time_off_type_id))
+        .filter(hr_time_off_balance::Column::Period.eq(period))
+        .lock_exclusive()
+        .one(txn)
+        .await?;
+    Ok(model)
 }
 
 /// 按 id 查账户（详情用，不加锁）。
@@ -257,8 +422,11 @@ pub async fn find_balance_by_id(
     db: &impl ConnectionTrait,
     id: u64,
 ) -> anyhow::Result<Option<hr_time_off_balance::Model>> {
-    let _ = (db, id);
-    anyhow::bail!("未实现：find_balance_by_id")
+    let model = hr_time_off_balance::Entity::find()
+        .filter(hr_time_off_balance::Column::Id.eq(id))
+        .one(db)
+        .await?;
+    Ok(model)
 }
 
 /// 分页 + 动态过滤账户（employee_id / time_off_type_id / period 精确），按 id 降序。
@@ -270,8 +438,21 @@ pub async fn find_balance_page(
     page_index: u64,
     page_size: u64,
 ) -> anyhow::Result<PageData<hr_time_off_balance::Model>> {
-    let _ = (db, filter, page_index, page_size);
-    anyhow::bail!("未实现：find_balance_page")
+    let mut cond = Condition::all();
+    if let Some(employee_id) = filter.employee_id {
+        cond = cond.add(hr_time_off_balance::Column::EmployeeId.eq(employee_id));
+    }
+    if let Some(time_off_type_id) = filter.time_off_type_id {
+        cond = cond.add(hr_time_off_balance::Column::TimeOffTypeId.eq(time_off_type_id));
+    }
+    if let Some(period) = filter.period.as_deref() {
+        cond = cond.add(hr_time_off_balance::Column::Period.eq(period));
+    }
+    let select = hr_time_off_balance::Entity::find()
+        .filter(cond)
+        .order_by_desc(hr_time_off_balance::Column::Id);
+    let page = crate::utils::paginate(select, db, page_index, page_size).await?;
+    Ok(page)
 }
 
 /// 事务内建账户（唯一键冲突即并发建户，由 service 重读）。
@@ -282,8 +463,8 @@ pub async fn create_balance_in_tx(
     txn: &DatabaseTransaction,
     model: hr_time_off_balance::ActiveModel,
 ) -> anyhow::Result<hr_time_off_balance::Model> {
-    let _ = (txn, model);
-    anyhow::bail!("未实现：create_balance_in_tx")
+    let model = model.insert(txn).await?;
+    Ok(model)
 }
 
 /// 事务内更新账户（窄写）：只刷新更新人，其余列以入参 `model` 为准。
@@ -295,8 +476,12 @@ pub async fn update_balance_in_tx(
     model: hr_time_off_balance::ActiveModel,
     actor_id: u64,
 ) -> anyhow::Result<hr_time_off_balance::Model> {
-    let _ = (txn, model, actor_id);
-    anyhow::bail!("未实现：update_balance_in_tx")
+    let model = hr_time_off_balance::ActiveModel {
+        updated_by: Set(actor_id),
+        ..model
+    };
+    let model = model.update(txn).await?;
+    Ok(model)
 }
 
 /// 事务内追加一条流水（append-only：本层不提供更新 / 删除原语，冲正靠反向记录）。
@@ -307,8 +492,7 @@ pub async fn create_balance_log_in_tx(
     txn: &DatabaseTransaction,
     model: hr_time_off_balance_log::ActiveModel,
 ) -> anyhow::Result<hr_time_off_balance_log::Model> {
-    let _ = (txn, model);
-    anyhow::bail!("未实现：create_balance_log_in_tx")
+    Ok(model.insert(txn).await?)
 }
 
 /// 分页 + 动态过滤流水（employee_id / time_off_type_id / biz_type 精确），
@@ -321,8 +505,25 @@ pub async fn find_balance_log_page(
     page_index: u64,
     page_size: u64,
 ) -> anyhow::Result<PageData<hr_time_off_balance_log::Model>> {
-    let _ = (db, filter, page_index, page_size);
-    anyhow::bail!("未实现：find_balance_log_page")
+    let mut cond = Condition::all();
+
+    if let Some(employee_id) = filter.employee_id {
+        cond = cond.add(hr_time_off_balance_log::Column::EmployeeId.eq(employee_id));
+    }
+
+    if let Some(time_off_type_id) = filter.time_off_type_id {
+        cond = cond.add(hr_time_off_balance_log::Column::TimeOffTypeId.eq(time_off_type_id));
+    }
+
+    if let Some(biz_type) = filter.biz_type {
+        cond = cond.add(hr_time_off_balance_log::Column::BizType.eq(biz_type));
+    }
+
+    let select = hr_time_off_balance_log::Entity::find()
+        .filter(cond)
+        .order_by_desc(hr_time_off_balance_log::Column::Id);
+    let page = crate::utils::paginate(select, db, page_index, page_size).await?;
+    Ok(page)
 }
 
 #[cfg(test)]

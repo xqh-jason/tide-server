@@ -260,6 +260,20 @@ pub async fn find_dept_links_by_user_id(
     Ok(models)
 }
 
+/// 按部门取挂载用户的 id 列表（`sys_user_dept` 的属主是 user 域）。
+///
+/// 供跨域按组织范围发放用（如假期额度按部门发放）；只读、不加锁、不分页。
+pub async fn find_user_ids_by_dept_id(
+    db: &impl ConnectionTrait,
+    dept_id: u64,
+) -> anyhow::Result<Vec<u64>> {
+    let links = sys_user_dept::Entity::find()
+        .filter(sys_user_dept::Column::DeptId.eq(dept_id))
+        .all(db)
+        .await?;
+    Ok(links.into_iter().map(|link| link.user_id).collect())
+}
+
 pub async fn find_dept_links_by_user_ids(
     db: &impl ConnectionTrait,
     user_ids: &[u64],

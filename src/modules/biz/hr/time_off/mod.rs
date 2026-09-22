@@ -26,6 +26,13 @@ pub const LOG_BIZ_TIME_OFF_CONSUME: i8 = 4;
 pub const LOG_BIZ_TIME_OFF_RELEASE: i8 = 5;
 pub const LOG_BIZ_EXPIRE: i8 = 6;
 
+/// 流水来源类型（`hr_time_off_balance_log.source_kind`）
+pub const LOG_SOURCE_NONE: i8 = 0;
+/// 系统任务（定时任务、job 触发）
+pub const LOG_SOURCE_JOB: i8 = 1;
+/// 手工操作（HR 发放 / 调整）
+pub const LOG_SOURCE_MANUAL: i8 = 4;
+
 /// 假期额度端点：`POST /api/v1/hr/time-off/{type,grant,balance}/{...}`。
 ///
 /// 路由在此注册，由 `modules/mod.rs` 的 `DOMAINS` 登记表挂到 `hr/time-off` 前缀下

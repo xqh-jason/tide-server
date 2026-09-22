@@ -59,6 +59,7 @@
 
 use std::collections::HashMap;
 
+use sea_orm::ActiveValue::Set;
 use sea_orm::DatabaseTransaction;
 use sea_orm::entity::prelude::*;
 
@@ -66,11 +67,19 @@ use crate::entity::{
     hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
 };
 use crate::modules::biz::hr::time_off::dto::{
-    BatchCreateGrantReq, BatchCreateGrantResp, CreateTimeOffTypeReq, TimeOffBalanceListReq,
-    TimeOffBalanceLogListReq, TimeOffGrantListReq, TimeOffTypeListReq, UpdateTimeOffTypeReq,
+    BatchCreateGrantReq, BatchCreateGrantResp, CreateTimeOffTypeReq, TimeOffBalanceFilter,
+    TimeOffBalanceListReq, TimeOffBalanceLogFilter, TimeOffBalanceLogListReq, TimeOffGrantFilter,
+    TimeOffGrantListReq, TimeOffTypeFilter, TimeOffTypeListReq, UpdateTimeOffTypeReq,
+};
+use crate::modules::biz::hr::time_off::{
+    BALANCE_MODE_RECORD_ONLY, GRANT_SOURCE_ISSUE, GRANT_STATUS_ACTIVE, GRANT_STATUS_CANCELED,
+    GRANT_STATUS_EXHAUSTED, GRANT_STATUS_EXPIRED, LOG_BIZ_ADJUST, LOG_BIZ_EXPIRE, LOG_BIZ_GRANT,
+    LOG_BIZ_TIME_OFF_CONSUME, LOG_BIZ_TIME_OFF_LOCK, LOG_BIZ_TIME_OFF_RELEASE, LOG_SOURCE_JOB,
+    LOG_SOURCE_MANUAL, LOG_SOURCE_NONE, repo as time_off_repo,
 };
 use crate::utils::PageData;
 use crate::utils::error::AppError;
+use chrono::Datelike;
 
 // —— 额度原语（pub(crate)：P2 请假 / P4 加班复用；调用方必须自持事务）——
 
@@ -88,8 +97,7 @@ use crate::utils::error::AppError;
 // ⑤ `repo::create_balance_log_in_tx` 写流水：`biz_type = LOG_BIZ_GRANT`、`delta = +minutes`
 // （授予增加可用，见文件头账本口径）、`before/after` 取变动前后可用值、`grant_id` = 新批次、
 // `source_kind` = 4（手工）/ 1（系统任务，按调用场景）、`operator_id = actor_id`。
-// 骨架期：仅测试调用，实现函数体后删除本属性
-#[cfg_attr(not(test), allow(dead_code))]
+// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
 // 成对原语的入参集合固定；拆参数结构体会让跨域调用方多一层构造，收益不足
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn grant_time_off_in_tx(
@@ -104,19 +112,274 @@ pub(crate) async fn grant_time_off_in_tx(
     effective_at: Date,
     expire_at: Option<Date>,
 ) -> Result<u64, AppError> {
-    let _ = (
+    // ① 幂等：同「员工 × 假别 × 依据 × 周期」已发过就复用，不重复累加任何账户字段
+    let existing = time_off_repo::find_grant_by_idempotent_key(
+        txn,
+        employee_id,
+        time_off_type_id,
+        reason,
+        period,
+    )
+    .await?;
+    if let Some(existing) = existing {
+        return Ok(existing.id);
+    }
+
+    // ② 账户：不存在则开户，存在则加锁读（账期 = 发放生效日的自然年；
+    //    `period` 入参只是归属标记，不决定账户）
+    let account_period = effective_at.year().to_string();
+    let balance = lock_or_create_balance_in_tx(
         txn,
         actor_id,
         employee_id,
         time_off_type_id,
-        minutes,
-        source,
-        reason,
-        period,
-        effective_at,
-        expire_at,
+        &account_period,
+    )
+    .await?;
+
+    // ③ 批次：`minutes` 是授予总量（NOT NULL），`remaining_minutes` 是剩余，两者都写
+    let grant = time_off_repo::create_grant_in_tx(
+        txn,
+        hr_time_off_grant::ActiveModel {
+            employee_id: Set(employee_id),
+            time_off_type_id: Set(time_off_type_id),
+            source: Set(source),
+            reason: Set(reason.to_string()),
+            period: Set(period.to_string()),
+            minutes: Set(minutes),
+            remaining_minutes: Set(minutes),
+            effective_at: Set(effective_at),
+            expire_at: Set(expire_at),
+            status: Set(GRANT_STATUS_ACTIVE),
+            ..Default::default()
+        },
+        actor_id,
+    )
+    .await?;
+
+    // ④ 账户 `granted += minutes`
+    let before = available_of(&balance);
+    time_off_repo::update_balance_in_tx(
+        txn,
+        hr_time_off_balance::ActiveModel {
+            id: Set(balance.id),
+            granted_minutes: Set(balance.granted_minutes + minutes),
+            ..Default::default()
+        },
+        actor_id,
+    )
+    .await?;
+
+    // ⑤ 授予流水：`delta = +minutes`（授予增加可用）
+    append_balance_log_in_tx(
+        txn,
+        BalanceLog {
+            balance_id: balance.id,
+            employee_id,
+            time_off_type_id,
+            grant_id: grant.id,
+            biz_type: LOG_BIZ_GRANT,
+            before_minutes: before,
+            after_minutes: before + i64::from(minutes),
+            delta_minutes: minutes,
+            source_kind: LOG_SOURCE_MANUAL,
+            source_id: 0,
+            operator_id: actor_id,
+            remark: "",
+        },
+    )
+    .await?;
+
+    Ok(grant.id)
+}
+
+/// 在职状态「离职」（字典 `employmentStatus` 的 3）：批量发放 `all` 范围要排除离职员工。
+const EMPLOYMENT_STATUS_RESIGNED: i8 = 3;
+
+/// 解析 `yyyy-MM-dd` 日期（格式已在 `validate.rs` 拦过，这里是进入 service 后的兜底）。
+fn parse_date(raw: &str) -> Result<Date, AppError> {
+    chrono::NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d")
+        .map_err(|_| AppError::Biz(format!("日期格式不正确：{raw}")))
+}
+
+/// 解析批量发放的目标员工（三种范围互斥，互斥性由 `validate.rs` 保证）。
+///
+/// - `all`：分页遍历在职员工（排除离职）；
+/// - `dept_id`：该部门挂载的用户 → 各自的员工档案；
+/// - 否则：直接用 `employee_ids`。
+///
+/// 三种口径都去重且保持稳定顺序（`skipped_employee_ids` 的回执顺序依赖它）。
+async fn resolve_grant_targets(
+    txn: &DatabaseTransaction,
+    req: &BatchCreateGrantReq,
+) -> Result<Vec<u64>, AppError> {
+    use crate::modules::biz::hr::employee::dto::EmployeeFilter;
+    use crate::modules::biz::hr::employee::repo as employee_repo;
+
+    if req.all {
+        let mut ids = Vec::new();
+        let mut page_index = 0u64;
+        loop {
+            // page_size 上限 1000（`PageQuery::page_size` 同口径）；page_index 0-based
+            let page = employee_repo::find_employee_page(
+                txn,
+                &EmployeeFilter::default(),
+                page_index,
+                1000,
+            )
+            .await?;
+            let fetched = page.items.len() as u64;
+            ids.extend(
+                page.items
+                    .into_iter()
+                    .filter(|employee| employee.employment_status != EMPLOYMENT_STATUS_RESIGNED)
+                    .map(|employee| employee.id),
+            );
+            if fetched == 0 || (page_index + 1) * 1000 >= page.total {
+                break;
+            }
+            page_index += 1;
+        }
+        return Ok(crate::utils::user_ref::dedup_ids(ids));
+    }
+
+    if let Some(dept_id) = req.dept_id {
+        let user_ids =
+            crate::modules::system::user::repo::find_user_ids_by_dept_id(txn, dept_id).await?;
+        let employees = employee_repo::find_by_user_ids(txn, &user_ids).await?;
+        let employee_by_user: HashMap<u64, u64> =
+            employees.into_iter().map(|e| (e.user_id, e.id)).collect();
+        // 按 user_ids 顺序回填，保序且自然去重
+        return Ok(crate::utils::user_ref::dedup_ids(
+            user_ids
+                .into_iter()
+                .filter_map(|user_id| employee_by_user.get(&user_id).copied())
+                .collect(),
+        ));
+    }
+
+    Ok(crate::utils::user_ref::dedup_ids(req.employee_ids.clone()))
+}
+
+// —— 私有 helper：把「取账户」「写流水」这两件重复且易错的事各收口一次 ——
+
+/// 取账户：不存在则开户，存在则加锁读。
+///
+/// **顺序不能反**：若对**不存在**的行先 `SELECT ... FOR UPDATE`，RR 隔离级别下会取到
+/// 间隙锁，两个并发发放各持同一间隙的锁、再互相等待对方 `INSERT` → 死锁（MySQL 1213，
+/// 表现为 `操作冲突，请稍后重试`）。因此固定为「普通读判存在 → 存在才加锁 / 不存在才插入」；
+/// 插入撞唯一键（并发建户）时加锁重读，拿回对方刚建的账户。
+async fn lock_or_create_balance_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    employee_id: u64,
+    time_off_type_id: u64,
+    period: &str,
+) -> Result<hr_time_off_balance::Model, AppError> {
+    let opened = time_off_repo::find_balance_by_account(txn, employee_id, time_off_type_id, period)
+        .await?
+        .is_some();
+    if opened {
+        return lock_balance_in_tx(txn, employee_id, time_off_type_id, period).await;
+    }
+
+    // 未开户：直接插入（五个分钟列走 DDL 默认 0，审计列由本层给定 actor）
+    let new_account = hr_time_off_balance::ActiveModel {
+        employee_id: Set(employee_id),
+        time_off_type_id: Set(time_off_type_id),
+        period: Set(period.to_string()),
+        created_by: Set(actor_id),
+        updated_by: Set(actor_id),
+        ..Default::default()
+    };
+    match time_off_repo::create_balance_in_tx(txn, new_account).await {
+        Ok(balance) => Ok(balance),
+        // 并发建户：重读成功即以对方建的账户为准；重读也失败才抛插入的原始错误（根因）
+        Err(insert_err) => lock_balance_in_tx(txn, employee_id, time_off_type_id, period)
+            .await
+            .map_err(|_| AppError::from(insert_err)),
+    }
+}
+
+/// 加锁读账户（`SELECT ... FOR UPDATE`）；不存在即报错。
+///
+/// 只用于「账户必然已存在」的路径（加锁读不存在的行会取间隙锁，见上）。
+async fn lock_balance_in_tx(
+    txn: &DatabaseTransaction,
+    employee_id: u64,
+    time_off_type_id: u64,
+    period: &str,
+) -> Result<hr_time_off_balance::Model, AppError> {
+    time_off_repo::find_balance_by_account_for_update(txn, employee_id, time_off_type_id, period)
+        .await?
+        .ok_or_else(|| AppError::Biz("额度账户不存在，请先发放额度".into()))
+}
+
+/// 一条额度流水的画像：只描述「这笔变动是什么」，账户 / 人员由调用点填。
+struct BalanceLog<'a> {
+    balance_id: u64,
+    employee_id: u64,
+    time_off_type_id: u64,
+    /// 涉及的授予批次；账户级动作（预占 / 释放）填 0
+    grant_id: u64,
+    biz_type: i8,
+    /// 可用余额的变动量（= `after_minutes − before_minutes`，口径见文件头「账本口径」）
+    delta_minutes: i32,
+    before_minutes: i64,
+    after_minutes: i64,
+    source_kind: i8,
+    source_id: u64,
+    operator_id: u64,
+    remark: &'a str,
+}
+
+/// 追加一条流水（append-only）。
+///
+/// 收口两件事：① `i64` 可用值 → `i32` 列的转换只在这里做一次；
+/// ② 断言 `delta == after − before`，把「流水口径」钉在编译期的 debug 断言上，
+/// 任何算错可用值 / 记错 delta 的调用都会在测试里立刻暴露。
+async fn append_balance_log_in_tx(
+    txn: &DatabaseTransaction,
+    log: BalanceLog<'_>,
+) -> Result<(), AppError> {
+    debug_assert_eq!(
+        i64::from(log.delta_minutes),
+        log.after_minutes - log.before_minutes,
+        "流水 delta 必须等于可用余额变动量（after − before）"
     );
-    Err(AppError::Biz("未实现：grant_time_off_in_tx".into()))
+
+    time_off_repo::create_balance_log_in_tx(
+        txn,
+        hr_time_off_balance_log::ActiveModel {
+            balance_id: Set(log.balance_id),
+            employee_id: Set(log.employee_id),
+            time_off_type_id: Set(log.time_off_type_id),
+            grant_id: Set(log.grant_id),
+            biz_type: Set(log.biz_type),
+            delta_minutes: Set(log.delta_minutes),
+            before_minutes: Set(log.before_minutes as i32),
+            after_minutes: Set(log.after_minutes as i32),
+            source_kind: Set(log.source_kind),
+            source_id: Set(log.source_id),
+            operator_id: Set(log.operator_id),
+            remark: Set(log.remark.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// 账户可用额度（分钟）：`granted + adjust − used − locked − expired`。
+///
+/// 账户各列是 `i32`，相减可能越界，故聚合口径一律升位到 `i64`；
+/// 本函数是「可用」的唯一算式，[`lock_time_off_in_tx`] / [`available_minutes`] 等一律复用它，
+/// 避免多处各写一遍后漂移。
+fn available_of(balance: &hr_time_off_balance::Model) -> i64 {
+    i64::from(balance.granted_minutes) + i64::from(balance.adjust_minutes)
+        - i64::from(balance.used_minutes)
+        - i64::from(balance.locked_minutes)
+        - i64::from(balance.expired_minutes)
 }
 
 /// 预占额度（审批中）：账户 `locked_minutes += minutes`，可用不足且假别 `allow_negative = 0` 时拒绝。
@@ -134,7 +397,7 @@ pub(crate) async fn grant_time_off_in_tx(
 // `repo::update_balance_in_tx`；⑤ 写流水：`biz_type = LOG_BIZ_TIME_OFF_LOCK`、`delta = −minutes`
 // （预占把可用锁住，见文件头账本口径）、`grant_id = 0`（账户级动作）、`source_kind = 0` /
 // `source_id = 0`（本签名不带来源单据，P2 接入请假单后由调用方补）。
-// 骨架期：仅测试调用，实现函数体后删除本属性
+// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn lock_time_off_in_tx(
     txn: &DatabaseTransaction,
@@ -143,8 +406,57 @@ pub(crate) async fn lock_time_off_in_tx(
     minutes: i32,
     on_date: Date,
 ) -> Result<(), AppError> {
-    let _ = (txn, employee_id, time_off_type_id, minutes, on_date);
-    Err(AppError::Biz("未实现：lock_time_off_in_tx".into()))
+    let type_model = time_off_repo::find_time_off_type_by_id(txn, time_off_type_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("假期类型不存在：{time_off_type_id}")))?;
+
+    // 记录型假期无额度概念
+    if type_model.balance_mode == BALANCE_MODE_RECORD_ONLY {
+        return Ok(());
+    }
+
+    let period = on_date.year().to_string();
+
+    let balance = lock_balance_in_tx(txn, employee_id, time_off_type_id, &period).await?;
+
+    let before = available_of(&balance);
+    if before < i64::from(minutes) && type_model.allow_negative == 0 {
+        return Err(AppError::Biz(format!(
+            "额度不足：可用 {before} 分钟，本次需要 {minutes} 分钟"
+        )));
+    }
+
+    time_off_repo::update_balance_in_tx(
+        txn,
+        hr_time_off_balance::ActiveModel {
+            id: Set(balance.id),
+            locked_minutes: Set(balance.locked_minutes + minutes),
+            ..Default::default()
+        },
+        0, // 本签名不带 actor_id：账户审计列记 0（系统）；P2 若要记审批人，扩签名
+    )
+    .await?;
+
+    append_balance_log_in_tx(
+        txn,
+        BalanceLog {
+            balance_id: balance.id,
+            employee_id,
+            time_off_type_id,
+            grant_id: 0, // 账户级动作：预占不落到具体批次
+            biz_type: LOG_BIZ_TIME_OFF_LOCK,
+            before_minutes: before,
+            after_minutes: before - i64::from(minutes),
+            delta_minutes: -minutes,
+            source_kind: LOG_SOURCE_NONE,
+            source_id: 0, // 本签名不带来源单据，P2 接入请假单后由调用方补
+            operator_id: 0,
+            remark: "",
+        },
+    )
+    .await?;
+
+    Ok(())
 }
 
 /// 实扣（审批通过）：FEFO 扣批次剩余，账户 `locked -= minutes`、`used += minutes`，可用不变。
@@ -162,7 +474,7 @@ pub(crate) async fn lock_time_off_in_tx(
 // 并写一条流水：`biz_type = LOG_BIZ_TIME_OFF_CONSUME`、`delta = 0`（locked→used，可用不变，
 // 见文件头账本口径）、`grant_id = batch.id`、`source_kind` / `source_id` 原样入来源列；
 // ⑤ `grant_id` 之外的 `operator_id` 传 0（系统动作），P2 接入请假单后可改为审批人。
-// 骨架期：仅测试调用，实现函数体后删除本属性
+// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn consume_locked_in_tx(
     txn: &DatabaseTransaction,
@@ -173,16 +485,74 @@ pub(crate) async fn consume_locked_in_tx(
     source_id: u64,
     on_date: Date,
 ) -> Result<(), AppError> {
-    let _ = (
+    let type_model = time_off_repo::find_time_off_type_by_id(txn, time_off_type_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("假期类型不存在：{time_off_type_id}")))?;
+    // 记录型假别无额度概念
+    if type_model.balance_mode == BALANCE_MODE_RECORD_ONLY {
+        return Ok(());
+    }
+
+    let period = on_date.year().to_string();
+    let balance = lock_balance_in_tx(txn, employee_id, time_off_type_id, &period).await?;
+    // locked → used：可用值不变（见文件头账本口径）
+    let before = available_of(&balance);
+
+    // 先扣批次：扣不满就整笔失败，账户改动随事务回滚，避免账本出现「扣了一半」
+    let batches =
+        time_off_repo::find_active_grants_for_update(txn, employee_id, time_off_type_id, on_date)
+            .await?;
+    let mut need = minutes;
+    for batch in batches {
+        if need == 0 {
+            break;
+        }
+        let take = need.min(batch.remaining_minutes);
+        // 批次级并发护栏在 repo 的 `remaining >= minutes` 条件里；false = 已被并发扣空
+        // 本签名不带操作人：批次侧审计记 0（系统动作）
+        if !time_off_repo::consume_grant_in_tx(txn, batch.id, take, 0).await? {
+            return Err(AppError::Biz("额度批次不足，请检查账本一致性".into()));
+        }
+        if take == batch.remaining_minutes {
+            time_off_repo::set_grant_status_in_tx(txn, batch.id, GRANT_STATUS_EXHAUSTED, 0).await?;
+        }
+        // 每个被扣批次一条流水：delta = 0（可用不变），grant_id 指向它以便追溯
+        append_balance_log_in_tx(
+            txn,
+            BalanceLog {
+                balance_id: balance.id,
+                employee_id,
+                time_off_type_id,
+                grant_id: batch.id,
+                biz_type: LOG_BIZ_TIME_OFF_CONSUME,
+                before_minutes: before,
+                after_minutes: before,
+                delta_minutes: 0,
+                source_kind,
+                source_id,
+                operator_id: 0,
+                remark: "",
+            },
+        )
+        .await?;
+        need -= take;
+    }
+    if need > 0 {
+        return Err(AppError::Biz("额度批次不足，请检查账本一致性".into()));
+    }
+
+    time_off_repo::update_balance_in_tx(
         txn,
-        employee_id,
-        time_off_type_id,
-        minutes,
-        source_kind,
-        source_id,
-        on_date,
-    );
-    Err(AppError::Biz("未实现：consume_locked_in_tx".into()))
+        hr_time_off_balance::ActiveModel {
+            id: Set(balance.id),
+            locked_minutes: Set(balance.locked_minutes - minutes),
+            used_minutes: Set(balance.used_minutes + minutes),
+            ..Default::default()
+        },
+        0, // 本签名不带操作人：系统动作
+    )
+    .await?;
+    Ok(())
 }
 
 /// 释放预占（审批驳回 / 撤销）：账户 `locked -= minutes`，可用恢复，流水正向记恢复量。
@@ -193,7 +563,7 @@ pub(crate) async fn consume_locked_in_tx(
 // `AppError::Biz("额度账户不存在，请先发放额度")`；② 账户 `locked_minutes -= minutes` →
 // `repo::update_balance_in_tx`；③ 写流水：`biz_type = LOG_BIZ_TIME_OFF_RELEASE`、`delta = +minutes`
 // （可用恢复，见文件头账本口径）、`grant_id = 0`（账户级）、`source_kind` / `source_id` 原样入来源列。
-// 骨架期：仅测试调用，实现函数体后删除本属性
+// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn release_locked_in_tx(
     txn: &DatabaseTransaction,
@@ -204,16 +574,51 @@ pub(crate) async fn release_locked_in_tx(
     source_id: u64,
     on_date: Date,
 ) -> Result<(), AppError> {
-    let _ = (
+    let type_model = time_off_repo::find_time_off_type_by_id(txn, time_off_type_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("假期类型不存在：{time_off_type_id}")))?;
+    // 记录型假别无额度概念
+    if type_model.balance_mode == BALANCE_MODE_RECORD_ONLY {
+        return Ok(());
+    }
+
+    let period = on_date.year().to_string();
+    let balance = lock_balance_in_tx(txn, employee_id, time_off_type_id, &period).await?;
+    if i64::from(balance.locked_minutes) < i64::from(minutes) {
+        return Err(AppError::Biz("释放量超过预占量，请检查账本一致性".into()));
+    }
+
+    let before = available_of(&balance);
+    time_off_repo::update_balance_in_tx(
         txn,
-        employee_id,
-        time_off_type_id,
-        minutes,
-        source_kind,
-        source_id,
-        on_date,
-    );
-    Err(AppError::Biz("未实现：release_locked_in_tx".into()))
+        hr_time_off_balance::ActiveModel {
+            id: Set(balance.id),
+            locked_minutes: Set(balance.locked_minutes - minutes),
+            ..Default::default()
+        },
+        0, // 本签名不带操作人：系统动作
+    )
+    .await?;
+
+    append_balance_log_in_tx(
+        txn,
+        BalanceLog {
+            balance_id: balance.id,
+            employee_id,
+            time_off_type_id,
+            grant_id: 0, // 账户级动作：预占不落到具体批次
+            biz_type: LOG_BIZ_TIME_OFF_RELEASE,
+            before_minutes: before,
+            after_minutes: before + i64::from(minutes),
+            delta_minutes: minutes,
+            source_kind,
+            source_id,
+            operator_id: 0,
+            remark: "",
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// 批量作废过期批次（定时任务调用）：`expire_at < today` 且仍有剩余的批次归零 + 置失效 + 记流水。
@@ -228,14 +633,68 @@ pub(crate) async fn release_locked_in_tx(
 // （系统任务，actor_id 传 0）；③ 每批次写一条流水：`biz_type = LOG_BIZ_EXPIRE`、
 // `delta = −remaining`（作废减少可用，见文件头账本口径）、`grant_id` = 批次 id、
 // `source_kind = 1`（系统任务）、`operator_id = 0`；④ 账户变动经 `repo::update_balance_in_tx` 落库。
-// 骨架期：仅测试调用，实现函数体后删除本属性
-#[cfg_attr(not(test), allow(dead_code))]
+// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
 pub(crate) async fn expire_grants_in_tx(
     txn: &DatabaseTransaction,
     today: Date,
 ) -> Result<u64, AppError> {
-    let _ = (txn, today);
-    Err(AppError::Biz("未实现：expire_grants_in_tx".into()))
+    let candidates = time_off_repo::find_expired_grants(txn, today).await?;
+    let mut expired_count = 0u64;
+
+    for candidate in candidates {
+        // 逐行加锁 + 重判：并发执行（或重复执行）下已被处理的批次直接跳过
+        let Some(batch) = time_off_repo::find_grant_by_id_for_update(txn, candidate.id).await?
+        else {
+            continue;
+        };
+        if batch.status != GRANT_STATUS_ACTIVE || batch.remaining_minutes <= 0 {
+            continue;
+        }
+
+        // 账期取批次 `effective_at` 的自然年：必须与它发放时入账的账户同桶（跨年作废不拆桶）
+        let period = batch.effective_at.year().to_string();
+        let balance = lock_balance_in_tx(txn, batch.employee_id, batch.time_off_type_id, &period)
+            .await
+            .map_err(|_| AppError::Biz(format!("额度账户不存在，账本异常：批次 {}", batch.id)))?;
+
+        let before = available_of(&balance);
+        let remaining = batch.remaining_minutes;
+
+        time_off_repo::update_balance_in_tx(
+            txn,
+            hr_time_off_balance::ActiveModel {
+                id: Set(balance.id),
+                expired_minutes: Set(balance.expired_minutes + remaining),
+                ..Default::default()
+            },
+            0, // 系统任务
+        )
+        .await?;
+        time_off_repo::consume_grant_in_tx(txn, batch.id, remaining, 0).await?;
+        time_off_repo::set_grant_status_in_tx(txn, batch.id, GRANT_STATUS_EXPIRED, 0).await?;
+
+        append_balance_log_in_tx(
+            txn,
+            BalanceLog {
+                balance_id: balance.id,
+                employee_id: batch.employee_id,
+                time_off_type_id: batch.time_off_type_id,
+                grant_id: batch.id,
+                biz_type: LOG_BIZ_EXPIRE,
+                before_minutes: before,
+                after_minutes: before - i64::from(remaining),
+                delta_minutes: -remaining,
+                source_kind: LOG_SOURCE_JOB,
+                source_id: 0,
+                operator_id: 0,
+                remark: "过期作废",
+            },
+        )
+        .await?;
+        expired_count += 1;
+    }
+
+    Ok(expired_count)
 }
 
 /// 可用额度（分钟）：账户口径 `granted + adjust − used − locked − expired`。
@@ -249,7 +708,7 @@ pub(crate) async fn expire_grants_in_tx(
 // 「记录型假别无额度概念，调用方不应据此判定可否请假」（见文件头「记录型假别」）；
 // ④ `on_date` 当前不参与计算（签名保留，供后续「按有效期折算可用」口径），
 // 实现时 `let _ = on_date;` 消音。
-// 骨架期：仅测试调用，实现函数体后删除本属性
+// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn available_minutes(
     txn: &DatabaseTransaction,
@@ -258,8 +717,20 @@ pub(crate) async fn available_minutes(
     period: &str,
     on_date: Date,
 ) -> Result<i64, AppError> {
-    let _ = (txn, employee_id, time_off_type_id, period, on_date);
-    Err(AppError::Biz("未实现：available_minutes".into()))
+    let type_model = time_off_repo::find_time_off_type_by_id(txn, time_off_type_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("假期类型不存在：{time_off_type_id}")))?;
+    // 记录型假别无额度概念，调用方不应据此判定可否请假
+    if type_model.balance_mode == BALANCE_MODE_RECORD_ONLY {
+        return Ok(0);
+    }
+
+    // `on_date` 暂不参与计算（签名保留，供后续「按有效期折算可用」口径）
+    let _ = on_date;
+    // 纯查询走普通读：不加行锁，避免热点账户上无关读者互相排队
+    let balance =
+        time_off_repo::find_balance_by_account(txn, employee_id, time_off_type_id, period).await?;
+    Ok(balance.map(|balance| available_of(&balance)).unwrap_or(0))
 }
 
 // —— 批量发放（service 编排：范围解析 + 逐人发放；测试要在 test_txn 里跑，故提供 _in_tx 变体）——
@@ -277,15 +748,56 @@ pub(crate) async fn available_minutes(
 // `repo::find_grant_by_idempotent_key(txn, emp, req.time_off_type_id, &req.reason, &req.period)` 探测：
 // 已存在 → `skipped += 1` + 记入 `skipped_employee_ids`；不存在 → `grant_time_off_in_tx(...)` 后
 // `created += 1`；④ 返回 `BatchCreateGrantResp`。
-// 骨架期：仅测试调用，实现函数体后删除本属性
-#[cfg_attr(not(test), allow(dead_code))]
+// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
 pub(crate) async fn batch_create_grants_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
     req: &BatchCreateGrantReq,
 ) -> Result<BatchCreateGrantResp, AppError> {
-    let _ = (txn, actor_id, req);
-    Err(AppError::Biz("未实现：batch_create_grants_in_tx".into()))
+    let effective_at = parse_date(&req.effective_at)?;
+    let expire_at = match req.expire_at.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => Some(parse_date(raw)?),
+        _ => None,
+    };
+    let employees = resolve_grant_targets(txn, req).await?;
+
+    let mut resp = BatchCreateGrantResp {
+        created: 0,
+        skipped: 0,
+        skipped_employee_ids: Vec::new(),
+    };
+    for employee_id in employees {
+        // 幂等：同「员工 × 假别 × 依据 × 周期」已发过 → 计入 skipped（保持入参顺序）
+        let existing = time_off_repo::find_grant_by_idempotent_key(
+            txn,
+            employee_id,
+            req.time_off_type_id,
+            &req.reason,
+            &req.period,
+        )
+        .await?;
+        if existing.is_some() {
+            resp.skipped += 1;
+            resp.skipped_employee_ids.push(employee_id);
+            continue;
+        }
+
+        grant_time_off_in_tx(
+            txn,
+            actor_id,
+            employee_id,
+            req.time_off_type_id,
+            req.minutes,
+            GRANT_SOURCE_ISSUE,
+            &req.reason,
+            &req.period,
+            effective_at,
+            expire_at,
+        )
+        .await?;
+        resp.created += 1;
+    }
+    Ok(resp)
 }
 
 // —— 批量取名 helper（列表 / 详情响应用；单次查询，禁止逐行查库）——
@@ -301,13 +813,23 @@ pub(crate) async fn batch_create_grants_in_tx(
 // `crate::utils::user_ref::find_user_name_map_by_ids`（映射 `sys_user.username`）；④ 回填
 // `hr_employee.id → 名称`。禁止逐行查库：列表响应必须一次批量查询。
 // 骨架期：任务 4 的 api 层接入后删除本属性
-#[allow(dead_code)]
 pub(crate) async fn fill_employee_names(
     db: &impl ConnectionTrait,
     employee_ids: &[u64],
 ) -> Result<HashMap<u64, String>, AppError> {
-    let _ = (db, employee_ids);
-    Err(AppError::Biz("未实现：fill_employee_names".into()))
+    let ids = crate::utils::user_ref::dedup_ids(employee_ids.to_vec());
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // 一次批量取档案（拿 user_id）→ 一次批量查名 → 回填 employee_id → username
+    let employees = crate::modules::biz::hr::employee::repo::find_by_ids(db, &ids).await?;
+    let user_ids = employees.iter().map(|e| e.user_id).collect();
+    let names = crate::utils::user_ref::find_user_name_map_by_ids(db, user_ids).await?;
+    Ok(employees
+        .into_iter()
+        .filter_map(|e| names.get(&e.user_id).cloned().map(|name| (e.id, name)))
+        .collect())
 }
 
 /// 批量取假期类型名：`hr_time_off_type.id` → `type_name`（单表批量查，排除软删行）。
@@ -315,13 +837,18 @@ pub(crate) async fn fill_employee_names(
 // （已按 `DeletedAt.is_null()` 排除软删；repo 是唯一数据访问层，本域不另写 SQL）；
 // ③ 回填 `id → type_name`；软删行不出现，调用方留空串。
 // 骨架期：任务 4 的 api 层接入后删除本属性
-#[allow(dead_code)]
 pub(crate) async fn fill_time_off_type_names(
     db: &impl ConnectionTrait,
     time_off_type_ids: &[u64],
 ) -> Result<HashMap<u64, String>, AppError> {
-    let _ = (db, time_off_type_ids);
-    Err(AppError::Biz("未实现：fill_time_off_type_names".into()))
+    let ids = crate::utils::user_ref::dedup_ids(time_off_type_ids.to_vec());
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // 单表批量查（repo 已排除软删行；软删假别不出现在映射里，调用方留空串）
+    let types = time_off_repo::find_time_off_types_by_ids(db, &ids).await?;
+    Ok(types.into_iter().map(|t| (t.id, t.type_name)).collect())
 }
 
 // —— 资源 CRUD：只读入口直连 db，自持事务的写入口走「三行事务」——
@@ -334,8 +861,18 @@ pub async fn page_time_off_types(
     db: &impl ConnectionTrait,
     req: &TimeOffTypeListReq,
 ) -> Result<PageData<hr_time_off_type::Model>, AppError> {
-    let _ = (db, req);
-    Err(AppError::Biz("未实现：page_time_off_types".into()))
+    let filter = TimeOffTypeFilter {
+        keyword: req.keyword.clone(),
+        status: req.status,
+    };
+    let page = time_off_repo::find_time_off_type_page(
+        db,
+        &filter,
+        req.page.page_index(),
+        req.page.page_size(),
+    )
+    .await?;
+    Ok(page)
 }
 
 /// 创建假期类型（对外入口）：三行事务，成功后提交。
@@ -350,8 +887,44 @@ pub async fn create_time_off_type(
     actor_id: u64,
     req: CreateTimeOffTypeReq,
 ) -> Result<hr_time_off_type::Model, AppError> {
-    let _ = (db, actor_id, req);
-    Err(AppError::Biz("未实现：create_time_off_type".into()))
+    use sea_orm::TransactionTrait;
+
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = create_time_off_type_in_tx(&txn, actor_id, req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内创建假期类型：编码查重（**含软删占位**）→ 建行。
+async fn create_time_off_type_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    req: CreateTimeOffTypeReq,
+) -> Result<hr_time_off_type::Model, AppError> {
+    // 唯一键是单列 `type_code`，软删行仍占位，所以查重必须看得见软删记录
+    let duplicated =
+        time_off_repo::find_time_off_type_by_code_include_deleted(txn, &req.type_code).await?;
+    if duplicated.is_some() {
+        return Err(AppError::Biz(format!("类型编码已存在：{}", req.type_code)));
+    }
+
+    let model = hr_time_off_type::ActiveModel {
+        type_code: Set(req.type_code),
+        type_name: Set(req.type_name),
+        unit: Set(req.unit),
+        balance_mode: Set(req.balance_mode),
+        min_unit_minutes: Set(req.min_unit_minutes),
+        require_attachment: Set(req.require_attachment),
+        allow_negative: Set(req.allow_negative),
+        pay_ratio: Set(req.pay_ratio),
+        status: Set(req.status),
+        remark: Set(req.remark),
+        ..Default::default()
+    };
+    let created = time_off_repo::create_time_off_type_in_tx(txn, model, actor_id).await?;
+    Ok(created)
 }
 
 /// 更新假期类型（对外入口）：三行事务，成功后提交。
@@ -365,8 +938,50 @@ pub async fn update_time_off_type(
     actor_id: u64,
     req: &UpdateTimeOffTypeReq,
 ) -> Result<hr_time_off_type::Model, AppError> {
-    let _ = (db, actor_id, req);
-    Err(AppError::Biz("未实现：update_time_off_type".into()))
+    use sea_orm::TransactionTrait;
+
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = update_time_off_type_in_tx(&txn, actor_id, req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内更新假期类型：存在性 → 编码查重（排除自身）→ 窄写。
+async fn update_time_off_type_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    req: &UpdateTimeOffTypeReq,
+) -> Result<hr_time_off_type::Model, AppError> {
+    let existing = time_off_repo::find_time_off_type_by_id(txn, req.id).await?;
+    if existing.is_none() {
+        return Err(AppError::Biz(format!("假期类型不存在：{}", req.id)));
+    }
+
+    let duplicated =
+        time_off_repo::find_time_off_type_by_code_include_deleted(txn, &req.type_code).await?;
+    if duplicated.is_some_and(|model| model.id != req.id) {
+        return Err(AppError::Biz(format!("类型编码已存在：{}", req.type_code)));
+    }
+
+    // 窄写：只 Set 业务列，`created_by` 等保持 NotSet 不被覆盖
+    let model = hr_time_off_type::ActiveModel {
+        id: Set(req.id),
+        type_code: Set(req.type_code.clone()),
+        type_name: Set(req.type_name.clone()),
+        unit: Set(req.unit),
+        balance_mode: Set(req.balance_mode),
+        min_unit_minutes: Set(req.min_unit_minutes),
+        require_attachment: Set(req.require_attachment),
+        allow_negative: Set(req.allow_negative),
+        pay_ratio: Set(req.pay_ratio),
+        status: Set(req.status),
+        remark: Set(req.remark.clone()),
+        ..Default::default()
+    };
+    let updated = time_off_repo::update_time_off_type_in_tx(txn, model, actor_id).await?;
+    Ok(updated)
 }
 
 /// 按 id 查假期类型详情（软删视为不存在）。
@@ -376,8 +991,10 @@ pub async fn get_time_off_type(
     db: &impl ConnectionTrait,
     id: u64,
 ) -> Result<hr_time_off_type::Model, AppError> {
-    let _ = (db, id);
-    Err(AppError::Biz("未实现：get_time_off_type".into()))
+    let model = time_off_repo::find_time_off_type_by_id(db, id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("假期类型不存在：{id}")))?;
+    Ok(model)
 }
 
 /// 删除假期类型（对外入口）：软删，三行事务，成功后提交。
@@ -391,8 +1008,39 @@ pub async fn delete_time_off_type(
     actor_id: u64,
     id: u64,
 ) -> Result<(), AppError> {
-    let _ = (db, actor_id, id);
-    Err(AppError::Biz("未实现：delete_time_off_type".into()))
+    use sea_orm::TransactionTrait;
+
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = delete_time_off_type_in_tx(&txn, actor_id, id).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内软删假期类型：先做引用检查（已挂批次不允许删）→ 软删。
+async fn delete_time_off_type_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    id: u64,
+) -> Result<(), AppError> {
+    // 引用检查：假别一旦发过额度就不能删（否则历史批次 / 余额会指向不存在的假别）
+    let filter = TimeOffGrantFilter {
+        time_off_type_id: Some(id),
+        ..Default::default()
+    };
+    if !time_off_repo::find_grant_page(txn, &filter, 0, 1)
+        .await?
+        .items
+        .is_empty()
+    {
+        return Err(AppError::Biz("该假期类型已有额度批次，不能删除".into()));
+    }
+
+    if !time_off_repo::soft_delete_time_off_type_in_tx(txn, id, actor_id).await? {
+        return Err(AppError::Biz(format!("假期类型不存在：{id}")));
+    }
+    Ok(())
 }
 
 /// 额度批次分页：请求参数组装为 repo 过滤条件后透传。
@@ -404,8 +1052,17 @@ pub async fn page_time_off_grants(
     db: &impl ConnectionTrait,
     req: &TimeOffGrantListReq,
 ) -> Result<PageData<hr_time_off_grant::Model>, AppError> {
-    let _ = (db, req);
-    Err(AppError::Biz("未实现：page_time_off_grants".into()))
+    let filter = TimeOffGrantFilter {
+        employee_id: req.employee_id,
+        time_off_type_id: req.time_off_type_id,
+        reason: req.reason.clone(),
+        period: req.period.clone(),
+        status: req.status,
+    };
+    let page =
+        time_off_repo::find_grant_page(db, &filter, req.page.page_index(), req.page.page_size())
+            .await?;
+    Ok(page)
 }
 
 /// 批量发放额度（对外入口）：三行事务，成功后提交。
@@ -416,8 +1073,14 @@ pub async fn batch_create_grants(
     actor_id: u64,
     req: &BatchCreateGrantReq,
 ) -> Result<BatchCreateGrantResp, AppError> {
-    let _ = (db, actor_id, req);
-    Err(AppError::Biz("未实现：batch_create_grants".into()))
+    use sea_orm::TransactionTrait;
+
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = batch_create_grants_in_tx(&txn, actor_id, req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
 }
 
 /// 按 id 查额度批次详情。
@@ -427,8 +1090,10 @@ pub async fn get_time_off_grant(
     db: &impl ConnectionTrait,
     id: u64,
 ) -> Result<hr_time_off_grant::Model, AppError> {
-    let _ = (db, id);
-    Err(AppError::Biz("未实现：get_time_off_grant".into()))
+    let model = time_off_repo::find_grant_by_id(db, id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("额度批次不存在：{id}")))?;
+    Ok(model)
 }
 
 /// 撤销额度批次（对外入口）：三行事务，成功后提交。
@@ -440,8 +1105,69 @@ pub async fn get_time_off_grant(
 // ⑤ 写反向流水：`biz_type = LOG_BIZ_ADJUST`、`delta = −remaining`（可用减少，见文件头账本口径）、
 // `grant_id = id`；⑥ commit。撤销后不变式 A / B 仍成立（`granted` 与批次剩余同减）。
 pub async fn cancel_grant(db: &DatabaseConnection, actor_id: u64, id: u64) -> Result<(), AppError> {
-    let _ = (db, actor_id, id);
-    Err(AppError::Biz("未实现：cancel_grant".into()))
+    use sea_orm::TransactionTrait;
+
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = cancel_grant_in_tx(&txn, actor_id, id).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 事务内撤销批次：账户 `granted` 回冲 + 批次剩余归零 + 反向流水（不变式 A / B 仍成立）。
+async fn cancel_grant_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    id: u64,
+) -> Result<(), AppError> {
+    let grant = time_off_repo::find_grant_by_id(txn, id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("额度批次不存在：{id}")))?;
+    if grant.status != GRANT_STATUS_ACTIVE {
+        return Err(AppError::Biz("批次已用尽或已失效，不能撤销".into()));
+    }
+
+    // 账期取批次 `effective_at` 的自然年：与发放时入账的账户同桶
+    let period = grant.effective_at.year().to_string();
+    let balance =
+        lock_balance_in_tx(txn, grant.employee_id, grant.time_off_type_id, &period).await?;
+
+    let before = available_of(&balance);
+    let remaining = grant.remaining_minutes;
+
+    time_off_repo::update_balance_in_tx(
+        txn,
+        hr_time_off_balance::ActiveModel {
+            id: Set(balance.id),
+            granted_minutes: Set(balance.granted_minutes - remaining),
+            ..Default::default()
+        },
+        actor_id,
+    )
+    .await?;
+    time_off_repo::consume_grant_in_tx(txn, grant.id, remaining, actor_id).await?;
+    time_off_repo::set_grant_status_in_tx(txn, grant.id, GRANT_STATUS_CANCELED, actor_id).await?;
+
+    append_balance_log_in_tx(
+        txn,
+        BalanceLog {
+            balance_id: balance.id,
+            employee_id: grant.employee_id,
+            time_off_type_id: grant.time_off_type_id,
+            grant_id: grant.id,
+            biz_type: LOG_BIZ_ADJUST,
+            before_minutes: before,
+            after_minutes: before - i64::from(remaining),
+            delta_minutes: -remaining,
+            source_kind: LOG_SOURCE_MANUAL,
+            source_id: 0,
+            operator_id: actor_id,
+            remark: "撤销发放",
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// 额度账户分页：请求参数组装为 repo 过滤条件后透传。
@@ -452,8 +1178,15 @@ pub async fn page_time_off_balances(
     db: &impl ConnectionTrait,
     req: &TimeOffBalanceListReq,
 ) -> Result<PageData<hr_time_off_balance::Model>, AppError> {
-    let _ = (db, req);
-    Err(AppError::Biz("未实现：page_time_off_balances".into()))
+    let filter = TimeOffBalanceFilter {
+        employee_id: req.employee_id,
+        time_off_type_id: req.time_off_type_id,
+        period: req.period.clone(),
+    };
+    let page =
+        time_off_repo::find_balance_page(db, &filter, req.page.page_index(), req.page.page_size())
+            .await?;
+    Ok(page)
 }
 
 /// 按 id 查额度账户详情。
@@ -463,8 +1196,10 @@ pub async fn get_time_off_balance(
     db: &impl ConnectionTrait,
     id: u64,
 ) -> Result<hr_time_off_balance::Model, AppError> {
-    let _ = (db, id);
-    Err(AppError::Biz("未实现：get_time_off_balance".into()))
+    let model = time_off_repo::find_balance_by_id(db, id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("额度账户不存在：{id}")))?;
+    Ok(model)
 }
 
 /// 额度流水分页：请求参数组装为 repo 过滤条件后透传（append-only 对账凭据）。
@@ -476,8 +1211,19 @@ pub async fn page_time_off_balance_logs(
     db: &impl ConnectionTrait,
     req: &TimeOffBalanceLogListReq,
 ) -> Result<PageData<hr_time_off_balance_log::Model>, AppError> {
-    let _ = (db, req);
-    Err(AppError::Biz("未实现：page_time_off_balance_logs".into()))
+    let filter = TimeOffBalanceLogFilter {
+        employee_id: req.employee_id,
+        time_off_type_id: req.time_off_type_id,
+        biz_type: req.biz_type,
+    };
+    let page = time_off_repo::find_balance_log_page(
+        db,
+        &filter,
+        req.page.page_index(),
+        req.page.page_size(),
+    )
+    .await?;
+    Ok(page)
 }
 
 #[cfg(test)]

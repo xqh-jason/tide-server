@@ -64,6 +64,25 @@ pub async fn find_by_ids(
     Ok(employees)
 }
 
+/// 按 `user_id` 批量取员工档案（空入参早返；软删过滤：`DeletedAt.is_null()`）。
+///
+/// 供跨域按「账号」反查档案用（如按部门发放假期额度：部门 → 用户 → 档案）。
+/// 不分页：调用方传已去重的 ID 集合。
+pub async fn find_by_user_ids(
+    db: &impl ConnectionTrait,
+    user_ids: &[u64],
+) -> anyhow::Result<Vec<hr_employee::Model>> {
+    if user_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let employees = hr_employee::Entity::find()
+        .filter(hr_employee::Column::UserId.is_in(user_ids.iter().copied()))
+        .filter(hr_employee::Column::DeletedAt.is_null())
+        .all(db)
+        .await?;
+    Ok(employees)
+}
+
 /// 分页 + 动态过滤：keyword 模糊备注 / 紧急联系人，状态与学历精确，
 /// 审计人 / 时间范围过滤，按 id 降序（新档案在前），恒排除软删。
 ///

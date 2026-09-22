@@ -214,11 +214,13 @@ pub struct TimeOffGrantFilter {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchCreateGrantReq {
-    /// 指定员工档案 ID 列表（范围之一）
+    /// 指定员工档案 ID 列表（范围之一）；用 `all` / `deptId` 时可省略
+    #[serde(default)]
     pub employee_ids: Vec<u64>,
     /// 指定部门 ID（范围之一）
     pub dept_id: Option<u64>,
-    /// 是否全员发放（范围之一）
+    /// 是否全员发放（范围之一）；省略即 false
+    #[serde(default)]
     pub all: bool,
     /// 假期类型 ID
     pub time_off_type_id: u64,

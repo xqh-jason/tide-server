@@ -8,24 +8,18 @@
 //! `employee_name` / `time_off_type_name` 另走本域 `fill_employee_names` /
 //! `fill_time_off_type_names`）。业务规则不写在这里。
 //!
-//! **本文件当前是桩**：函数体一律返回 `Err(AppError::Biz("未实现：<函数名>"))`，
-//! 由作者按每个函数的 `// 实现提示` 补齐；端点行为随任务 5 端到端验收。
 //!
-//! 骨架期口径：`use` 只写**签名本身需要**的项（`AppError` 例外——桩函数体就在用它）；
-//! 实现才需要的 import 刻意不写，以免触发 `-D warnings` 的未使用 import，清单见下：
-//!
-//! ```ignore
-//! use crate::infra::state::AppState;
-//! use crate::middleware::auth::AuthUser;
-//! use crate::modules::biz::hr::time_off::service as time_off_service;
-//! use crate::modules::biz::hr::time_off::validate;
-//! use crate::modules::system::dictionary::service as dictionary_service;
-//! use crate::utils::ApiResponse;
-//! use crate::utils::user_ref::fill_user_names;
-//! ```
-
 use salvo::oapi::endpoint;
 use salvo::prelude::*;
+use sea_orm::ConnectionTrait;
+
+use crate::infra::state::AppState;
+use crate::middleware::auth::AuthUser;
+use crate::modules::biz::hr::time_off::service as time_off_service;
+use crate::modules::biz::hr::time_off::validate;
+use crate::modules::system::dictionary::service as dictionary_service;
+use crate::utils::ApiResponse;
+use crate::utils::user_ref::fill_user_names;
 
 use crate::modules::biz::hr::time_off::dto::{
     BatchCreateGrantReq, BatchCreateGrantResp, CreateTimeOffTypeReq, TimeOffBalanceListReq,
@@ -35,6 +29,76 @@ use crate::modules::biz::hr::time_off::dto::{
 use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
 use crate::utils::{ApiResult, IdReq, PageResult};
+
+/// 给批次响应批量回填 `employee_name` / `time_off_type_name`（各一次批量查）。
+async fn fill_grant_ref_names(
+    db: &impl ConnectionTrait,
+    items: &mut [TimeOffGrantResp],
+) -> Result<(), AppError> {
+    let employee_ids: Vec<u64> = items.iter().map(|item| item.employee_id).collect();
+    let type_ids: Vec<u64> = items.iter().map(|item| item.time_off_type_id).collect();
+    let employee_names = time_off_service::fill_employee_names(db, &employee_ids).await?;
+    let type_names = time_off_service::fill_time_off_type_names(db, &type_ids).await?;
+
+    for item in items.iter_mut() {
+        item.employee_name = employee_names
+            .get(&item.employee_id)
+            .cloned()
+            .unwrap_or_default();
+        item.time_off_type_name = type_names
+            .get(&item.time_off_type_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    Ok(())
+}
+
+/// 给账户响应批量回填 `employee_name` / `time_off_type_name`（各一次批量查）。
+async fn fill_balance_ref_names(
+    db: &impl ConnectionTrait,
+    items: &mut [TimeOffBalanceResp],
+) -> Result<(), AppError> {
+    let employee_ids: Vec<u64> = items.iter().map(|item| item.employee_id).collect();
+    let type_ids: Vec<u64> = items.iter().map(|item| item.time_off_type_id).collect();
+    let employee_names = time_off_service::fill_employee_names(db, &employee_ids).await?;
+    let type_names = time_off_service::fill_time_off_type_names(db, &type_ids).await?;
+
+    for item in items.iter_mut() {
+        item.employee_name = employee_names
+            .get(&item.employee_id)
+            .cloned()
+            .unwrap_or_default();
+        item.time_off_type_name = type_names
+            .get(&item.time_off_type_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    Ok(())
+}
+
+/// 给流水响应批量回填 `employee_name` / `time_off_type_name`（`operator_name` 由
+/// `fill_user_names` 走 `UserRefNames` 的 `operator_id` 口径填）。
+async fn fill_log_ref_names(
+    db: &impl ConnectionTrait,
+    items: &mut [TimeOffBalanceLogResp],
+) -> Result<(), AppError> {
+    let employee_ids: Vec<u64> = items.iter().map(|item| item.employee_id).collect();
+    let type_ids: Vec<u64> = items.iter().map(|item| item.time_off_type_id).collect();
+    let employee_names = time_off_service::fill_employee_names(db, &employee_ids).await?;
+    let type_names = time_off_service::fill_time_off_type_names(db, &type_ids).await?;
+
+    for item in items.iter_mut() {
+        item.employee_name = employee_names
+            .get(&item.employee_id)
+            .cloned()
+            .unwrap_or_default();
+        item.time_off_type_name = type_names
+            .get(&item.time_off_type_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    Ok(())
+}
 
 /// 假期类型列表（POST + JSON body）。
 //
@@ -47,8 +111,16 @@ pub async fn list_time_off_types(
     depot: &mut Depot,
     body: JsonBody<TimeOffTypeListReq>,
 ) -> ApiResult<PageResult<TimeOffTypeResp>> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：list_time_off_types".into()))
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    let data = time_off_service::page_time_off_types(&state.db, &req).await?;
+    let items = fill_user_names(&state.db, data.items, TimeOffTypeResp::from).await?;
+    Ok(ApiResponse::ok(PageResult::new(
+        data.total,
+        data.total_pages,
+        items,
+    )))
 }
 
 /// 创建假期类型。
@@ -65,8 +137,19 @@ pub async fn create_time_off_type(
     depot: &mut Depot,
     body: JsonBody<CreateTimeOffTypeReq>,
 ) -> ApiResult<TimeOffTypeResp> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：create_time_off_type".into()))
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    // status 允许值的唯一来源是平台字典，不硬编码
+    let status_allowed = dictionary_service::enabled_int_values(&state.db, "status").await?;
+    validate::validate_create_time_off_type(&req, &status_allowed).map_err(AppError::Biz)?;
+
+    let auth = AuthUser::from_depot(depot)?;
+    let model = time_off_service::create_time_off_type(&state.db, auth.user_id, req).await?;
+    let resp = fill_user_names(&state.db, vec![model], TimeOffTypeResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 更新假期类型。
@@ -80,8 +163,18 @@ pub async fn update_time_off_type(
     depot: &mut Depot,
     body: JsonBody<UpdateTimeOffTypeReq>,
 ) -> ApiResult<TimeOffTypeResp> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：update_time_off_type".into()))
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    let status_allowed = dictionary_service::enabled_int_values(&state.db, "status").await?;
+    validate::validate_update_time_off_type(&req, &status_allowed).map_err(AppError::Biz)?;
+
+    let auth = AuthUser::from_depot(depot)?;
+    let model = time_off_service::update_time_off_type(&state.db, auth.user_id, &req).await?;
+    let resp = fill_user_names(&state.db, vec![model], TimeOffTypeResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 假期类型详情（POST + JSON body：`{ "id": ... }`）。
@@ -94,8 +187,12 @@ pub async fn get_time_off_type(
     depot: &mut Depot,
     body: JsonBody<IdReq>,
 ) -> ApiResult<TimeOffTypeResp> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：get_time_off_type".into()))
+    let state = AppState::from_depot(depot)?;
+    let model = time_off_service::get_time_off_type(&state.db, body.into_inner().id).await?;
+    let resp = fill_user_names(&state.db, vec![model], TimeOffTypeResp::from)
+        .await?
+        .remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 删除假期类型（软删）。
@@ -105,8 +202,10 @@ pub async fn get_time_off_type(
 // ④ `Ok(ApiResponse::ok(()))`。
 #[endpoint]
 pub async fn delete_time_off_type(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<()> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：delete_time_off_type".into()))
+    let state = AppState::from_depot(depot)?;
+    let auth = AuthUser::from_depot(depot)?;
+    time_off_service::delete_time_off_type(&state.db, auth.user_id, body.into_inner().id).await?;
+    Ok(ApiResponse::ok(()))
 }
 
 /// 额度批次列表（POST + JSON body）。
@@ -121,8 +220,17 @@ pub async fn list_time_off_grants(
     depot: &mut Depot,
     body: JsonBody<TimeOffGrantListReq>,
 ) -> ApiResult<PageResult<TimeOffGrantResp>> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：list_time_off_grants".into()))
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    let data = time_off_service::page_time_off_grants(&state.db, &req).await?;
+    let mut items = fill_user_names(&state.db, data.items, TimeOffGrantResp::from).await?;
+    fill_grant_ref_names(&state.db, &mut items).await?;
+    Ok(ApiResponse::ok(PageResult::new(
+        data.total,
+        data.total_pages,
+        items,
+    )))
 }
 
 /// 批量发放额度（部分员工命中幂等键 → 走 `skipped` 回执，不算失败）。
@@ -136,8 +244,14 @@ pub async fn batch_create_time_off_grants(
     depot: &mut Depot,
     body: JsonBody<BatchCreateGrantReq>,
 ) -> ApiResult<BatchCreateGrantResp> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：batch_create_time_off_grants".into()))
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    validate::validate_batch_create_grant(&req).map_err(AppError::Biz)?;
+
+    let auth = AuthUser::from_depot(depot)?;
+    let resp = time_off_service::batch_create_grants(&state.db, auth.user_id, &req).await?;
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 额度批次详情（POST + JSON body：`{ "id": ... }`）。
@@ -150,8 +264,12 @@ pub async fn get_time_off_grant(
     depot: &mut Depot,
     body: JsonBody<IdReq>,
 ) -> ApiResult<TimeOffGrantResp> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：get_time_off_grant".into()))
+    let state = AppState::from_depot(depot)?;
+    let model = time_off_service::get_time_off_grant(&state.db, body.into_inner().id).await?;
+    let mut items = fill_user_names(&state.db, vec![model], TimeOffGrantResp::from).await?;
+    fill_grant_ref_names(&state.db, &mut items).await?;
+    let resp = items.remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 撤销额度批次（账户回冲 + 反向流水，均在 service 事务内）。
@@ -160,8 +278,10 @@ pub async fn get_time_off_grant(
 // ③ `time_off_service::cancel_grant(&state.db, auth.user_id, body.id).await?`；④ `Ok(ApiResponse::ok(()))`。
 #[endpoint]
 pub async fn cancel_time_off_grant(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<()> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：cancel_time_off_grant".into()))
+    let state = AppState::from_depot(depot)?;
+    let auth = AuthUser::from_depot(depot)?;
+    time_off_service::cancel_grant(&state.db, auth.user_id, body.into_inner().id).await?;
+    Ok(ApiResponse::ok(()))
 }
 
 /// 额度账户列表（POST + JSON body）。
@@ -174,8 +294,17 @@ pub async fn list_time_off_balances(
     depot: &mut Depot,
     body: JsonBody<TimeOffBalanceListReq>,
 ) -> ApiResult<PageResult<TimeOffBalanceResp>> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：list_time_off_balances".into()))
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    let data = time_off_service::page_time_off_balances(&state.db, &req).await?;
+    let mut items = fill_user_names(&state.db, data.items, TimeOffBalanceResp::from).await?;
+    fill_balance_ref_names(&state.db, &mut items).await?;
+    Ok(ApiResponse::ok(PageResult::new(
+        data.total,
+        data.total_pages,
+        items,
+    )))
 }
 
 /// 额度账户详情（POST + JSON body：`{ "id": ... }`）。
@@ -187,8 +316,12 @@ pub async fn get_time_off_balance(
     depot: &mut Depot,
     body: JsonBody<IdReq>,
 ) -> ApiResult<TimeOffBalanceResp> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：get_time_off_balance".into()))
+    let state = AppState::from_depot(depot)?;
+    let model = time_off_service::get_time_off_balance(&state.db, body.into_inner().id).await?;
+    let mut items = fill_user_names(&state.db, vec![model], TimeOffBalanceResp::from).await?;
+    fill_balance_ref_names(&state.db, &mut items).await?;
+    let resp = items.remove(0);
+    Ok(ApiResponse::ok(resp))
 }
 
 /// 额度流水查询（POST + JSON body；append-only 对账凭据）。
@@ -203,6 +336,15 @@ pub async fn list_time_off_balance_logs(
     depot: &mut Depot,
     body: JsonBody<TimeOffBalanceLogListReq>,
 ) -> ApiResult<PageResult<TimeOffBalanceLogResp>> {
-    let _ = (depot, body);
-    Err(AppError::Biz("未实现：list_time_off_balance_logs".into()))
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    let data = time_off_service::page_time_off_balance_logs(&state.db, &req).await?;
+    let mut items = fill_user_names(&state.db, data.items, TimeOffBalanceLogResp::from).await?;
+    fill_log_ref_names(&state.db, &mut items).await?;
+    Ok(ApiResponse::ok(PageResult::new(
+        data.total,
+        data.total_pages,
+        items,
+    )))
 }
