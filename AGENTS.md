@@ -27,6 +27,8 @@ CORS 预检 204/403、`file/upload` 走 multipart + `file/download` 与 `site-co
 - **人负责**：具体业务实现（函数体逻辑）。AI 交付到「**可编译的骨架 + 失败的测试**」为止。
 - **本轮（2026-09-22）例外**：P2–P4（审批基座 / 请假单 / 考勤 / 加班）由**作者显式授权 AI 连函数体一起实现**，
   交付即「可运行 + 测试绿」；此为一次性授权，不改变上面「骨架 + 失败测试」的默认分工。
+- **追加授权（2026-09-22，同一轮）**：P2–P4 的 code review 修复轮（提交 `d11b84e` / `459cdf9`）同样按
+  「作者指令 = 全部修改」由 AI 直接改实现；仍按 TDD 推进（先写红灯用例、确认失败原因，再改实现转绿）。
 - **例外（可直接完成）**：配置文件、迁移 DDL、种子数据、机械登记行（`mod` 声明、`DOMAINS` 追加、
   `API_SEEDS` / `MENU_SEEDS` 条目）、文档。
 - **骨架体禁止 `todo!()`**（`Cargo.toml` 对 `todo` 已 `deny`）：写成可编译桩 —— 返回 `Default` / 空集合 /
@@ -125,16 +127,26 @@ GitHub 的分支保护只能按 base 分支与状态检查过滤、没有「按�
 - `biz/hr/employee`（员工档案，表 `hr_employee`，端点 `/api/v1/hr/employee/{list,create,update,get,delete}`），
   字典 `employmentStatus` / `education`、菜单与 `API_SEEDS` 均已登记；建档案可勾选同事务创建登录账号
   （必须调 `user::service::create_user_in_tx`，不得调自持 `db.begin()` 的 `create_user`）。
+  更新入参 `managerEmployeeId` 是**三态**（缺省 / `null` = 不修改、`0` = 清空、`>0` = 改写且必须存在且非本人）；
+  敏感字段（`id_card` / `bank_account`）**空串 = 不修改**，且**含 `*` 的掩码值一律拒收**
+  （列表 / 详情回传的是掩码，回填即把掩码写进库且不可逆）。
 - `biz/hr/approval`（审批基座，表 `hr_approval_flow` / `hr_approval_flow_node` / `hr_approval_instance` /
   `hr_approval_record`，端点 `/api/v1/hr/approval/{flow,flow-node,instance,record}/*` 共 15 个）：
   模板（谁审）→ 实例（这单走到哪）→ 节点记录（每步结论）；节点类型 1 直属上级 / 2 部门负责人 /
-  3 指定用户 / 4 指定角色；**最后一个节点不允许跳过**（解析不到审批人必须报错，否则单据无人把关）；
-  终态由本域按 `biz_type` match 分派到业务域 `on_instance_finished_in_tx`（同事务）。
+  3 指定用户 / 4 指定角色；**最后一个节点不允许跳过**（解析不到审批人必须报错，否则单据无人把关），
+  且「解析得到」还要求**真有人能审**（1/2 类解析出的账号必须启用未软删、4 类角色池至少一名启用成员，
+  否则节点判「已解析」却无人可待办，单据卡在审批中）；
+  终态由本域按 `biz_type` match 分派到业务域 `on_instance_finished_in_tx`（同事务），**三态分派**
+  （通过 / 驳回 / 撤销各落各的终态，不再把撤销记成「已驳回」）；模板软删后同 `biz_type` 重建 = 恢复原行
+  （唯一键被软删行占位，直接 INSERT 必撞键）。
 - `biz/hr/attendance`（考勤，表 `hr_shift` / `hr_shift_schedule` / `hr_attendance_record` / `hr_work_calendar`，
   端点 `/api/v1/hr/attendance/{shift,schedule,record,calendar}/*` 共 16 个）：排班制（多班次），
   「应出勤」由「排班 × 日历」派生（不落冗余列）；三张事实/排班/日历表**不软删、写入即 upsert**；
   `record/import` 收归一化行数组（`source`：1 导入 / 2 手工补录 / 3 设备 / 4 钉钉 / 5 飞书），
-  这是第三方平台的**接入面**（后端不做连接器）。
+  这是第三方平台的**接入面**（后端不做连接器）；`externalId` 传空串按「无外部 ID」处理（落 NULL，
+  否则会占住 `(source, external_id)` 唯一键让整批导入回滚）；班次校验要求
+  `work_minutes + rest_minutes ≤ 班次窗口`（窗口是 `derive_work_minutes` 的逐日封顶值）；
+  批量排班除人数 ≤ 1000、区间 ≤ 366 天外，还有「人数 × 天数 ≤ 10000 行」的总量上限（防单事务超时）。
 - `biz/hr/overtime`（加班，表 `hr_overtime_request`，端点 `/api/v1/hr/overtime/*` 共 8 个）：
   加班时长 = 区间总长（不裁剪），校验「工作日类型必须落在应工作窗口之外 / 休息日类型必须非应出勤日」；
   同日区间重叠的判定把**在途（审批中）**单据一并算入（只比已通过会让两张相交的在途单各自通过后重复补偿）；
@@ -157,7 +169,7 @@ GitHub 的分支保护只能按 base 分支与状态检查过滤、没有「按�
 
 ```
 src/lib.rs, src/main.rs        # 库入口（6 pub mod）/ 进程入口（tracing + Config::load + run）
-src/modules/mod.rs             # MountGuard / DomainMount / DOMAINS(21) / all_domains
+src/modules/mod.rs             # MountGuard / DomainMount / DOMAINS(24) / all_domains
 src/modules/system/<域>/       # 18 个平台域切片：api/service/repo/dto(+validate)
 src/modules/biz/hr/employee/   # 业务域切片（员工档案，含直属上级 manager_employee_id）
 src/modules/biz/hr/time_off/   # 业务域切片（假期类型 + 额度账本（批次/账户/流水）+ 批量发放 + 请假单；路径 hr/time-off）
@@ -259,6 +271,9 @@ graphify query / graphify path / graphify explain
   `created_by` + `updated_by`，update 只刷新 `updated_by`。
 - 人字段拼装唯一管道：`utils::user_ref::fill_user_names(db, items, Resp::from)`，单次批量查名；
   实体/DB 用「动词过去式 + `_by`」，响应体用 `*_name`；查名**不过滤软删用户**（历史引用保留姓名）。
+- 指向「员工」而非「账号」的显示名走**另一条唯一管道**：`employee::service::find_employee_name_map`
+  （`hr_employee.id` → `sys_user.username`，一次批量取档案 + 一次批量查名）；请假 / 考勤 / 加班三域
+  都调它，不要再各写一份同构副本。
 
 ### 软删除与加锁读
 - 主表（15 张含 `deleted_at`）查询一律 `.filter(Column::DeletedAt.is_null())`；关系表
@@ -270,6 +285,9 @@ graphify query / graphify path / graphify explain
 - 魔法字符串集中在 `src/modules/system/permission/mod.rs`：`SUPER_ROLE_KEY = "super"`、`ADMIN_USERNAME = "admin"`
   （唯一定义点；seed 侧镜像为 `SEED_SUPER_ROLE_KEY` 以避免依赖环）。
 - `status` 允许值唯一来源：`dictionary::service::enabled_int_values(&db, "status") -> Vec<i8>`（读 `sys_dictionary`）。
+- 业务跨域共享常量同样只有一处定义：离职状态 `EMPLOYMENT_STATUS_RESIGNED` 在
+  `modules/biz/hr/employee/mod.rs`（审批人解析、请假 / 加班拦截、额度发放范围都用它），
+  各域不要再各写一份（字典值一变就静默漏判）。
 - 授权**只有一条通道**：`ApiPermission` → `permission::service::has_api_permission`。按钮权限码（`sys_menu.permission`）
   只控前端显隐，后端不再判定（2026-09-17 起），不要重建服务层按钮码校验。
 

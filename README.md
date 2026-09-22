@@ -174,11 +174,15 @@ docker/        # 容器入口脚本
 
 | 域 | 表 | 端点 | 要点 |
 |---|---|---|---|
-| `hr/employee` | `hr_employee` | `/api/v1/hr/employee/*`（5） | 建档案可同事务建登录账号；`manager_employee_id`（直属上级）是审批「直属上级」节点的数据源 |
-| `hr/time-off` | `hr_time_off_type` / `_grant` / `_balance` / `_balance_log` / `_request` | `/api/v1/hr/time-off/{type,grant,balance,request}/*`（20） | 额度以**授予批次**为事实来源，FEFO 扣减、预占即扣批次；请假单「建单即提交」（时长由后端按**排班 × 工作日历**派生，请求体不接受该字段）→ 预占额度 + 起审批同一事务；流水 append-only，过期批次由每日任务作废 |
-| `hr/approval` | `hr_approval_flow` / `_flow_node` / `_instance` / `_record` | `/api/v1/hr/approval/{flow,flow-node,instance,record}/*`（15） | 多节点顺序审批：模板（谁审）→ 实例（走到哪）→ 节点记录（每步结论）；节点类型：直属上级 / 部门负责人 / 指定用户 / 指定角色（角色池按 `sys_user_role` 展开待办）；**最后一个节点不允许跳过** |
-| `hr/attendance` | `hr_shift` / `hr_shift_schedule` / `hr_attendance_record` / `hr_work_calendar` | `/api/v1/hr/attendance/{shift,schedule,record,calendar}/*`（16） | 公司排班制（多班次、支持跨天班）；「应出勤」由**排班 × 日历**派生、不落冗余列；打卡数据走**归一化行导入**（`source`：1 导入 / 2 手工补录 / 3 设备 / 4 钉钉 / 5 飞书），对接第三方只需把自己的响应映射成该 DTO |
-| `hr/overtime` | `hr_overtime_request` | `/api/v1/hr/overtime/*`（8） | 加班时长 = 区间总长（不裁剪到班次窗口，改为校验「工作日类型必须在应工作窗口之外」）；审批通过且 `comp_mode = 1 转调休` 时**同事务**生成调休额度批次（`sourceKind = 3 加班单`） |
+| `hr/employee` | `hr_employee` | `/api/v1/hr/employee/*`（5） | 建档案可同事务建登录账号；`manager_employee_id`（直属上级）是审批「直属上级」节点的数据源，更新入参 `managerEmployeeId` 三态（缺省不修改 / `0` 清空 / `>0` 改写）；敏感字段空串 = 不修改、含 `*` 的掩码值一律拒收 |
+| `hr/time-off` | `hr_time_off_type` / `_grant` / `_balance` / `_balance_log` / `_request` | `/api/v1/hr/time-off/{type,grant,balance,request}/*`（20） | 额度以**授予批次**为事实来源，FEFO 扣减、预占即扣批次；请假单「建单即提交」（时长由后端按**排班 × 工作日历**派生，请求体不接受该字段）→ 起审批实例 + 预占额度同一事务；**预占 / 释放 / 实扣流水以审批实例 ID 为来源（一次提交周期）**，`update` / `submit` 仅限「已驳回 / 已撤销」；流水 append-only，过期批次由每日任务作废 |
+| `hr/approval` | `hr_approval_flow` / `_flow_node` / `_instance` / `_record` | `/api/v1/hr/approval/{flow,flow-node,instance,record}/*`（15） | 多节点顺序审批：模板（谁审）→ 实例（走到哪）→ 节点记录（每步结论）；节点类型：直属上级 / 部门负责人 / 指定用户 / 指定角色（角色池按 `sys_user_role` 展开待办，只认**启用**角色）；**最后一个节点不允许跳过**，且解析出的审批人必须账号启用（角色池要有启用成员）；终态三态分派（通过 / 驳回 / 撤销） |
+| `hr/attendance` | `hr_shift` / `hr_shift_schedule` / `hr_attendance_record` / `hr_work_calendar` | `/api/v1/hr/attendance/{shift,schedule,record,calendar}/*`（16） | 公司排班制（多班次、支持跨天班）；「应出勤」由**排班 × 日历**派生、不落冗余列；打卡数据走**归一化行导入**（`source`：1 导入 / 2 手工补录 / 3 设备 / 4 钉钉 / 5 飞书），对接第三方只需把自己的响应映射成该 DTO（`externalId` 传空串按「无外部 ID」处理）；班次工时须与窗口自洽、批量排班有总行数上限 |
+| `hr/overtime` | `hr_overtime_request` | `/api/v1/hr/overtime/*`（8） | 加班时长 = 区间总长（不裁剪到班次窗口，改为校验「工作日类型必须在应工作窗口之外」）；同日区间重叠把**在途（审批中）**单据一并算入；审批通过且 `comp_mode = 1 转调休` 时**同事务**生成调休额度批次（`sourceKind = 3 加班单`） |
+
+**写入口一律「本人」**：请假单 / 加班单的 `create` / `update` / `submit` / `cancel` / `delete` 都要求单据归属 =
+当前登录用户的员工档案（`create` 的 `employeeId` 必须等于本人档案 ID，加班单归属不可修改）——
+HR 不做代报，批量事实录入走 `hr/attendance/record/import`；若要开放代录请加独立端点 + 独立权限码。
 
 审批是**跨域复用**的：请假与加班各自只写自己的单据，提交时调 `hr/approval` 起实例，终态由审批域按
 `biz_type` 分派回业务域（同一事务内完成实扣 / 释放 / 调休入账）。
@@ -189,6 +193,10 @@ docker/        # 容器入口脚本
 Σ log.delta_minutes      == granted + adjust − used − locked − expired
 Σ 未失效批次 remaining + locked == granted + adjust − used − expired
 ```
+
+账本口径：预占即扣批次、流水 append-only 且按 `(source_kind, source_id)` 分组结算；`source_kind = 2 请假单`
+时 `source_id` 记**审批实例 ID**（= 一次提交周期）——单据允许「驳回 → 改 → 重新提交」，
+用单据 ID 会让两轮预占串在一本账上（第二轮释放被幂等守卫跳过、实扣按两轮求和判「预占量不足」）。
 
 **前端**：菜单与按钮权限码已随种子登记（`/hr` 下 4 组目录 / 页面 / 按钮码），页面本身在
 [tide-admin](https://github.com/xqh-jason/tide-admin) 的 `views/biz/hr/**`，尚未补齐。
