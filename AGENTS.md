@@ -317,7 +317,7 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
 - **框架**：stock libtest + tokio，无 `sqlx::test` / `sea_orm` 测试宏 / `serial_test`，无 dev-dependencies。
 - **位置**：`#[cfg(test)] mod tests` **内联在业务文件里**（`repo.rs` / `service.rs` / `validate.rs` / `api.rs` /
   `middleware/*.rs` / `task/*.rs` / `utils/*.rs`）；**没有 `tests/` 目录、没有 fixtures 目录、全仓无 mock**。
-  `dto.rs` 从不写测试。当前规模（复核命令见下）：`src/` 75 个测试文件、约 574 条测试（400 条 `#[tokio::test]` + 174 条 `#[test]`）；
+  `dto.rs` 从不写测试。当前规模（复核命令见下）：`src/` 75 个测试文件、575 条测试（400 条 `#[tokio::test]` + 175 条 `#[test]`）；
   `codegen/` 另有纯 `#[test]`，根 `cargo test` 不会跑它（需 `cargo test --manifest-path codegen/Cargo.toml`）。
 - **属性选择**：纯逻辑用 `#[test]`；碰 DB / handler 用 `#[tokio::test]`（默认 `current_thread`）；
   真并发必须 `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`（忘了写就静默无法交错）。
