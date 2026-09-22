@@ -3517,13 +3517,10 @@ mod request_tests {
             applicant_user,
             &update_req_of(request_id, type_id, day),
         )
-        .await
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("审批中") || err.to_string().contains("已通过"),
-            "单据已被并发推进到审批中，update 必须拒绝，实际：{err}"
-        );
+        .await;
 
+        // **先清理再断言**：夹具行是提交过的（跨连接可见性必须提交），
+        // 断言失败时若还没清理就会把已提交的行留在库里（同 `probe_*` 口径）
         drop(stale);
         crate::entity::hr_time_off_request::Entity::delete_by_id(request_id)
             .exec(&db)
@@ -3537,6 +3534,12 @@ mod request_tests {
             .exec(&db)
             .await
             .unwrap();
+
+        let err = err.unwrap_err();
+        assert!(
+            err.to_string().contains("审批中") || err.to_string().contains("已通过"),
+            "单据已被并发推进到审批中，update 必须拒绝，实际：{err}"
+        );
     }
 
     /// 同一员工区间重叠的请假单必须被拒（跨假别的「读 → 判断 → 写」，靠员工行锁串行化）。
