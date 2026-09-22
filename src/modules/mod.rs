@@ -202,11 +202,29 @@ pub const DOMAINS: &[DomainMount] = &[
         guard: MountGuard::Protected,
         routers: &[biz::hr::employee::routes],
     },
-    // 假期额度与发放（业务域）：POST /api/v1/hr/time-off/{type,grant,balance}/...
+    // 假期额度与发放（业务域）：POST /api/v1/hr/time-off/{type,grant,balance,request}/...
     DomainMount {
         path: "hr/time-off",
         guard: MountGuard::Protected,
         routers: &[biz::hr::time_off::routes],
+    },
+    // 审批基座（业务域）：POST /api/v1/hr/approval/{flow,flow-node,instance,record}/...
+    DomainMount {
+        path: "hr/approval",
+        guard: MountGuard::Protected,
+        routers: &[biz::hr::approval::routes],
+    },
+    // 考勤（业务域）：POST /api/v1/hr/attendance/{shift,schedule,attendance,calendar}/...
+    DomainMount {
+        path: "hr/attendance",
+        guard: MountGuard::Protected,
+        routers: &[biz::hr::attendance::routes],
+    },
+    // 加班（业务域）：POST /api/v1/hr/overtime/{list,create,...}
+    DomainMount {
+        path: "hr/overtime",
+        guard: MountGuard::Protected,
+        routers: &[biz::hr::overtime::routes],
     },
 ];
 

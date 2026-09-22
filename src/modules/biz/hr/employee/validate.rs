@@ -12,7 +12,8 @@
 //! - `education`：字典 `education`，`i8` 直接 `contains` 判断，文案同款
 //!   「学历取值不合法，仅允许：…」。
 //!
-//! 需要查库的规则（`user_id` 查重、账号存在性、档案存在性）留在 service 层。
+//! 需要查库的规则（`user_id` 查重、账号存在性、档案存在性、直属上级合法性）留在 service 层；
+//! `manager_employee_id` 是 `u64`（`0` = 未设置），本身无值域可校验，故本层不为它造规则。
 
 use crate::modules::biz::hr::employee::dto::{
     CreateAccountReq, CreateEmployeeReq, UpdateEmployeeReq,
@@ -229,6 +230,7 @@ mod tests {
         CreateEmployeeReq {
             user_id: Some(1),
             create_account: None,
+            manager_employee_id: 0,
             hire_date: Some("2026-01-01".to_string()),
             regular_date: None,
             leave_date: None,
@@ -259,6 +261,7 @@ mod tests {
     fn update_req() -> UpdateEmployeeReq {
         UpdateEmployeeReq {
             id: 1,
+            manager_employee_id: 0,
             hire_date: None,
             regular_date: None,
             leave_date: None,

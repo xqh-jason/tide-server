@@ -11,7 +11,8 @@
 //! 需要查库的规则（`type_code` 查重、假期类型存在性）留在 service 层。
 
 use crate::modules::biz::hr::time_off::dto::{
-    BatchCreateGrantReq, CreateTimeOffTypeReq, UpdateTimeOffTypeReq,
+    BatchCreateGrantReq, CreateTimeOffRequestReq, CreateTimeOffTypeReq, UpdateTimeOffRequestReq,
+    UpdateTimeOffTypeReq,
 };
 use crate::utils::check;
 
@@ -261,6 +262,88 @@ pub fn validate_batch_create_grant(req: &BatchCreateGrantReq) -> Result<(), Stri
         && expire_at < effective_at
     {
         errors.push("失效日期不能早于生效日期".to_string());
+    }
+
+    join_errors(errors)
+}
+
+// —— 请假单（P2）——
+
+/// 请假事由长度上限（对齐 `VARCHAR(255)`）。
+const REASON_MAX: usize = 255;
+
+/// 请假起止时间检查（两个 DTO 共用）：格式 + 先后顺序。
+fn check_request_times(start_at: &str, end_at: &str, errors: &mut Vec<String>) {
+    let start = parse_datetime_field(start_at, "请假开始时间", errors);
+    let end = parse_datetime_field(end_at, "请假结束时间", errors);
+    if let (Some(start), Some(end)) = (start, end)
+        && start >= end
+    {
+        errors.push("请假结束时间必须晚于开始时间".to_string());
+    }
+}
+
+/// 解析 `yyyy-MM-dd HH:mm:ss`（或 `yyyy-MM-dd`）；空串 / 格式错各记一条中文提示。
+fn parse_datetime_field(
+    raw: &str,
+    label: &str,
+    errors: &mut Vec<String>,
+) -> Option<chrono::NaiveDateTime> {
+    if raw.trim().is_empty() {
+        errors.push(format!("{label}不能为空"));
+        return None;
+    }
+    match crate::utils::datetime::parse_datetime(label, &Some(raw.trim().to_string()), false) {
+        Ok(value) => value,
+        Err(_) => {
+            errors.push(format!("{label}格式应为 yyyy-MM-dd HH:mm:ss"));
+            None
+        }
+    }
+}
+
+/// 创建请假单校验（时长由后端派生，此处只校验**入参**）。
+///
+/// 规则：
+/// - `employee_id == 0` → `员工档案 ID 必须大于 0`；
+/// - `time_off_type_id == 0` → `假期类型 ID 必须大于 0`；
+/// - `start_at` / `end_at` 空 → `请假开始时间不能为空` / `请假结束时间不能为空`；
+///   格式错 → `请假开始时间格式应为 yyyy-MM-dd HH:mm:ss`（结束时间同理）；
+///   区间非正 → `请假结束时间必须晚于开始时间`；
+/// - `reason` trim 后非空 → `请假事由不能为空`；长度 > 255 → `请假事由长度不能超过 255 个字符`；
+/// - `remark` 长度 > 255 → `备注长度不能超过 255 个字符`。
+pub fn validate_create_time_off_request(req: &CreateTimeOffRequestReq) -> Result<(), String> {
+    let mut errors = Vec::new();
+
+    if req.employee_id == 0 {
+        errors.push("员工档案 ID 必须大于 0".to_string());
+    }
+    if req.time_off_type_id == 0 {
+        errors.push("假期类型 ID 必须大于 0".to_string());
+    }
+    check_request_times(&req.start_at, &req.end_at, &mut errors);
+    check_required(&req.reason, "请假事由", REASON_MAX, &mut errors);
+    if req.remark.chars().count() > REMARK_MAX {
+        errors.push(format!("备注长度不能超过 {REMARK_MAX} 个字符"));
+    }
+
+    join_errors(errors)
+}
+
+/// 修改请假单校验：字段规则同创建 + `id == 0 → 请假单 ID 必须大于 0`。
+pub fn validate_update_time_off_request(req: &UpdateTimeOffRequestReq) -> Result<(), String> {
+    let mut errors = Vec::new();
+
+    if req.id == 0 {
+        errors.push("请假单 ID 必须大于 0".to_string());
+    }
+    if req.time_off_type_id == 0 {
+        errors.push("假期类型 ID 必须大于 0".to_string());
+    }
+    check_request_times(&req.start_at, &req.end_at, &mut errors);
+    check_required(&req.reason, "请假事由", REASON_MAX, &mut errors);
+    if req.remark.chars().count() > REMARK_MAX {
+        errors.push(format!("备注长度不能超过 {REMARK_MAX} 个字符"));
     }
 
     join_errors(errors)

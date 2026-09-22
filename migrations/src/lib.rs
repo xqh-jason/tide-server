@@ -8,6 +8,11 @@ mod m20260917_000001_fix_sys_menu_permission_comment;
 mod m20260918_000001_add_list_query_indexes;
 mod m20260919_000001_create_hr_employee;
 mod m20260921_000001_create_hr_time_off;
+mod m20260922_000001_hr_p2_alter;
+mod m20260922_000002_create_hr_approval;
+mod m20260922_000003_create_hr_time_off_request;
+mod m20260922_000004_create_hr_attendance;
+mod m20260922_000005_create_hr_overtime;
 
 pub struct Migrator;
 
@@ -49,6 +54,11 @@ impl MigratorTrait for Migrator {
             // 业务表迁移（HR）：追加在平台迁移之后，顺序不可改
             Box::new(m20260919_000001_create_hr_employee::Migration),
             Box::new(m20260921_000001_create_hr_time_off::Migration),
+            Box::new(m20260922_000001_hr_p2_alter::Migration),
+            Box::new(m20260922_000002_create_hr_approval::Migration),
+            Box::new(m20260922_000003_create_hr_time_off_request::Migration),
+            Box::new(m20260922_000004_create_hr_attendance::Migration),
+            Box::new(m20260922_000005_create_hr_overtime::Migration),
         ]
     }
 }

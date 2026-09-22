@@ -5,9 +5,11 @@
 //!   `pub(crate) *_in_tx(txn, …)` → 成功即 `commit`；`*_in_tx` 内**不得** begin / commit
 //!   （事务边界由入口与测试外层事务负责）；
 //! - 只读入口收 `&impl ConnectionTrait`，不起事务；
-//! - 额度原语是 P2 请假 / P4 加班的**共用写入口**：账本两条不变式由本层维护——
+//! - 额度原语是请假 / 加班的**共用写入口**：账本两条不变式由本层维护——
 //!   A：`Σ log.delta_minutes == granted + adjust − used − locked − expired`；
-//!   B：`Σ 未失效批次的 remaining_minutes == granted − used`；
+//!   B：`Σ 未失效批次 remaining + locked == granted + adjust − used − expired`；
+//!   （`locked` 必须进 B 的左边：预占即扣批次后，在途量已从批次 `remaining` 移走，
+//!   见下文「预占即扣批次」；P0–P1 的旧表述 `Σ remaining == granted − used` 在本口径下必然破）
 //! - 扣减恒定 FEFO（先到期先扣）：顺序由 `repo::find_active_grants_for_update` 保证，
 //!   批次级并发护栏在 `repo::consume_grant_in_tx` 的 `remaining_minutes >= minutes` 条件里；
 //! - 账户账期（`period`）口径见下文「账户账期」一节——一个账户 = 一个自然年的额度桶。
@@ -28,6 +30,19 @@
 //!
 //! 因此「流水净额 == 账户净额」的不变式 A 对任意操作序列都成立；实扣写 0 而非 `−m`，
 //! 是为了不与预占的 `−m` 重复计数（预占已经扣过可用）。
+//!
+//! # 预占即扣批次（P2 口径修订）
+//!
+//! `lock_time_off_in_tx` 在加账户 `locked` 的同时**按 FEFO 直接扣批次 `remaining`**，并每批写一条
+//! 带 `grant_id` 的预占流水；`consume_locked_in_tx` 只做账户 `locked → used` 迁移（批次不再扣，
+//! 避免重复计数）；`release_locked_in_tx` 按预占流水把量还回原批次，原批次已失效 / 已撤销时
+//! 还到当前账期的「归还批次」（同一单据复用同一个批次，幂等键含 `source_kind = 2 请假单 + source_id`）。
+//!
+//! 为什么必须这样：过期 job 只看批次 `remaining`。预占若不动批次，跨期过期会把在途量一并作废
+//! （job 看不到它），驳回释放再把它加回来 —— 可用额度会凭空多出甚至变成负数。
+//!
+//! 单据生命周期内的批次归属以**预占流水**为准（`(source_kind, source_id)` 回读），
+//! 实扣 / 释放都不重新按 FEFO 现算，避免归属漂移。
 //!
 //! # 账户账期（`hr_time_off_balance.period`）
 //!
@@ -60,22 +75,27 @@
 use std::collections::HashMap;
 
 use sea_orm::ActiveValue::Set;
-use sea_orm::DatabaseTransaction;
 use sea_orm::entity::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 
 use crate::entity::{
-    hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
+    hr_employee, hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant,
+    hr_time_off_request, hr_time_off_type,
 };
 use crate::modules::biz::hr::time_off::dto::{
-    BatchCreateGrantReq, BatchCreateGrantResp, CreateTimeOffTypeReq, TimeOffBalanceFilter,
-    TimeOffBalanceListReq, TimeOffBalanceLogFilter, TimeOffBalanceLogListReq, TimeOffGrantFilter,
-    TimeOffGrantListReq, TimeOffTypeFilter, TimeOffTypeListReq, UpdateTimeOffTypeReq,
+    BatchCreateGrantReq, BatchCreateGrantResp, CreateTimeOffRequestReq, CreateTimeOffTypeReq,
+    MineTimeOffRequestReq, TimeOffBalanceFilter, TimeOffBalanceListReq, TimeOffBalanceLogFilter,
+    TimeOffBalanceLogListReq, TimeOffGrantFilter, TimeOffGrantListReq, TimeOffRequestFilter,
+    TimeOffRequestListReq, TimeOffTypeFilter, TimeOffTypeListReq, UpdateTimeOffRequestReq,
+    UpdateTimeOffTypeReq,
 };
 use crate::modules::biz::hr::time_off::{
-    BALANCE_MODE_RECORD_ONLY, GRANT_SOURCE_ISSUE, GRANT_STATUS_ACTIVE, GRANT_STATUS_CANCELED,
-    GRANT_STATUS_EXHAUSTED, GRANT_STATUS_EXPIRED, LOG_BIZ_ADJUST, LOG_BIZ_EXPIRE, LOG_BIZ_GRANT,
-    LOG_BIZ_TIME_OFF_CONSUME, LOG_BIZ_TIME_OFF_LOCK, LOG_BIZ_TIME_OFF_RELEASE, LOG_SOURCE_JOB,
-    LOG_SOURCE_MANUAL, LOG_SOURCE_NONE, repo as time_off_repo,
+    BALANCE_MODE_RECORD_ONLY, GRANT_REASON_RELEASE_RESTORE, GRANT_SOURCE_ISSUE,
+    GRANT_SOURCE_MANUAL, GRANT_STATUS_ACTIVE, GRANT_STATUS_CANCELED, GRANT_STATUS_EXHAUSTED,
+    GRANT_STATUS_EXPIRED, LOG_BIZ_ADJUST, LOG_BIZ_EXPIRE, LOG_BIZ_GRANT, LOG_BIZ_TIME_OFF_CONSUME,
+    LOG_BIZ_TIME_OFF_LOCK, LOG_BIZ_TIME_OFF_RELEASE, REQUEST_STATUS_APPROVED,
+    REQUEST_STATUS_CANCELED, REQUEST_STATUS_PENDING, REQUEST_STATUS_REJECTED, SOURCE_KIND_JOB,
+    SOURCE_KIND_MANUAL, SOURCE_KIND_TIME_OFF, TIME_OFF_TYPE_ENABLED, repo as time_off_repo,
 };
 use crate::utils::PageData;
 use crate::utils::error::AppError;
@@ -86,8 +106,9 @@ use chrono::Datelike;
 /// 发放额度：幂等键（员工 × 假别 × 依据 × 周期）命中即复用，否则建批次 + 记账户 + 写流水。
 ///
 /// 返回批次 ID。调用方（[`batch_create_grants_in_tx`] / P2 请假 / P4 加班）负责事务边界。
-// 实现提示：① 幂等探测 `repo::find_grant_by_idempotent_key(txn, employee_id, time_off_type_id, reason, period)`，
-// 命中直接返回其 `id`（不重复累加任何账户字段）；② 账户加锁读
+// 幂等键：`source_id != 0`（单据来源：加班单、请假单归还）用「员工 × 假别 × source_kind × source_id」键，
+// 否则用「员工 × 假别 × 依据 × 周期」键——后者区分不了同一年第二次加班入账，会把第二次入账吞掉。
+// 命中即返回既有批次 id（不重复累加任何账户字段）；② 账户加锁读
 // `repo::find_balance_by_account_for_update`，账期取 `effective_at` 的自然年
 // （`format!("{}", effective_at.year())`，需 `use chrono::Datelike`），为 `None` 则
 // `repo::create_balance_in_tx` 建零账户（审计列在 ActiveModel 里给定 actor_id）；
@@ -111,16 +132,29 @@ pub(crate) async fn grant_time_off_in_tx(
     period: &str,
     effective_at: Date,
     expire_at: Option<Date>,
+    source_kind: i8,
+    source_id: u64,
 ) -> Result<u64, AppError> {
-    // ① 幂等：同「员工 × 假别 × 依据 × 周期」已发过就复用，不重复累加任何账户字段
-    let existing = time_off_repo::find_grant_by_idempotent_key(
-        txn,
-        employee_id,
-        time_off_type_id,
-        reason,
-        period,
-    )
-    .await?;
+    // ① 幂等：`source_id != 0` 用来源键（单据来源），否则用 reason + period
+    let existing = if source_id != 0 {
+        time_off_repo::find_grant_by_source_key(
+            txn,
+            employee_id,
+            time_off_type_id,
+            source_kind,
+            source_id,
+        )
+        .await?
+    } else {
+        time_off_repo::find_grant_by_idempotent_key(
+            txn,
+            employee_id,
+            time_off_type_id,
+            reason,
+            period,
+        )
+        .await?
+    };
     if let Some(existing) = existing {
         return Ok(existing.id);
     }
@@ -145,6 +179,8 @@ pub(crate) async fn grant_time_off_in_tx(
             time_off_type_id: Set(time_off_type_id),
             source: Set(source),
             reason: Set(reason.to_string()),
+            source_kind: Set(source_kind),
+            source_id: Set(source_id),
             period: Set(period.to_string()),
             minutes: Set(minutes),
             remaining_minutes: Set(minutes),
@@ -182,8 +218,8 @@ pub(crate) async fn grant_time_off_in_tx(
             before_minutes: before,
             after_minutes: before + i64::from(minutes),
             delta_minutes: minutes,
-            source_kind: LOG_SOURCE_MANUAL,
-            source_id: 0,
+            source_kind,
+            source_id,
             operator_id: actor_id,
             remark: "",
         },
@@ -382,28 +418,30 @@ fn available_of(balance: &hr_time_off_balance::Model) -> i64 {
         - i64::from(balance.expired_minutes)
 }
 
-/// 预占额度（审批中）：账户 `locked_minutes += minutes`，可用不足且假别 `allow_negative = 0` 时拒绝。
+/// 预占额度（审批中）：账户 `locked_minutes += minutes`，并**按 FEFO 直接扣批次剩余**。
 ///
-/// 预占只动 `locked`，**不**动 `used`——实扣在审批通过时由 [`consume_locked_in_tx`] 完成。
-// 实现提示：⓪ 先读假别 `repo::find_time_off_type_by_id(txn, time_off_type_id)` 取 `balance_mode` 与
-// `allow_negative`：`BALANCE_MODE_RECORD_ONLY` → 直接 `Ok(())`（记录型假别无额度概念，
-// 防御性 no-op，见文件头「记录型假别」）；① 账户加锁读
-// `repo::find_balance_by_account_for_update(txn, employee_id, time_off_type_id, period)`，账期取
-// `on_date` 的自然年；`None` → `AppError::Biz("额度账户不存在，请先发放额度")`；
-// ② 账户加锁读后即可用（`allow_negative` 已在 ⓪ 取到）；
-// ③ `available = granted + adjust − used − locked − expired`；`available < minutes` 且
-// `allow_negative == 0` → `AppError::Biz(format!("额度不足：可用 {available} 分钟，本次需要 {minutes} 分钟"))`
-// （`allow_negative == 1` 放行，允许负余额）；④ 账户 `locked_minutes += minutes` →
-// `repo::update_balance_in_tx`；⑤ 写流水：`biz_type = LOG_BIZ_TIME_OFF_LOCK`、`delta = −minutes`
-// （预占把可用锁住，见文件头账本口径）、`grant_id = 0`（账户级动作）、`source_kind = 0` /
-// `source_id = 0`（本签名不带来源单据，P2 接入请假单后由调用方补）。
-// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
-#[cfg_attr(not(test), allow(dead_code))]
+/// 为什么预占要扣批次（P0–P1 遗留口径 #1）：过期 job 按 `hr_time_off_grant.remaining_minutes`
+/// 作废，若预占只加账户 `locked`，在途预占跨过批次失效日时会被 job 一并作废（job 看不到它），
+/// 随后驳回释放又把可用额度加回来 —— 账本会出现凭空多出的额度、甚至负余额。预占即扣批次后，
+/// 在途量已移出 `remaining`，job 天然看不到它，本问题从根上消失。
+///
+/// 批次归属靠流水留痕：每扣一批写一条 `biz_type = 3` 的流水（`grant_id` = 该批、
+/// `delta = −该批扣减量`），[`consume_locked_in_tx`] / [`release_locked_in_tx`] 按
+/// `(source_kind, source_id)` 回读这些流水结算，**不再重新按 FEFO 现算**（否则批次归属会漂移）。
+/// 预占**不翻转批次 `status`**：剩余归零可能只是被预占，驳回还要还回去。
+///
+/// `allow_negative = 1` 时批次覆盖不足的缺口写一条 `grant_id = 0` 的账户级流水
+/// （缺口不属于任何批次），账户照常 `locked += minutes`，可用余额允许为负。
+// 成对原语的入参集合固定；拆参数结构体会让调用方多一层构造，收益不足
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn lock_time_off_in_tx(
     txn: &DatabaseTransaction,
+    actor_id: u64,
     employee_id: u64,
     time_off_type_id: u64,
     minutes: i32,
+    source_kind: i8,
+    source_id: u64,
     on_date: Date,
 ) -> Result<(), AppError> {
     let type_model = time_off_repo::find_time_off_type_by_id(txn, time_off_type_id)
@@ -416,7 +454,6 @@ pub(crate) async fn lock_time_off_in_tx(
     }
 
     let period = on_date.year().to_string();
-
     let balance = lock_balance_in_tx(txn, employee_id, time_off_type_id, &period).await?;
 
     let before = available_of(&balance);
@@ -426,6 +463,74 @@ pub(crate) async fn lock_time_off_in_tx(
         )));
     }
 
+    // FEFO 扣批次：每批一条预占流水，`before/after` 按扣减顺序推进（delta == after − before）
+    let batches =
+        time_off_repo::find_active_grants_for_update(txn, employee_id, time_off_type_id, on_date)
+            .await?;
+    let mut need = minutes;
+    let mut covered = 0i32;
+    for batch in batches {
+        if need == 0 {
+            break;
+        }
+        let take = need.min(batch.remaining_minutes);
+        if take <= 0 {
+            continue;
+        }
+        // 批次级并发护栏在 repo 的 `remaining >= minutes` 条件里；false = 已被并发扣空
+        if !time_off_repo::consume_grant_in_tx(txn, batch.id, take, actor_id).await? {
+            return Err(AppError::Biz("有效额度批次不足，请重试".into()));
+        }
+        append_balance_log_in_tx(
+            txn,
+            BalanceLog {
+                balance_id: balance.id,
+                employee_id,
+                time_off_type_id,
+                grant_id: batch.id,
+                biz_type: LOG_BIZ_TIME_OFF_LOCK,
+                before_minutes: before - i64::from(covered),
+                after_minutes: before - i64::from(covered) - i64::from(take),
+                delta_minutes: -take,
+                source_kind,
+                source_id,
+                operator_id: actor_id,
+                remark: "",
+            },
+        )
+        .await?;
+        covered += take;
+        need -= take;
+    }
+
+    if need > 0 {
+        if type_model.allow_negative == 0 {
+            // 账户可用额度可能包含「已过 expire_at 但 job 尚未作废」的批次（job 每日 01:30 跑），
+            // 此时 FEFO 取不到它，如实报「有效批次」而不是谎称账本不一致
+            return Err(AppError::Biz(format!(
+                "有效额度批次不足：已覆盖 {covered} 分钟，本次需要 {minutes} 分钟"
+            )));
+        }
+        append_balance_log_in_tx(
+            txn,
+            BalanceLog {
+                balance_id: balance.id,
+                employee_id,
+                time_off_type_id,
+                grant_id: 0, // 负余额缺口：不属于任何批次
+                biz_type: LOG_BIZ_TIME_OFF_LOCK,
+                before_minutes: before - i64::from(covered),
+                after_minutes: before - i64::from(minutes),
+                delta_minutes: -need,
+                source_kind,
+                source_id,
+                operator_id: actor_id,
+                remark: "负余额缺口",
+            },
+        )
+        .await?;
+    }
+
     time_off_repo::update_balance_in_tx(
         txn,
         hr_time_off_balance::ActiveModel {
@@ -433,54 +538,25 @@ pub(crate) async fn lock_time_off_in_tx(
             locked_minutes: Set(balance.locked_minutes + minutes),
             ..Default::default()
         },
-        0, // 本签名不带 actor_id：账户审计列记 0（系统）；P2 若要记审批人，扩签名
-    )
-    .await?;
-
-    append_balance_log_in_tx(
-        txn,
-        BalanceLog {
-            balance_id: balance.id,
-            employee_id,
-            time_off_type_id,
-            grant_id: 0, // 账户级动作：预占不落到具体批次
-            biz_type: LOG_BIZ_TIME_OFF_LOCK,
-            before_minutes: before,
-            after_minutes: before - i64::from(minutes),
-            delta_minutes: -minutes,
-            source_kind: LOG_SOURCE_NONE,
-            source_id: 0, // 本签名不带来源单据，P2 接入请假单后由调用方补
-            operator_id: 0,
-            remark: "",
-        },
+        actor_id,
     )
     .await?;
 
     Ok(())
 }
 
-/// 实扣（审批通过）：FEFO 扣批次剩余，账户 `locked -= minutes`、`used += minutes`，可用不变。
+/// 实扣（审批通过）：把该单据的预占转为实扣，账户 `locked -= m`、`used += m`（可用不变）。
 ///
-/// 批次归属：每个被扣的批次写一条流水（`grant_id` 指向它），供「这笔假扣的是哪个批次」追溯。
-// 实现提示：⓪ 读假别 `repo::find_time_off_type_by_id(txn, time_off_type_id)`：`balance_mode` 为
-// `BALANCE_MODE_RECORD_ONLY` → 直接 `Ok(())`（记录型假别无额度概念，防御性 no-op）；
-// ① `repo::find_active_grants_for_update(txn, employee_id, time_off_type_id, on_date)` FEFO 加锁读；
-// ② 账户加锁读（账期取 `on_date` 的自然年）——`locked_minutes -= minutes`、`used_minutes += minutes`，
-// 变动前后**可用值相同**；③ 循环扣批次：`take = min(剩余待扣, batch.remaining_minutes)` →
-// `repo::consume_grant_in_tx(txn, batch.id, take, actor_id)`（返回 `false` 说明并发下批次已被扣空，
-// 重新取批次或直接报错）；扣不满 `minutes` → `AppError::Biz("额度批次不足，请检查账本一致性")`；
-// ④ 每个被扣批次：`remaining_minutes == 0` 时
-// `repo::set_grant_status_in_tx(txn, batch.id, GRANT_STATUS_EXHAUSTED, actor_id)`，
-// 并写一条流水：`biz_type = LOG_BIZ_TIME_OFF_CONSUME`、`delta = 0`（locked→used，可用不变，
-// 见文件头账本口径）、`grant_id = batch.id`、`source_kind` / `source_id` 原样入来源列；
-// ⑤ `grant_id` 之外的 `operator_id` 传 0（系统动作），P2 接入请假单后可改为审批人。
-// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
-#[cfg_attr(not(test), allow(dead_code))]
+/// 批次侧**不再扣减**（预占时已扣，见 [`lock_time_off_in_tx`]）：按 `(source_kind, source_id)`
+/// 回读预占流水拿「这笔单据动了哪些批次、各自动了多少」，据此
+/// ① 批次剩余归零且仍在效时置 `EXHAUSTED`；
+/// ② 每批补一条 `delta = 0` 的实扣流水（`grant_id` 指向该批，保留「这笔假扣的是哪一批」的追溯，
+/// 也用 0 而非 `−m` 避免与预占的 `−m` 重复计数）。
 pub(crate) async fn consume_locked_in_tx(
     txn: &DatabaseTransaction,
+    actor_id: u64,
     employee_id: u64,
     time_off_type_id: u64,
-    minutes: i32,
     source_kind: i8,
     source_id: u64,
     on_date: Date,
@@ -495,52 +571,54 @@ pub(crate) async fn consume_locked_in_tx(
 
     let period = on_date.year().to_string();
     let balance = lock_balance_in_tx(txn, employee_id, time_off_type_id, &period).await?;
-    // locked → used：可用值不变（见文件头账本口径）
-    let before = available_of(&balance);
 
-    // 先扣批次：扣不满就整笔失败，账户改动随事务回滚，避免账本出现「扣了一半」
-    let batches =
-        time_off_repo::find_active_grants_for_update(txn, employee_id, time_off_type_id, on_date)
+    // 预占量以流水为准（调用方不传 minutes，避免与账本漂移）
+    let locks =
+        time_off_repo::find_logs_by_source(txn, source_kind, source_id, LOG_BIZ_TIME_OFF_LOCK)
             .await?;
-    let mut need = minutes;
-    for batch in batches {
-        if need == 0 {
-            break;
+    if locks.is_empty() {
+        return Err(AppError::Biz("该单据没有预占记录，请检查账本一致性".into()));
+    }
+    let minutes: i32 = locks.iter().map(|log| -log.delta_minutes).sum();
+    if minutes <= 0 {
+        return Err(AppError::Biz("预占流水异常，请检查账本一致性".into()));
+    }
+    if i64::from(balance.locked_minutes) < i64::from(minutes) {
+        return Err(AppError::Biz("预占量不足，请检查账本一致性".into()));
+    }
+
+    let current = available_of(&balance);
+    for log in &locks {
+        if log.grant_id != 0
+            && let Some(batch) =
+                time_off_repo::find_grant_by_id_for_update(txn, log.grant_id).await?
+            && batch.remaining_minutes == 0
+            && batch.status == GRANT_STATUS_ACTIVE
+        {
+            time_off_repo::set_grant_status_in_tx(txn, batch.id, GRANT_STATUS_EXHAUSTED, actor_id)
+                .await?;
         }
-        let take = need.min(batch.remaining_minutes);
-        // 批次级并发护栏在 repo 的 `remaining >= minutes` 条件里；false = 已被并发扣空
-        // 本签名不带操作人：批次侧审计记 0（系统动作）
-        if !time_off_repo::consume_grant_in_tx(txn, batch.id, take, 0).await? {
-            return Err(AppError::Biz("额度批次不足，请检查账本一致性".into()));
-        }
-        if take == batch.remaining_minutes {
-            time_off_repo::set_grant_status_in_tx(txn, batch.id, GRANT_STATUS_EXHAUSTED, 0).await?;
-        }
-        // 每个被扣批次一条流水：delta = 0（可用不变），grant_id 指向它以便追溯
         append_balance_log_in_tx(
             txn,
             BalanceLog {
                 balance_id: balance.id,
                 employee_id,
                 time_off_type_id,
-                grant_id: batch.id,
+                grant_id: log.grant_id,
                 biz_type: LOG_BIZ_TIME_OFF_CONSUME,
-                before_minutes: before,
-                after_minutes: before,
+                before_minutes: current,
+                after_minutes: current,
                 delta_minutes: 0,
                 source_kind,
                 source_id,
-                operator_id: 0,
+                operator_id: actor_id,
                 remark: "",
             },
         )
         .await?;
-        need -= take;
-    }
-    if need > 0 {
-        return Err(AppError::Biz("额度批次不足，请检查账本一致性".into()));
     }
 
+    // locked → used：可用值不变（见文件头账本口径）
     time_off_repo::update_balance_in_tx(
         txn,
         hr_time_off_balance::ActiveModel {
@@ -549,27 +627,27 @@ pub(crate) async fn consume_locked_in_tx(
             used_minutes: Set(balance.used_minutes + minutes),
             ..Default::default()
         },
-        0, // 本签名不带操作人：系统动作
+        actor_id,
     )
     .await?;
+
     Ok(())
 }
 
-/// 释放预占（审批驳回 / 撤销）：账户 `locked -= minutes`，可用恢复，流水正向记恢复量。
-// 实现提示：⓪ 读假别 `repo::find_time_off_type_by_id(txn, time_off_type_id)`：`balance_mode` 为
-// `BALANCE_MODE_RECORD_ONLY` → 直接 `Ok(())`（记录型假别无额度概念，防御性 no-op）；
-// ① 账户加锁读 `repo::find_balance_by_account_for_update(txn, employee_id, time_off_type_id, period)`，
-// 账期取 `on_date` 的自然年（`format!("{}", on_date.year())`）；`None` →
-// `AppError::Biz("额度账户不存在，请先发放额度")`；② 账户 `locked_minutes -= minutes` →
-// `repo::update_balance_in_tx`；③ 写流水：`biz_type = LOG_BIZ_TIME_OFF_RELEASE`、`delta = +minutes`
-// （可用恢复，见文件头账本口径）、`grant_id = 0`（账户级）、`source_kind` / `source_id` 原样入来源列。
-// 骨架期：P2 请假 / P4 加班接入前无调用方（test 构建下由用例覆盖）
-#[cfg_attr(not(test), allow(dead_code))]
+/// 释放预占（审批驳回 / 撤销）：账户 `locked -= m`，额度**归还原批次**；原批次已失效或已撤销时
+/// 归还到当前账期（`on_date` 自然年）的归还批次。
+///
+/// 为什么允许归还到当前账期：预占时已把量从批次 `remaining` 移走，若原批次在审批期间过期作废，
+/// 那份额度**没有**被计进 `expired`（job 看不到在途量），驳回归还它在账上仍然成立
+/// （不变式 B 的 `+locked` 项对冲）。归还批次不动账户 `granted`：额度不是新授予，
+/// 只是把原本就授予过的那份还回可用。
+///
+/// 幂等：同一 `(source_kind, source_id)` 已有释放流水则直接返回——重复驳回 / 重复撤销不会二次归还。
 pub(crate) async fn release_locked_in_tx(
     txn: &DatabaseTransaction,
+    actor_id: u64,
     employee_id: u64,
     time_off_type_id: u64,
-    minutes: i32,
     source_kind: i8,
     source_id: u64,
     on_date: Date,
@@ -582,13 +660,105 @@ pub(crate) async fn release_locked_in_tx(
         return Ok(());
     }
 
+    let locks =
+        time_off_repo::find_logs_by_source(txn, source_kind, source_id, LOG_BIZ_TIME_OFF_LOCK)
+            .await?;
+    if locks.is_empty() {
+        // 没有预占（如记录型假别、或额度链路整体跳过）→ 无事可做
+        return Ok(());
+    }
+    let already_released =
+        time_off_repo::find_logs_by_source(txn, source_kind, source_id, LOG_BIZ_TIME_OFF_RELEASE)
+            .await?;
+    if !already_released.is_empty() {
+        return Ok(());
+    }
+
     let period = on_date.year().to_string();
     let balance = lock_balance_in_tx(txn, employee_id, time_off_type_id, &period).await?;
+
+    let minutes: i32 = locks.iter().map(|log| -log.delta_minutes).sum();
+    if minutes <= 0 {
+        return Err(AppError::Biz("预占流水异常，请检查账本一致性".into()));
+    }
     if i64::from(balance.locked_minutes) < i64::from(minutes) {
         return Err(AppError::Biz("释放量超过预占量，请检查账本一致性".into()));
     }
 
-    let before = available_of(&balance);
+    let mut before = available_of(&balance);
+    for log in &locks {
+        let amount = -log.delta_minutes;
+        if amount <= 0 {
+            continue;
+        }
+
+        if log.grant_id == 0 {
+            // 负余额缺口：归还即冲减负余额，没有批次可加
+            append_balance_log_in_tx(
+                txn,
+                BalanceLog {
+                    balance_id: balance.id,
+                    employee_id,
+                    time_off_type_id,
+                    grant_id: 0,
+                    biz_type: LOG_BIZ_TIME_OFF_RELEASE,
+                    before_minutes: before,
+                    after_minutes: before + i64::from(amount),
+                    delta_minutes: amount,
+                    source_kind,
+                    source_id,
+                    operator_id: actor_id,
+                    remark: "负余额缺口归还",
+                },
+            )
+            .await?;
+            before += i64::from(amount);
+            continue;
+        }
+
+        let batch = time_off_repo::find_grant_by_id_for_update(txn, log.grant_id).await?;
+        let restorable = matches!(
+            &batch,
+            Some(b) if b.status == GRANT_STATUS_ACTIVE
+                && b.expire_at.is_none_or(|expire_at| expire_at >= on_date)
+        );
+        if restorable {
+            time_off_repo::add_grant_remaining_in_tx(txn, log.grant_id, amount, actor_id).await?;
+        } else {
+            // 原批次已失效 / 已撤销 / 已用尽：归还到当前账期的归还批次（同一单据复用同一个）
+            let restore_id = find_or_create_restore_grant_in_tx(
+                txn,
+                actor_id,
+                employee_id,
+                time_off_type_id,
+                source_id,
+                on_date,
+            )
+            .await?;
+            time_off_repo::add_grant_remaining_in_tx(txn, restore_id, amount, actor_id).await?;
+        }
+
+        append_balance_log_in_tx(
+            txn,
+            BalanceLog {
+                balance_id: balance.id,
+                employee_id,
+                time_off_type_id,
+                grant_id: log.grant_id,
+                biz_type: LOG_BIZ_TIME_OFF_RELEASE,
+                before_minutes: before,
+                after_minutes: before + i64::from(amount),
+                delta_minutes: amount,
+                source_kind,
+                source_id,
+                operator_id: actor_id,
+                remark: "",
+            },
+        )
+        .await?;
+        before += i64::from(amount);
+    }
+
     time_off_repo::update_balance_in_tx(
         txn,
         hr_time_off_balance::ActiveModel {
@@ -596,29 +766,62 @@ pub(crate) async fn release_locked_in_tx(
             locked_minutes: Set(balance.locked_minutes - minutes),
             ..Default::default()
         },
-        0, // 本签名不带操作人：系统动作
+        actor_id,
     )
     .await?;
 
-    append_balance_log_in_tx(
+    Ok(())
+}
+
+/// 取 / 建「归还批次」：承载驳回释放归还量的批次（当前账期，`expire_at` 取该年 12-31）。
+///
+/// 幂等键 = `(员工 × 假别 × 请假单来源 × 请假单 ID)`（`source_kind = SOURCE_KIND_TIME_OFF`）：
+/// 同一张单据的多次归还都落到同一个批次，重复执行不会增殖批次。
+///
+/// 注意 `minutes` 列只记首次归还量：它不参与账户守恒（账户的 `granted` 在**原始批次**上
+/// 已经计过，归还不是新授予），只作展示。
+async fn find_or_create_restore_grant_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    employee_id: u64,
+    time_off_type_id: u64,
+    source_id: u64,
+    on_date: Date,
+) -> Result<u64, AppError> {
+    if let Some(existing) = time_off_repo::find_grant_by_source_key(
         txn,
-        BalanceLog {
-            balance_id: balance.id,
-            employee_id,
-            time_off_type_id,
-            grant_id: 0, // 账户级动作：预占不落到具体批次
-            biz_type: LOG_BIZ_TIME_OFF_RELEASE,
-            before_minutes: before,
-            after_minutes: before + i64::from(minutes),
-            delta_minutes: minutes,
-            source_kind,
-            source_id,
-            operator_id: 0,
-            remark: "",
+        employee_id,
+        time_off_type_id,
+        SOURCE_KIND_TIME_OFF,
+        source_id,
+    )
+    .await?
+    {
+        return Ok(existing.id);
+    }
+
+    let year = on_date.year();
+    let grant = time_off_repo::create_grant_in_tx(
+        txn,
+        hr_time_off_grant::ActiveModel {
+            employee_id: Set(employee_id),
+            time_off_type_id: Set(time_off_type_id),
+            source: Set(GRANT_SOURCE_MANUAL),
+            reason: Set(GRANT_REASON_RELEASE_RESTORE.to_string()),
+            source_kind: Set(SOURCE_KIND_TIME_OFF),
+            source_id: Set(source_id),
+            period: Set(year.to_string()),
+            minutes: Set(0),
+            remaining_minutes: Set(0),
+            effective_at: Set(on_date),
+            expire_at: Set(chrono::NaiveDate::from_ymd_opt(year, 12, 31)),
+            status: Set(GRANT_STATUS_ACTIVE),
+            ..Default::default()
         },
+        actor_id,
     )
     .await?;
-    Ok(())
+    Ok(grant.id)
 }
 
 /// 批量作废过期批次（定时任务调用）：`expire_at < today` 且仍有剩余的批次归零 + 置失效 + 记流水。
@@ -684,7 +887,7 @@ pub(crate) async fn expire_grants_in_tx(
                 before_minutes: before,
                 after_minutes: before - i64::from(remaining),
                 delta_minutes: -remaining,
-                source_kind: LOG_SOURCE_JOB,
+                source_kind: SOURCE_KIND_JOB,
                 source_id: 0,
                 operator_id: 0,
                 remark: "过期作废",
@@ -793,6 +996,8 @@ pub(crate) async fn batch_create_grants_in_tx(
             &req.period,
             effective_at,
             expire_at,
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await?;
         resp.created += 1;
@@ -876,7 +1081,7 @@ pub async fn page_time_off_types(
 }
 
 /// 创建假期类型（对外入口）：三行事务，成功后提交。
-// 实现提示：`let txn = db.begin().await?;` → ① 编码查重
+// 实现提示：`let txn = db.begin().await.map_err(anyhow::Error::from)?;` → ① 编码查重
 // `repo::find_time_off_type_by_code_include_deleted(&txn, &req.type_code)` 命中即
 // `AppError::Biz(format!("类型编码已存在：{}", req.type_code))`（软删行仍占唯一键，必须查含软删）；
 // ② 组装 `hr_time_off_type::ActiveModel`（业务列全量 Set）→
@@ -1066,7 +1271,7 @@ pub async fn page_time_off_grants(
 }
 
 /// 批量发放额度（对外入口）：三行事务，成功后提交。
-// 实现提示：`let txn = db.begin().await?;` → `batch_create_grants_in_tx(&txn, actor_id, req)` →
+// 实现提示：`let txn = db.begin().await.map_err(anyhow::Error::from)?;` → `batch_create_grants_in_tx(&txn, actor_id, req)` →
 // 成功 `txn.commit().await?` → 结果原样回传（部分员工命中幂等不算失败，走 `skipped` 回执）。
 pub async fn batch_create_grants(
     db: &DatabaseConnection,
@@ -1160,7 +1365,7 @@ async fn cancel_grant_in_tx(
             before_minutes: before,
             after_minutes: before - i64::from(remaining),
             delta_minutes: -remaining,
-            source_kind: LOG_SOURCE_MANUAL,
+            source_kind: SOURCE_KIND_MANUAL,
             source_id: 0,
             operator_id: actor_id,
             remark: "撤销发放",
@@ -1226,6 +1431,495 @@ pub async fn page_time_off_balance_logs(
     Ok(page)
 }
 
+// —— 请假单（P2）：时长派生 · 提交（预占 + 起审批）· 撤销 / 删除 / 查询 ——
+
+/// 请假时长派生：按「排班 × 工作日历」逐日折算 `[start_at, end_at)` 内的应出勤分钟。
+///
+/// 口径见考勤域 `derive_work_minutes`（本函数只负责把 0 当成业务错误抛出：
+/// 「选了整段休息时间」在请假场景下没有意义，静默建 0 分钟单据是更坏的结果）。
+async fn require_duration_minutes(
+    db: &impl ConnectionTrait,
+    employee_id: u64,
+    start_at: DateTime,
+    end_at: DateTime,
+) -> Result<i32, AppError> {
+    let minutes = crate::modules::biz::hr::attendance::service::derive_work_minutes(
+        db,
+        employee_id,
+        start_at,
+        end_at,
+    )
+    .await?;
+    if minutes <= 0 {
+        return Err(AppError::Biz(
+            "所选区间内没有应出勤的工作时间，请检查起止时间".into(),
+        ));
+    }
+    Ok(minutes)
+}
+
+/// 取当前登录用户对应的员工档案（「我的请假单」用）；没有档案即报错。
+async fn require_my_employee(
+    db: &impl ConnectionTrait,
+    user_id: u64,
+) -> Result<hr_employee::Model, AppError> {
+    time_off_repo::find_employee_by_user_id(db, user_id)
+        .await?
+        .ok_or_else(|| AppError::Biz("未找到当前用户的员工档案".into()))
+}
+
+/// 校验请假单属于当前操作人（只有本人能撤销 / 删除自己的单据）。
+async fn ensure_request_owner(
+    db: &impl ConnectionTrait,
+    actor_id: u64,
+    request: &hr_time_off_request::Model,
+) -> Result<(), AppError> {
+    let employee = time_off_repo::find_employee_by_id(db, request.employee_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("员工档案不存在：{}", request.employee_id)))?;
+    if employee.user_id != actor_id {
+        return Err(AppError::Biz("只能操作本人的请假单".into()));
+    }
+    Ok(())
+}
+
+/// 提交请假单（事务内实现，`create` 与 `submit` 共用）：
+/// 员工行锁 → 假别 / 员工校验 → 区间不重叠 → 后端派生时长 → 预占额度 → 起审批实例 → 落状态。
+///
+/// **员工行锁**是这条链的并发护栏：区间重叠是跨假别的「读 → 判断 → 写」，账户行锁只能串行化
+/// 同假别，故按员工行串行化提交。
+pub(crate) async fn submit_time_off_request_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    id: u64,
+) -> Result<hr_time_off_request::Model, AppError> {
+    let request = time_off_repo::find_request_by_id_for_update(txn, id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("请假单不存在：{id}")))?;
+    if request.status == REQUEST_STATUS_PENDING {
+        return Err(AppError::Biz("该请假单正在审批中，不能重复提交".into()));
+    }
+
+    let employee = time_off_repo::lock_employee_for_update(txn, request.employee_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("员工档案不存在：{}", request.employee_id)))?;
+    if employee.employment_status == EMPLOYMENT_STATUS_RESIGNED {
+        return Err(AppError::Biz("该员工已离职，不能提交请假单".into()));
+    }
+
+    let type_model = time_off_repo::find_time_off_type_by_id(txn, request.time_off_type_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("假期类型不存在：{}", request.time_off_type_id)))?;
+    if type_model.status != TIME_OFF_TYPE_ENABLED {
+        return Err(AppError::Biz(format!(
+            "假期类型已停用，不能提交：{}",
+            type_model.type_name
+        )));
+    }
+    if type_model.require_attachment == 1 && request.attachment_id == 0 {
+        return Err(AppError::Biz(format!(
+            "假期类型「{}」必须上传附件",
+            type_model.type_name
+        )));
+    }
+
+    let overlaps = time_off_repo::find_overlapping_requests(
+        txn,
+        request.employee_id,
+        request.id,
+        request.start_at,
+        request.end_at,
+    )
+    .await?;
+    if let Some(first) = overlaps.first() {
+        return Err(AppError::Biz(format!(
+            "该时间段与已有请假单重叠（单据编号：{}）",
+            first.id
+        )));
+    }
+
+    // 时长由后端派生（请求体不接受 durationMinutes，杜绝前端伪造）
+    let minutes =
+        require_duration_minutes(txn, request.employee_id, request.start_at, request.end_at)
+            .await?;
+
+    // 预占：按 FEFO 直接扣批次（记录型假别在本层 no-op）
+    lock_time_off_in_tx(
+        txn,
+        actor_id,
+        request.employee_id,
+        request.time_off_type_id,
+        minutes,
+        SOURCE_KIND_TIME_OFF,
+        request.id,
+        request.start_at.date(),
+    )
+    .await?;
+
+    // 起审批实例（同事务：额度预占与审批实例要么都在，要么都不在）
+    let instance_id = crate::modules::biz::hr::approval::service::start_instance_in_tx(
+        txn,
+        actor_id,
+        crate::modules::biz::hr::approval::BIZ_TYPE_TIME_OFF,
+        request.id,
+        employee.user_id,
+    )
+    .await?;
+
+    Ok(time_off_repo::update_request_in_tx(
+        txn,
+        hr_time_off_request::ActiveModel {
+            id: Set(request.id),
+            duration_minutes: Set(minutes),
+            status: Set(REQUEST_STATUS_PENDING),
+            approval_instance_id: Set(instance_id),
+            ..Default::default()
+        },
+        actor_id,
+    )
+    .await?)
+}
+
+/// 事务内创建请假单并**直接提交**（建单即提交，无草稿态）。
+pub(crate) async fn create_time_off_request_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    req: &CreateTimeOffRequestReq,
+) -> Result<hr_time_off_request::Model, AppError> {
+    let start_at = parse_request_datetime("请假开始时间", &req.start_at)?;
+    let end_at = parse_request_datetime("请假结束时间", &req.end_at)?;
+
+    let employee = time_off_repo::lock_employee_for_update(txn, req.employee_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("员工档案不存在：{}", req.employee_id)))?;
+    if employee.employment_status == EMPLOYMENT_STATUS_RESIGNED {
+        return Err(AppError::Biz("该员工已离职，不能提交请假单".into()));
+    }
+    time_off_repo::find_time_off_type_by_id(txn, req.time_off_type_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("假期类型不存在：{}", req.time_off_type_id)))?;
+
+    let created = time_off_repo::create_request_in_tx(
+        txn,
+        hr_time_off_request::ActiveModel {
+            employee_id: Set(req.employee_id),
+            time_off_type_id: Set(req.time_off_type_id),
+            start_at: Set(start_at),
+            end_at: Set(end_at),
+            duration_minutes: Set(0), // 提交时派生
+            reason: Set(req.reason.clone()),
+            attachment_id: Set(req.attachment_id),
+            status: Set(REQUEST_STATUS_REJECTED), // 提交前视为终态（提交会改写为审批中）
+            approval_instance_id: Set(0),
+            remark: Set(req.remark.clone()),
+            ..Default::default()
+        },
+        actor_id,
+    )
+    .await?;
+
+    submit_time_off_request_in_tx(txn, actor_id, created.id).await
+}
+
+/// 事务内修改请假单：仅「已驳回 / 已撤销」可改（改完需重新提交）。
+pub(crate) async fn update_time_off_request_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    req: &UpdateTimeOffRequestReq,
+) -> Result<hr_time_off_request::Model, AppError> {
+    let request = time_off_repo::find_request_by_id(txn, req.id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("请假单不存在：{}", req.id)))?;
+    if !matches!(
+        request.status,
+        REQUEST_STATUS_REJECTED | REQUEST_STATUS_CANCELED
+    ) {
+        return Err(AppError::Biz(
+            "审批中或已通过的请假单不能修改，请先撤销".into(),
+        ));
+    }
+
+    let start_at = parse_request_datetime("请假开始时间", &req.start_at)?;
+    let end_at = parse_request_datetime("请假结束时间", &req.end_at)?;
+    time_off_repo::find_time_off_type_by_id(txn, req.time_off_type_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("假期类型不存在：{}", req.time_off_type_id)))?;
+
+    Ok(time_off_repo::update_request_in_tx(
+        txn,
+        hr_time_off_request::ActiveModel {
+            id: Set(req.id),
+            time_off_type_id: Set(req.time_off_type_id),
+            start_at: Set(start_at),
+            end_at: Set(end_at),
+            reason: Set(req.reason.clone()),
+            attachment_id: Set(req.attachment_id),
+            remark: Set(req.remark.clone()),
+            ..Default::default()
+        },
+        actor_id,
+    )
+    .await?)
+}
+
+/// 事务内撤销请假单：仅「审批中」可撤销；先置「已撤销」再撤销审批实例
+/// （审批侧终态分派会释放预占，见 [`on_instance_finished_in_tx`]）。
+pub(crate) async fn cancel_time_off_request_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    id: u64,
+) -> Result<hr_time_off_request::Model, AppError> {
+    let request = time_off_repo::find_request_by_id_for_update(txn, id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("请假单不存在：{id}")))?;
+    if request.status != REQUEST_STATUS_PENDING {
+        return Err(AppError::Biz("只有审批中的请假单可以撤销".into()));
+    }
+    ensure_request_owner(txn, actor_id, &request).await?;
+
+    let updated = time_off_repo::update_request_in_tx(
+        txn,
+        hr_time_off_request::ActiveModel {
+            id: Set(request.id),
+            status: Set(REQUEST_STATUS_CANCELED),
+            ..Default::default()
+        },
+        actor_id,
+    )
+    .await?;
+
+    crate::modules::biz::hr::approval::service::cancel_by_biz_in_tx(
+        txn,
+        actor_id,
+        crate::modules::biz::hr::approval::BIZ_TYPE_TIME_OFF,
+        request.id,
+    )
+    .await?;
+
+    Ok(updated)
+}
+
+/// 事务内删除请假单（软删）：审批中的单据必须先撤销。
+pub(crate) async fn delete_time_off_request_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    id: u64,
+) -> Result<(), AppError> {
+    let request = time_off_repo::find_request_by_id(txn, id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("请假单不存在：{id}")))?;
+    if request.status == REQUEST_STATUS_PENDING {
+        return Err(AppError::Biz("审批中的请假单不能删除，请先撤销".into()));
+    }
+    ensure_request_owner(txn, actor_id, &request).await?;
+
+    if !time_off_repo::soft_delete_request_in_tx(txn, id, actor_id).await? {
+        return Err(AppError::Biz(format!("请假单不存在：{id}")));
+    }
+    Ok(())
+}
+
+/// 审批终态回调（由 `hr/approval` 按 `biz_type = timeOff` 分派，同事务）：
+/// 通过 → 预占转实扣；驳回 / 撤销 → 释放预占；随后落单据终态。
+///
+/// 幂等：实扣只在「审批中」时执行一次；释放由 [`release_locked_in_tx`] 的
+/// 「已有释放流水即跳过」兜底，重复回调无害。
+pub(crate) async fn on_instance_finished_in_tx(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    biz_id: u64,
+    approved: bool,
+) -> Result<(), AppError> {
+    let request = time_off_repo::find_request_by_id_for_update(txn, biz_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("请假单不存在：{biz_id}")))?;
+    let on_date = request.start_at.date();
+
+    if approved {
+        if request.status == REQUEST_STATUS_PENDING {
+            consume_locked_in_tx(
+                txn,
+                actor_id,
+                request.employee_id,
+                request.time_off_type_id,
+                SOURCE_KIND_TIME_OFF,
+                request.id,
+                on_date,
+            )
+            .await?;
+            time_off_repo::update_request_in_tx(
+                txn,
+                hr_time_off_request::ActiveModel {
+                    id: Set(request.id),
+                    status: Set(REQUEST_STATUS_APPROVED),
+                    ..Default::default()
+                },
+                actor_id,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+
+    release_locked_in_tx(
+        txn,
+        actor_id,
+        request.employee_id,
+        request.time_off_type_id,
+        SOURCE_KIND_TIME_OFF,
+        request.id,
+        on_date,
+    )
+    .await?;
+    // 撤销由业务入口先置位（`cancel_time_off_request_in_tx`），这里只把「审批中」翻成「已驳回」
+    if request.status == REQUEST_STATUS_PENDING {
+        time_off_repo::update_request_in_tx(
+            txn,
+            hr_time_off_request::ActiveModel {
+                id: Set(request.id),
+                status: Set(REQUEST_STATUS_REJECTED),
+                ..Default::default()
+            },
+            actor_id,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// 解析请假起止时间（`yyyy-MM-dd HH:mm:ss` 或 `yyyy-MM-dd`）。
+fn parse_request_datetime(field: &str, raw: &str) -> Result<DateTime, AppError> {
+    crate::utils::datetime::parse_datetime(field, &Some(raw.trim().to_string()), false)?
+        .ok_or_else(|| AppError::Biz(format!("{field}不能为空")))
+}
+
+/// 请假单分页。
+pub async fn page_time_off_requests(
+    db: &impl ConnectionTrait,
+    req: &TimeOffRequestListReq,
+) -> Result<PageData<hr_time_off_request::Model>, AppError> {
+    let filter = TimeOffRequestFilter {
+        employee_id: req.employee_id,
+        time_off_type_id: req.time_off_type_id,
+        status: req.status,
+        start_at_begin: crate::utils::datetime::parse_datetime(
+            "startAtBegin",
+            &req.start_at_begin,
+            false,
+        )?,
+        start_at_end: crate::utils::datetime::parse_datetime(
+            "startAtEnd",
+            &req.start_at_end,
+            true,
+        )?,
+        approval_instance_id: None,
+    };
+    Ok(
+        time_off_repo::find_request_page(db, &filter, req.page.page_index(), req.page.page_size())
+            .await?,
+    )
+}
+
+/// 我的请假单分页（按当前登录用户的员工档案过滤）。
+pub async fn page_my_time_off_requests(
+    db: &impl ConnectionTrait,
+    user_id: u64,
+    req: &MineTimeOffRequestReq,
+) -> Result<PageData<hr_time_off_request::Model>, AppError> {
+    let employee = require_my_employee(db, user_id).await?;
+    let filter = TimeOffRequestFilter {
+        employee_id: Some(employee.id),
+        status: req.status,
+        ..Default::default()
+    };
+    Ok(
+        time_off_repo::find_request_page(db, &filter, req.page.page_index(), req.page.page_size())
+            .await?,
+    )
+}
+
+/// 请假单详情（软删视为不存在）。
+pub async fn get_time_off_request(
+    db: &impl ConnectionTrait,
+    id: u64,
+) -> Result<hr_time_off_request::Model, AppError> {
+    time_off_repo::find_request_by_id(db, id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("请假单不存在：{id}")))
+}
+
+// —— 请假单：自持事务入口（api 层调用）——
+
+/// 创建并提交请假单（自持事务）。
+pub async fn create_time_off_request(
+    db: &DatabaseConnection,
+    actor_id: u64,
+    req: CreateTimeOffRequestReq,
+) -> Result<hr_time_off_request::Model, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = create_time_off_request_in_tx(&txn, actor_id, &req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 修改请假单（自持事务）。
+pub async fn update_time_off_request(
+    db: &DatabaseConnection,
+    actor_id: u64,
+    req: UpdateTimeOffRequestReq,
+) -> Result<hr_time_off_request::Model, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = update_time_off_request_in_tx(&txn, actor_id, &req).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 重新提交请假单（自持事务）。
+pub async fn submit_time_off_request(
+    db: &DatabaseConnection,
+    actor_id: u64,
+    id: u64,
+) -> Result<hr_time_off_request::Model, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = submit_time_off_request_in_tx(&txn, actor_id, id).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 撤销请假单（自持事务）。
+pub async fn cancel_time_off_request(
+    db: &DatabaseConnection,
+    actor_id: u64,
+    id: u64,
+) -> Result<hr_time_off_request::Model, AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = cancel_time_off_request_in_tx(&txn, actor_id, id).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
+/// 删除请假单（自持事务，软删）。
+pub async fn delete_time_off_request(
+    db: &DatabaseConnection,
+    actor_id: u64,
+    id: u64,
+) -> Result<(), AppError> {
+    let txn = db.begin().await.map_err(anyhow::Error::from)?;
+    let result = delete_time_off_request_in_tx(&txn, actor_id, id).await;
+    if result.is_ok() {
+        txn.commit().await.map_err(anyhow::Error::from)?;
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1233,6 +1927,7 @@ mod tests {
     use crate::modules::biz::hr::time_off::dto::{BatchCreateGrantReq, TimeOffBalanceLogFilter};
     use crate::modules::biz::hr::time_off::{
         GRANT_SOURCE_ISSUE, GRANT_SOURCE_MANUAL, LOG_BIZ_GRANT, LOG_BIZ_TIME_OFF_RELEASE,
+        SOURCE_KIND_MANUAL, SOURCE_KIND_TIME_OFF,
     };
     use crate::modules::biz::hr::time_off::{repo, service};
     use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
@@ -1339,6 +2034,8 @@ mod tests {
             "2026",
             date(2026, 1, 1),
             Some(date(2026, 12, 31)),
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
@@ -1384,6 +2081,8 @@ mod tests {
             "2026",
             date(2026, 1, 1),
             None,
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
@@ -1398,6 +2097,8 @@ mod tests {
             "2026",
             date(2026, 1, 1),
             None,
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
@@ -1427,6 +2128,8 @@ mod tests {
             "2025",
             date(2026, 1, 1),
             Some(date(2026, 3, 31)),
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
@@ -1441,12 +2144,23 @@ mod tests {
             "2026",
             date(2026, 1, 1),
             None,
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
-        service::lock_time_off_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
-            .await
-            .unwrap();
+        service::lock_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            480,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 2, 1),
+        )
+        .await
+        .unwrap();
         let locked = repo::find_balance_by_account_for_update(&txn, emp, ty, "2026")
             .await
             .unwrap()
@@ -1457,9 +2171,32 @@ mod tests {
             locked.granted_minutes, 960,
             "临期批次也计入同一账期的累计授予（480+480）"
         );
-        service::consume_locked_in_tx(&txn, emp, ty, 480, 2, 999, date(2026, 2, 1))
+        // 预占即扣批次：lock 已把量从临期批次移走（过期 job 因此看不到在途量），
+        // 但**不翻转**批次状态——剩余归零可能只是被预占，驳回还要还回去
+        let preoccupied = repo::find_grant_by_id(&txn, expiring)
             .await
+            .unwrap()
             .unwrap();
+        assert_eq!(
+            preoccupied.remaining_minutes, 0,
+            "预占必须直接扣到临期批次的剩余"
+        );
+        assert_eq!(
+            preoccupied.status,
+            crate::modules::biz::hr::time_off::GRANT_STATUS_ACTIVE,
+            "预占不翻转批次状态（后续可能被释放回滚）"
+        );
+        service::consume_locked_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 2, 1),
+        )
+        .await
+        .unwrap();
         let used = repo::find_balance_by_account_for_update(&txn, emp, ty, "2026")
             .await
             .unwrap()
@@ -1491,12 +2228,23 @@ mod tests {
             "2026",
             date(2026, 1, 1),
             None,
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
-        let err = service::lock_time_off_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
-            .await
-            .unwrap_err();
+        let err = service::lock_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            480,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 2, 1),
+        )
+        .await
+        .unwrap_err();
         assert!(
             err.to_string().contains("额度不足"),
             "超额且不允许负数时必须报额度不足，实际：{err}"
@@ -1518,15 +2266,34 @@ mod tests {
             "2026",
             date(2026, 1, 1),
             None,
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
-        service::lock_time_off_in_tx(&txn, emp, ty, 240, date(2026, 2, 1))
-            .await
-            .unwrap();
-        service::release_locked_in_tx(&txn, emp, ty, 240, 2, 999, date(2026, 2, 1))
-            .await
-            .unwrap();
+        service::lock_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            240,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 2, 1),
+        )
+        .await
+        .unwrap();
+        service::release_locked_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 2, 1),
+        )
+        .await
+        .unwrap();
 
         let bal = repo::find_balance_by_account_for_update(&txn, emp, ty, "2026")
             .await
@@ -1577,6 +2344,8 @@ mod tests {
             "2025",
             date(2026, 1, 1),
             Some(date(2026, 3, 31)),
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
@@ -1628,6 +2397,8 @@ mod tests {
             "2025",
             date(2025, 1, 1),
             Some(date(2025, 12, 31)),
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
@@ -1668,6 +2439,8 @@ mod tests {
             "2026",
             date(2026, 1, 1),
             None,
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
@@ -1682,15 +2455,34 @@ mod tests {
             "2026",
             date(2026, 1, 1),
             Some(date(2026, 6, 30)),
+            SOURCE_KIND_MANUAL,
+            0,
         )
         .await
         .unwrap();
-        service::lock_time_off_in_tx(&txn, emp, ty, 480, date(2026, 2, 1))
-            .await
-            .unwrap();
-        service::consume_locked_in_tx(&txn, emp, ty, 480, 2, 999, date(2026, 2, 1))
-            .await
-            .unwrap();
+        service::lock_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            480,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 2, 1),
+        )
+        .await
+        .unwrap();
+        service::consume_locked_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 2, 1),
+        )
+        .await
+        .unwrap();
 
         let bal = repo::find_balance_by_account_for_update(&txn, emp, ty, "2026")
             .await
@@ -1724,10 +2516,186 @@ mod tests {
             .await
             .unwrap();
         let remaining_sum: i64 = grants.iter().map(|g| i64::from(g.remaining_minutes)).sum();
+        // 不变式 B（预占即扣批次后重述）：`Σ 未失效批次剩余 + locked == granted + adjust − used − expired`。
+        // 在途预占已从批次 remaining 移走，必须由等号左边的 `locked` 项对冲——旧表述
+        // `Σ remaining == granted − used` 在本口径下必然破。
         assert_eq!(
-            remaining_sum,
-            i64::from(bal.granted_minutes) - i64::from(bal.used_minutes),
-            "不变式 B：未失效批次的剩余合计必须等于累计授予减实扣（含 FEFO 扣到临期批次）"
+            remaining_sum + i64::from(bal.locked_minutes),
+            i64::from(bal.granted_minutes) + i64::from(bal.adjust_minutes)
+                - i64::from(bal.used_minutes)
+                - i64::from(bal.expired_minutes),
+            "不变式 B：批次剩余 + 在途预占必须等于 累计授予 + 调整 − 实扣 − 作废"
+        );
+    }
+
+    /// 回归（P0–P1 真实缺陷）：在途预占跨过批次失效日，过期 job 不得作废在途量。
+    ///
+    /// 场景：2026 年度 1 天额度、批次 2026-03-31 失效；员工 2026-03-30 提交（预占），
+    /// 审批拖到 4-2 才驳回。旧口径下 job 会把这 480 分钟当「批次剩余」作废，
+    /// 驳回释放再加回 480 → 可用额度凭空多出一天（甚至因负余额变成负数）。
+    #[tokio::test]
+    async fn expire_job_does_not_touch_in_flight_preoccupation() {
+        let txn = test_txn().await;
+        let (emp, ty) = seed_employee_and_type_with(&txn, 0 /* allow_negative */).await;
+        service::grant_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            480,
+            GRANT_SOURCE_ISSUE,
+            "statutory",
+            "2026",
+            date(2026, 1, 1),
+            Some(date(2026, 3, 31)),
+            SOURCE_KIND_MANUAL,
+            0,
+        )
+        .await
+        .unwrap();
+        // 在批次失效日之前预占（请假单 999）
+        service::lock_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            480,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 3, 30),
+        )
+        .await
+        .unwrap();
+
+        let expired = service::expire_grants_in_tx(&txn, date(2026, 4, 2))
+            .await
+            .unwrap();
+        assert_eq!(expired, 0, "只剩在途预占的批次不得被作废");
+
+        // 审批驳回：释放预占（归还到原批次，因为按单据发生日它尚未失效）
+        service::release_locked_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 3, 30),
+        )
+        .await
+        .unwrap();
+
+        let bal = repo::find_balance_by_account_for_update(&txn, emp, ty, "2026")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bal.locked_minutes, 0, "释放后预占归零");
+        assert_eq!(bal.expired_minutes, 0, "在途量不得被计入作废");
+        assert_eq!(bal.used_minutes, 0, "驳回不得计入实扣");
+        assert_eq!(
+            service::available_minutes(&txn, emp, ty, "2026", date(2026, 4, 2))
+                .await
+                .unwrap(),
+            480,
+            "驳回后可用额度应恢复为 1 天（既不凭空多出、也不归零）"
+        );
+        // 释放后额度回到原批次：该批次仍会在下一次过期任务里被正常作废（走常规路径）
+        let grants = repo::find_grant_page(
+            &txn,
+            &TimeOffGrantFilter {
+                employee_id: Some(emp),
+                time_off_type_id: Some(ty),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            grants
+                .items
+                .iter()
+                .map(|g| g.remaining_minutes)
+                .sum::<i32>(),
+            480,
+            "释放必须把额度还回批次，而不是只改账户"
+        );
+    }
+
+    /// 驳回释放时原批次已失效 / 已撤销：归还到当前账期的「归还批次」（幂等键 = 请假单）。
+    ///
+    /// 用 HR 撤销批次（`cancel_grant_in_tx`）制造「原批次不可归还」的场景：在途预占不受撤销影响，
+    /// 驳回归还时原批次已是 `CANCELED`，只能落到当前账期的归还批次；账户 `granted` 不再增加
+    /// （额度不是新授予），不变式 B 仍成立。
+    #[tokio::test]
+    async fn release_restores_to_current_period_batch_when_original_grant_is_revoked() {
+        let txn = test_txn().await;
+        let (emp, ty) = seed_employee_and_type_with(&txn, 0).await;
+        let batch = service::grant_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            480,
+            GRANT_SOURCE_ISSUE,
+            "statutory",
+            "2026",
+            date(2026, 1, 1),
+            None,
+            SOURCE_KIND_MANUAL,
+            0,
+        )
+        .await
+        .unwrap();
+        service::lock_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            480,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 2, 1),
+        )
+        .await
+        .unwrap();
+        // HR 撤销该批次：剩余为 0（全被预占），故 granted 不动、状态置已撤销
+        super::cancel_grant_in_tx(&txn, ACTOR_ID, batch)
+            .await
+            .unwrap();
+
+        service::release_locked_in_tx(
+            &txn,
+            ACTOR_ID,
+            emp,
+            ty,
+            SOURCE_KIND_TIME_OFF,
+            999,
+            date(2026, 2, 1),
+        )
+        .await
+        .unwrap();
+
+        let restore = repo::find_grant_by_source_key(&txn, emp, ty, SOURCE_KIND_TIME_OFF, 999)
+            .await
+            .unwrap()
+            .expect("应生成当前账期的归还批次");
+        assert_eq!(restore.remaining_minutes, 480, "归还批次应承载归还量");
+        assert_eq!(restore.minutes, 0, "归还不是新授予；minutes 不含新增授予量");
+
+        let bal = repo::find_balance_by_account_for_update(&txn, emp, ty, "2026")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bal.granted_minutes, 480, "归还不得增加累计授予");
+        assert_eq!(bal.locked_minutes, 0, "归还后预占归零");
+        assert_eq!(
+            service::available_minutes(&txn, emp, ty, "2026", date(2026, 2, 1))
+                .await
+                .unwrap(),
+            480,
+            "归还的量必须重新可用"
         );
     }
 
@@ -1776,5 +2744,621 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(bal.granted_minutes, 4800, "重复发放不得翻倍累计");
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+    use crate::entity::{hr_employee, hr_time_off_type, hr_work_calendar, sys_user_dept};
+    use crate::modules::biz::hr::approval;
+    use crate::modules::biz::hr::time_off::dto::{CreateTimeOffRequestReq, TimeOffGrantFilter};
+    use crate::modules::biz::hr::time_off::{
+        BALANCE_MODE_DEDUCT, BALANCE_MODE_RECORD_ONLY, GRANT_SOURCE_ISSUE, GRANT_STATUS_CANCELED,
+        LOG_BIZ_TIME_OFF_LOCK, LOG_BIZ_TIME_OFF_RELEASE, REQUEST_STATUS_APPROVED,
+        REQUEST_STATUS_CANCELED, REQUEST_STATUS_PENDING, REQUEST_STATUS_REJECTED,
+        SOURCE_KIND_MANUAL, TIME_OFF_TYPE_ENABLED, repo, service,
+    };
+    use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 测试统一用种子 admin（id = 1）作操作人。
+    const ACTOR_ID: u64 = 1;
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    static DAY_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn unique(prefix: &str) -> String {
+        format!(
+            "{prefix}_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    /// 唯一「用户 ID」段位 900_5xx（审批域用 900_4xx，避免并行撞键）。
+    fn unique_user_id() -> u64 {
+        900_500_000
+            + (std::process::id() as u64 % 100) * 1_000
+            + SEQ.fetch_add(1, Ordering::Relaxed) % 1_000
+    }
+
+    /// 唯一自然日：2030-01-01 起逐日递增（`hr_work_calendar.calendar_date` 是全局唯一键，
+    /// 固定日期会与其它用例互撞）。取值在 2030 年之后，不会碰到真实业务数据。
+    fn unique_work_date() -> chrono::NaiveDate {
+        let offset = DAY_SEQ.fetch_add(1, Ordering::Relaxed) % 3_000;
+        chrono::NaiveDate::from_ymd_opt(2030, 1, 1).unwrap() + chrono::Duration::days(offset as i64)
+    }
+
+    async fn test_db() -> DatabaseConnection {
+        let config = crate::infra::config::Config::load().unwrap();
+        Database::connect(&config.database.url).await.unwrap()
+    }
+
+    async fn test_txn() -> DatabaseTransaction {
+        use sea_orm::TransactionTrait;
+        test_db().await.begin().await.unwrap()
+    }
+
+    /// 该日为工作日（无排班 → 走日历的「标准工作制」分支：窗口 = 整个自然日、
+    /// 当日封顶 `standard_minutes = 480`）。
+    async fn seed_workday(txn: &DatabaseTransaction, day: chrono::NaiveDate) {
+        hr_work_calendar::ActiveModel {
+            calendar_date: Set(day),
+            is_workday: Set(1),
+            holiday_type: Set(0),
+            standard_minutes: Set(480),
+            created_by: Set(ACTOR_ID),
+            updated_by: Set(ACTOR_ID),
+            ..Default::default()
+        }
+        .insert(txn)
+        .await
+        .unwrap();
+    }
+
+    /// 假期类型（`balance_mode` 决定是否走额度账本）。
+    async fn seed_type(txn: &DatabaseTransaction, balance_mode: i8) -> u64 {
+        hr_time_off_type::ActiveModel {
+            type_code: Set(unique("req_type")),
+            type_name: Set("测试假别".to_string()),
+            unit: Set(1),
+            balance_mode: Set(balance_mode),
+            min_unit_minutes: Set(60),
+            require_attachment: Set(0),
+            allow_negative: Set(0),
+            status: Set(TIME_OFF_TYPE_ENABLED),
+            created_by: Set(ACTOR_ID),
+            updated_by: Set(ACTOR_ID),
+            ..Default::default()
+        }
+        .insert(txn)
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn seed_employee(
+        txn: &DatabaseTransaction,
+        user_id: u64,
+        manager_employee_id: u64,
+    ) -> u64 {
+        hr_employee::ActiveModel {
+            user_id: Set(user_id),
+            manager_employee_id: Set(manager_employee_id),
+            employment_status: Set(1),
+            ..Default::default()
+        }
+        .insert(txn)
+        .await
+        .unwrap()
+        .id
+    }
+
+    /// 申请人 + 直属上级（同一个人同时是主部门负责人），返回 `(员工, 申请人 user_id, 上级 user_id)`。
+    ///
+    /// 种子形状的 `timeOff` 流是「直属上级（可跳过）→ 部门负责人」，两级因此解析到同一人。
+    async fn seed_applicant(txn: &DatabaseTransaction) -> (u64, u64, u64) {
+        let manager_user = unique_user_id();
+        let applicant_user = unique_user_id();
+        let dept_id = unique_user_id();
+
+        let manager_employee = seed_employee(txn, manager_user, 0).await;
+        let applicant_employee = seed_employee(txn, applicant_user, manager_employee).await;
+
+        for (user_id, is_primary, is_leader) in [(applicant_user, 1, 0), (manager_user, 0, 1)] {
+            sys_user_dept::ActiveModel {
+                user_id: Set(user_id),
+                dept_id: Set(dept_id),
+                is_primary: Set(is_primary),
+                is_leader: Set(is_leader),
+            }
+            .insert(txn)
+            .await
+            .unwrap();
+        }
+        (applicant_employee, applicant_user, manager_user)
+    }
+
+    /// 确保 `timeOff` 审批流存在（种子已建则原样复用，**不改动共享模板的节点**）。
+    async fn ensure_time_off_flow(txn: &DatabaseTransaction) {
+        if approval::repo::find_enabled_flow_by_biz_type(txn, approval::BIZ_TYPE_TIME_OFF)
+            .await
+            .unwrap()
+            .is_some()
+        {
+            return;
+        }
+        let flow = approval::repo::create_flow_in_tx(
+            txn,
+            crate::entity::hr_approval_flow::ActiveModel {
+                biz_type: Set(approval::BIZ_TYPE_TIME_OFF.to_string()),
+                name: Set("请假审批流".to_string()),
+                status: Set(approval::FLOW_STATUS_ENABLED),
+                ..Default::default()
+            },
+            ACTOR_ID,
+        )
+        .await
+        .unwrap();
+        for (seq, node_type, skip_if_empty) in [
+            (1, approval::NODE_TYPE_MANAGER, 1),
+            (2, approval::NODE_TYPE_DEPT_LEADER, 0),
+        ] {
+            approval::repo::create_node_in_tx(
+                txn,
+                crate::entity::hr_approval_flow_node::ActiveModel {
+                    flow_id: Set(flow.id),
+                    seq: Set(seq),
+                    node_name: Set(format!("节点 {seq}")),
+                    node_type: Set(node_type),
+                    approver_ref_id: Set(0),
+                    skip_if_empty: Set(skip_if_empty),
+                    ..Default::default()
+                },
+                ACTOR_ID,
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    /// 建单请求（`duration_minutes` 不在请求体里 —— 由后端按排班 × 日历派生）。
+    fn request_req(
+        employee_id: u64,
+        type_id: u64,
+        day: chrono::NaiveDate,
+        from: u32,
+        to: u32,
+    ) -> CreateTimeOffRequestReq {
+        CreateTimeOffRequestReq {
+            employee_id,
+            time_off_type_id: type_id,
+            start_at: day
+                .and_hms_opt(from, 0, 0)
+                .unwrap()
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+            end_at: day
+                .and_hms_opt(to, 0, 0)
+                .unwrap()
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+            reason: "测试请假".to_string(),
+            attachment_id: 0,
+            remark: String::new(),
+        }
+    }
+
+    /// 走完「种子形状」的两级审批（直属上级 → 部门负责人，同一人）。
+    async fn approve_two_nodes(txn: &DatabaseTransaction, instance_id: u64, approver: u64) {
+        for step in 1..=2 {
+            approval::service::approve_in_tx(txn, approver, instance_id, "同意")
+                .await
+                .unwrap_or_else(|e| panic!("第 {step} 级审批失败：{e}"));
+        }
+    }
+
+    /// 提交请假单：后端派生时长 240、状态置审批中、预占额度 240、起审批实例。
+    #[tokio::test]
+    async fn submit_derives_duration_locks_quota_and_starts_approval() {
+        let txn = test_txn().await;
+        ensure_time_off_flow(&txn).await;
+        let (employee_id, applicant_user, manager_user) = seed_applicant(&txn).await;
+        let type_id = seed_type(&txn, BALANCE_MODE_DEDUCT).await;
+        let day = unique_work_date();
+        seed_workday(&txn, day).await;
+        service::grant_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            employee_id,
+            type_id,
+            480,
+            GRANT_SOURCE_ISSUE,
+            "statutory",
+            "2030",
+            day,
+            None,
+            SOURCE_KIND_MANUAL,
+            0,
+        )
+        .await
+        .unwrap();
+
+        let request = service::create_time_off_request_in_tx(
+            &txn,
+            applicant_user,
+            &request_req(employee_id, type_id, day, 9, 13),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            request.duration_minutes, 240,
+            "09:00–13:00 落在无排班工作日内应派生 240 分钟"
+        );
+        assert_eq!(request.status, REQUEST_STATUS_PENDING);
+        assert!(request.approval_instance_id > 0, "提交必须起审批实例");
+
+        let (instance, records) =
+            approval::service::get_instance(&txn, request.approval_instance_id)
+                .await
+                .unwrap();
+        assert_eq!(instance.status, approval::INSTANCE_STATUS_PENDING);
+        assert_eq!(instance.biz_id, request.id, "实例应指向该请假单");
+        assert_eq!(
+            instance.current_approver_id, manager_user,
+            "第一级应解析到申请人的直属上级"
+        );
+        assert_eq!(records.len(), 2, "两级节点一次展开");
+
+        let balance = repo::find_balance_by_account_for_update(&txn, employee_id, type_id, "2030")
+            .await
+            .unwrap()
+            .expect("应建额度账户");
+        assert_eq!(balance.granted_minutes, 480);
+        assert_eq!(balance.locked_minutes, 240, "提交即预占 240 分钟");
+        assert_eq!(balance.used_minutes, 0, "审批中不得实扣");
+
+        let grants = repo::find_grant_page(
+            &txn,
+            &TimeOffGrantFilter {
+                employee_id: Some(employee_id),
+                time_off_type_id: Some(type_id),
+                ..Default::default()
+            },
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            grants
+                .items
+                .iter()
+                .map(|g| g.remaining_minutes)
+                .sum::<i32>(),
+            240,
+            "预占即扣批次：批次剩余必须同步减少"
+        );
+    }
+
+    /// 通过 → 预占转实扣；驳回 → 释放预占；两条路径都要落对账户字段与流水。
+    #[tokio::test]
+    async fn approve_consumes_quota_and_reject_releases_it() {
+        let txn = test_txn().await;
+        ensure_time_off_flow(&txn).await;
+        let (employee_id, applicant_user, manager_user) = seed_applicant(&txn).await;
+        let type_id = seed_type(&txn, BALANCE_MODE_DEDUCT).await;
+        let (day_ok, day_no) = (unique_work_date(), unique_work_date());
+        seed_workday(&txn, day_ok).await;
+        seed_workday(&txn, day_no).await;
+        service::grant_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            employee_id,
+            type_id,
+            960,
+            GRANT_SOURCE_ISSUE,
+            "statutory",
+            "2030",
+            day_ok,
+            None,
+            SOURCE_KIND_MANUAL,
+            0,
+        )
+        .await
+        .unwrap();
+
+        let approved_request = service::create_time_off_request_in_tx(
+            &txn,
+            applicant_user,
+            &request_req(employee_id, type_id, day_ok, 9, 13),
+        )
+        .await
+        .unwrap();
+        approve_two_nodes(&txn, approved_request.approval_instance_id, manager_user).await;
+
+        let rejected_request = service::create_time_off_request_in_tx(
+            &txn,
+            applicant_user,
+            &request_req(employee_id, type_id, day_no, 9, 13),
+        )
+        .await
+        .unwrap();
+        approval::service::reject_in_tx(
+            &txn,
+            manager_user,
+            rejected_request.approval_instance_id,
+            "不批",
+        )
+        .await
+        .unwrap();
+
+        let reloaded_ok = service::get_time_off_request(&txn, approved_request.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            reloaded_ok.status, REQUEST_STATUS_APPROVED,
+            "审批通过应落已通过"
+        );
+        let reloaded_no = service::get_time_off_request(&txn, rejected_request.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            reloaded_no.status, REQUEST_STATUS_REJECTED,
+            "驳回应落已驳回"
+        );
+
+        let balance = repo::find_balance_by_account_for_update(&txn, employee_id, type_id, "2030")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(balance.used_minutes, 240, "只有通过的那张单计入实扣");
+        assert_eq!(balance.locked_minutes, 0, "两张单都应离开预占态");
+        assert_eq!(
+            service::available_minutes(&txn, employee_id, type_id, "2030", day_ok)
+                .await
+                .unwrap(),
+            720,
+            "可用 = 960 − 240（驳回的那 240 已释放）"
+        );
+
+        let release_logs = repo::find_logs_by_source(
+            &txn,
+            SOURCE_KIND_TIME_OFF,
+            rejected_request.id,
+            LOG_BIZ_TIME_OFF_RELEASE,
+        )
+        .await
+        .unwrap();
+        assert!(!release_logs.is_empty(), "驳回必须写释放流水");
+        let lock_logs = repo::find_logs_by_source(
+            &txn,
+            SOURCE_KIND_TIME_OFF,
+            approved_request.id,
+            LOG_BIZ_TIME_OFF_LOCK,
+        )
+        .await
+        .unwrap();
+        assert!(!lock_logs.is_empty(), "通过的单据应有预占流水");
+        assert!(
+            lock_logs.iter().all(|log| log.grant_id != 0),
+            "预占流水必须指向具体批次（预占即扣批次）"
+        );
+    }
+
+    /// 同一员工区间重叠的请假单必须被拒（跨假别的「读 → 判断 → 写」，靠员工行锁串行化）。
+    #[tokio::test]
+    async fn overlapping_request_is_rejected() {
+        let txn = test_txn().await;
+        ensure_time_off_flow(&txn).await;
+        let (employee_id, applicant_user, _manager) = seed_applicant(&txn).await;
+        let type_id = seed_type(&txn, BALANCE_MODE_DEDUCT).await;
+        let day = unique_work_date();
+        seed_workday(&txn, day).await;
+        service::grant_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            employee_id,
+            type_id,
+            960,
+            GRANT_SOURCE_ISSUE,
+            "statutory",
+            "2030",
+            day,
+            None,
+            SOURCE_KIND_MANUAL,
+            0,
+        )
+        .await
+        .unwrap();
+
+        let _first = service::create_time_off_request_in_tx(
+            &txn,
+            applicant_user,
+            &request_req(employee_id, type_id, day, 9, 13),
+        )
+        .await
+        .unwrap();
+
+        let err = service::create_time_off_request_in_tx(
+            &txn,
+            applicant_user,
+            &request_req(employee_id, type_id, day, 11, 15),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("重叠"),
+            "重叠区间必须被拒，实际：{err}"
+        );
+    }
+
+    /// 记录型假别（`balance_mode = 0`）：不建账户、不预占、不写流水，但单据与审批照常。
+    #[tokio::test]
+    async fn record_only_type_skips_ledger_entirely() {
+        let txn = test_txn().await;
+        ensure_time_off_flow(&txn).await;
+        let (employee_id, applicant_user, manager_user) = seed_applicant(&txn).await;
+        let type_id = seed_type(&txn, BALANCE_MODE_RECORD_ONLY).await;
+        let day = unique_work_date();
+        seed_workday(&txn, day).await;
+
+        let request = service::create_time_off_request_in_tx(
+            &txn,
+            applicant_user,
+            &request_req(employee_id, type_id, day, 9, 13),
+        )
+        .await
+        .unwrap();
+        assert_eq!(request.duration_minutes, 240, "记录型假别照样派生时长");
+        assert_eq!(request.status, REQUEST_STATUS_PENDING);
+        assert!(
+            repo::find_balance_by_account_for_update(&txn, employee_id, type_id, "2030")
+                .await
+                .unwrap()
+                .is_none(),
+            "记录型假别不得建额度账户"
+        );
+
+        approve_two_nodes(&txn, request.approval_instance_id, manager_user).await;
+        let reloaded = service::get_time_off_request(&txn, request.id)
+            .await
+            .unwrap();
+        assert_eq!(reloaded.status, REQUEST_STATUS_APPROVED);
+        let logs = repo::find_logs_by_source(
+            &txn,
+            SOURCE_KIND_TIME_OFF,
+            request.id,
+            LOG_BIZ_TIME_OFF_LOCK,
+        )
+        .await
+        .unwrap();
+        assert!(logs.is_empty(), "记录型假别不得写额度流水");
+    }
+
+    /// 撤销：申请人本人可撤销，撤销后释放预占、状态置已撤销。
+    #[tokio::test]
+    async fn cancel_releases_quota_and_marks_canceled() {
+        let txn = test_txn().await;
+        ensure_time_off_flow(&txn).await;
+        let (employee_id, applicant_user, _manager) = seed_applicant(&txn).await;
+        let type_id = seed_type(&txn, BALANCE_MODE_DEDUCT).await;
+        let day = unique_work_date();
+        seed_workday(&txn, day).await;
+        service::grant_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            employee_id,
+            type_id,
+            480,
+            GRANT_SOURCE_ISSUE,
+            "statutory",
+            "2030",
+            day,
+            None,
+            SOURCE_KIND_MANUAL,
+            0,
+        )
+        .await
+        .unwrap();
+
+        let request = service::create_time_off_request_in_tx(
+            &txn,
+            applicant_user,
+            &request_req(employee_id, type_id, day, 9, 13),
+        )
+        .await
+        .unwrap();
+
+        let err = service::cancel_time_off_request_in_tx(&txn, ACTOR_ID, request.id)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("只能操作本人"),
+            "非申请人不得撤销，实际：{err}"
+        );
+
+        let canceled = service::cancel_time_off_request_in_tx(&txn, applicant_user, request.id)
+            .await
+            .unwrap();
+        assert_eq!(canceled.status, REQUEST_STATUS_CANCELED);
+
+        let balance = repo::find_balance_by_account_for_update(&txn, employee_id, type_id, "2030")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(balance.locked_minutes, 0, "撤销后预占归零");
+        assert_eq!(balance.used_minutes, 0, "撤销不得计入实扣");
+        assert_eq!(
+            service::available_minutes(&txn, employee_id, type_id, "2030", day)
+                .await
+                .unwrap(),
+            480,
+            "撤销后可用额度恢复"
+        );
+        let (instance, _) = approval::service::get_instance(&txn, request.approval_instance_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            instance.status,
+            approval::INSTANCE_STATUS_CANCELED,
+            "撤销请假单必须同时撤销审批实例"
+        );
+    }
+
+    /// 已通过的批次不得被撤销（`cancel_grant` 的状态护栏）——顺带钉住「预占即扣批次」下
+    /// 撤销的剩余口径：批次剩余为 0 时撤销不动账户 `granted`。
+    #[tokio::test]
+    async fn cancel_grant_keeps_ledger_consistent_while_preoccupied() {
+        let txn = test_txn().await;
+        let (employee_id, _applicant_user, _manager) = seed_applicant(&txn).await;
+        let type_id = seed_type(&txn, BALANCE_MODE_DEDUCT).await;
+        let day = unique_work_date();
+        let batch = service::grant_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            employee_id,
+            type_id,
+            480,
+            GRANT_SOURCE_ISSUE,
+            "statutory",
+            "2030",
+            day,
+            None,
+            SOURCE_KIND_MANUAL,
+            0,
+        )
+        .await
+        .unwrap();
+        service::lock_time_off_in_tx(
+            &txn,
+            ACTOR_ID,
+            employee_id,
+            type_id,
+            480,
+            SOURCE_KIND_TIME_OFF,
+            900_500_777,
+            day,
+        )
+        .await
+        .unwrap();
+
+        super::cancel_grant_in_tx(&txn, ACTOR_ID, batch)
+            .await
+            .unwrap();
+
+        let balance = repo::find_balance_by_account_for_update(&txn, employee_id, type_id, "2030")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            balance.granted_minutes, 480,
+            "批次剩余已是 0（全被预占），撤销不得回冲累计授予"
+        );
+        assert_eq!(balance.locked_minutes, 480, "在途预占不受 HR 撤销影响");
+        let grant = repo::find_grant_by_id(&txn, batch).await.unwrap().unwrap();
+        assert_eq!(grant.status, GRANT_STATUS_CANCELED, "批次状态应为已撤销");
     }
 }

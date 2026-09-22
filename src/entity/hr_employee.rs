@@ -9,6 +9,8 @@ pub struct Model {
     pub id: u64,
     /// 关联平台用户 ID（sys_user.id，逻辑外键，1:1）
     pub user_id: u64,
+    /// 直属上级员工 ID（hr_employee.id；0=未设置）
+    pub manager_employee_id: u64,
     /// 入职日期
     pub hire_date: Option<Date>,
     /// 转正日期；None 表示尚未转正

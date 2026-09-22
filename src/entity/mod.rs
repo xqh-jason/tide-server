@@ -3,11 +3,21 @@
 pub mod prelude;
 
 // 业务实体（HR）
+pub mod hr_approval_flow;
+pub mod hr_approval_flow_node;
+pub mod hr_approval_instance;
+pub mod hr_approval_record;
+pub mod hr_attendance_record;
 pub mod hr_employee;
+pub mod hr_overtime_request;
+pub mod hr_shift;
+pub mod hr_shift_schedule;
 pub mod hr_time_off_balance;
 pub mod hr_time_off_balance_log;
 pub mod hr_time_off_grant;
+pub mod hr_time_off_request;
 pub mod hr_time_off_type;
+pub mod hr_work_calendar;
 
 pub mod sys_api;
 pub mod sys_config;

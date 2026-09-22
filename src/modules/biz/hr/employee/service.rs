@@ -1,13 +1,16 @@
-//! 员工档案业务：分页 / 创建（查重 + 可选联动建账号）/ 更新（敏感字段空串不改写）/
-//! 查询 / 删除（软删）。
+//! 员工档案业务：分页 / 创建（查重 + 直属上级校验 + 可选联动建账号）/
+//! 更新（敏感字段空串不改写）/ 查询 / 删除（软删）/ 批量取员工显示名。
 //!
 //! 写操作走 `*_in_tx` 业务实现 + 对外三行事务入口（同 position 域）；
-//! 需要查库的规则（`user_id` 查重、存在性判定）在本层，值域校验在 `validate` 层。
+//! 需要查库的规则（`user_id` 查重、存在性判定、直属上级合法性）在本层，
+//! 值域校验在 `validate` 层。
 //!
 //! 「建档案联动建账号」必须整个落在**一个**事务里：账号建于同一 `txn`，
 //! 因此只能调 `user_service::create_user_in_tx`，**不能**调 `user_service::create_user`
 //! （后者自持 `db.begin()`；sea-orm 1.1.20 真库无 savepoint，事务内嵌套 begin 会被
 //! MySQL 隐式提交，原子性即失效）。
+
+use std::collections::HashMap;
 
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction};
 
@@ -30,6 +33,35 @@ fn parse_date(field: &str, v: &Option<String>) -> Result<Option<chrono::NaiveDat
         .map_err(|_| AppError::Biz(format!("{field}格式应为 yyyy-MM-dd")))
 }
 
+/// 批量取员工显示名：`hr_employee.id` → `sys_user.username`。
+///
+/// 一次批量取档案（拿 `user_id`；软删档案不出现在映射里）→ 一次批量查名
+/// （`utils::user_ref::find_user_name_map_by_ids`，全项目唯一查名管道）→
+/// 回填 `employee_id → 显示名`。空入参早返；**不得逐行查库**。
+///
+/// 供指向「员工」而非「账号」的字段拼装显示名（如 `EmployeeResp::manager_employee_name`、
+/// 审批节点「直属上级」解析）；查不到的人（软删 / 不存在）不出现，调用方留空串。
+pub async fn find_employee_name_map(
+    db: &impl ConnectionTrait,
+    ids: &[u64],
+) -> Result<HashMap<u64, String>, AppError> {
+    use crate::modules::biz::hr::employee::repo as employee_repo;
+    use crate::utils::user_ref::{dedup_ids, find_user_name_map_by_ids};
+
+    let ids = dedup_ids(ids.to_vec());
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let employees = employee_repo::find_by_ids(db, &ids).await?;
+    let user_ids = employees.iter().map(|e| e.user_id).collect();
+    let names = find_user_name_map_by_ids(db, user_ids).await?;
+    Ok(employees
+        .into_iter()
+        .filter_map(|e| names.get(&e.user_id).cloned().map(|name| (e.id, name)))
+        .collect())
+}
+
 /// 档案分页：请求参数（keyword / 状态 / 学历 / 审计过滤）组装为 repo 过滤条件。
 ///
 /// 纯透传，不做业务判断；四个时间字段交 `utils::datetime::parse_datetime`
@@ -47,6 +79,7 @@ pub async fn page_employees(
         education: req.education,
         created_by: req.created_by,
         updated_by: req.updated_by,
+        manager_employee_id: req.manager_employee_id,
         created_at_begin: parse_datetime("createdAtBegin", &req.created_at_begin, false)?,
         created_at_end: parse_datetime("createdAtEnd", &req.created_at_end, true)?,
         updated_at_begin: parse_datetime("updatedAtBegin", &req.updated_at_begin, false)?,
@@ -59,9 +92,11 @@ pub async fn page_employees(
     )
 }
 
-/// 事务内创建档案：解析账号来源（关联已有 / 同事务新建）→ `user_id` 查重 → 落库。
+/// 事务内创建档案：解析账号来源（关联已有 / 同事务新建）→ `user_id` 查重 →
+/// 直属上级存在性校验 → 落库。
 ///
 /// `user_id` 与 `create_account` 恰好二选一（都传 / 都不传都是业务错误）。
+/// `manager_employee_id` 为 `0` 表示未设置，非 0 时必须指向有效档案（软删视为不存在）。
 pub(crate) async fn create_employee_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
@@ -114,9 +149,23 @@ pub(crate) async fn create_employee_in_tx(
         return Err(AppError::Biz("该用户已有员工档案".into()));
     }
 
+    // 直属上级必须是有员工的档案（软删视为不存在）；0 = 未设置。
+    // 新建档案的 id 尚未生成，因此不存在「把自己设为上级」的可能，无需比对。
+    if req.manager_employee_id != 0
+        && employee_repo::find_by_id(txn, req.manager_employee_id)
+            .await?
+            .is_none()
+    {
+        return Err(AppError::Biz(format!(
+            "直属上级不存在：{}",
+            req.manager_employee_id
+        )));
+    }
+
     // 审计字段由 repo 统一盖章，入参不含人字段
     let model = hr_employee::ActiveModel {
         user_id: Set(user_id),
+        manager_employee_id: Set(req.manager_employee_id),
         hire_date: Set(parse_date("入职日期", &req.hire_date)?),
         regular_date: Set(parse_date("转正日期", &req.regular_date)?),
         leave_date: Set(parse_date("离职日期", &req.leave_date)?),
@@ -135,7 +184,8 @@ pub(crate) async fn create_employee_in_tx(
     Ok(employee_repo::create_employee_in_tx(txn, model, actor_id).await?)
 }
 
-/// 事务内更新档案：判存在 → 敏感字段空串保持原值 → 窄写（不动 `user_id`）。
+/// 事务内更新档案：判存在 → 直属上级校验（非本人 / 必须存在）→
+/// 敏感字段空串保持原值 → 窄写（不动 `user_id`）。
 pub(crate) async fn update_employee_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
@@ -147,6 +197,21 @@ pub(crate) async fn update_employee_in_tx(
     let Some(existing) = employee_repo::find_by_id(txn, req.id).await? else {
         return Err(AppError::Biz(format!("员工档案不存在：{}", req.id)));
     };
+
+    // 直属上级：不能是本人；非 0 时必须存在（软删视为不存在）
+    if req.manager_employee_id == req.id {
+        return Err(AppError::Biz("直属上级不能是本人".into()));
+    }
+    if req.manager_employee_id != 0
+        && employee_repo::find_by_id(txn, req.manager_employee_id)
+            .await?
+            .is_none()
+    {
+        return Err(AppError::Biz(format!(
+            "直属上级不存在：{}",
+            req.manager_employee_id
+        )));
+    }
 
     // 敏感字段空串 = 不修改（列表 / 详情回传掩码值，前端编辑表单不回填）
     let id_card = if req.id_card.trim().is_empty() {
@@ -163,6 +228,7 @@ pub(crate) async fn update_employee_in_tx(
     // 窄写：只 Set 业务变更列（不动 user_id，`created_by` 由 repo 保持 NotSet）
     let model = hr_employee::ActiveModel {
         id: Set(req.id),
+        manager_employee_id: Set(req.manager_employee_id),
         hire_date: Set(parse_date("入职日期", &req.hire_date)?),
         regular_date: Set(parse_date("转正日期", &req.regular_date)?),
         leave_date: Set(parse_date("离职日期", &req.leave_date)?),
@@ -312,6 +378,7 @@ mod tests {
         CreateEmployeeReq {
             user_id,
             create_account,
+            manager_employee_id: 0,
             hire_date: Some("2026-01-01".to_string()),
             regular_date: None,
             leave_date: None,
@@ -336,6 +403,26 @@ mod tests {
             phone: String::new(),
             email: String::new(),
             role_ids: vec![],
+        }
+    }
+
+    /// 只改直属上级的更新请求骨架：敏感字段空串 = 不改写，其余业务列取稳定值。
+    fn update_req(id: u64, manager_employee_id: u64) -> UpdateEmployeeReq {
+        UpdateEmployeeReq {
+            id,
+            manager_employee_id,
+            hire_date: Some("2026-01-01".to_string()),
+            regular_date: None,
+            leave_date: None,
+            employment_status: 1,
+            education: 3,
+            graduate_school: String::new(),
+            major: String::new(),
+            id_card: String::new(),
+            emergency_contact: String::new(),
+            emergency_phone: String::new(),
+            bank_account: String::new(),
+            remark: String::new(),
         }
     }
 
@@ -445,6 +532,7 @@ mod tests {
             ACTOR_ID,
             &UpdateEmployeeReq {
                 id: created.id,
+                manager_employee_id: 0,
                 hire_date: Some("2026-02-02".to_string()),
                 regular_date: Some("2026-05-02".to_string()),
                 leave_date: None,
@@ -513,6 +601,139 @@ mod tests {
         assert!(
             missing_err.to_string().contains("员工档案不存在"),
             "不存在的档案应按「不存在」处理，实际：{missing_err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_employee_rejects_manager_without_live_profile() {
+        let db = test_txn().await;
+        let user = seed_user(&db).await;
+        let mut req = base_req(Some(user.id), None);
+        req.manager_employee_id = 9_999_999_999;
+
+        let err = create_employee_in_tx(&db, ACTOR_ID, req).await.unwrap_err();
+
+        assert!(
+            err.to_string().contains("直属上级不存在"),
+            "不存在的上级应被拒，实际：{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_employee_rejects_soft_deleted_manager() {
+        let db = test_txn().await;
+        let manager_user = seed_user(&db).await;
+        let manager = create_employee_in_tx(&db, ACTOR_ID, base_req(Some(manager_user.id), None))
+            .await
+            .unwrap();
+        delete_employee_in_tx(&db, ACTOR_ID, manager.id)
+            .await
+            .unwrap();
+
+        let user = seed_user(&db).await;
+        let mut req = base_req(Some(user.id), None);
+        req.manager_employee_id = manager.id;
+        let err = create_employee_in_tx(&db, ACTOR_ID, req).await.unwrap_err();
+
+        assert!(
+            err.to_string().contains("直属上级不存在"),
+            "软删档案不算有效上级，实际：{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_employee_rejects_self_as_manager() {
+        let db = test_txn().await;
+        let user = seed_user(&db).await;
+        let created = create_employee_in_tx(&db, ACTOR_ID, base_req(Some(user.id), None))
+            .await
+            .unwrap();
+
+        let err = update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, created.id))
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("直属上级不能是本人"),
+            "不能把自己设成自己的上级，实际：{err}"
+        );
+    }
+
+    /// 直属上级三态：创建落值 / 更新改写 / 更新传 0 清空。
+    #[tokio::test]
+    async fn create_and_update_employee_store_manager_employee_id() {
+        let db = test_txn().await;
+        let first_manager_user = seed_user(&db).await;
+        let first_manager =
+            create_employee_in_tx(&db, ACTOR_ID, base_req(Some(first_manager_user.id), None))
+                .await
+                .unwrap();
+        let second_manager_user = seed_user(&db).await;
+        let second_manager =
+            create_employee_in_tx(&db, ACTOR_ID, base_req(Some(second_manager_user.id), None))
+                .await
+                .unwrap();
+
+        let user = seed_user(&db).await;
+        let mut req = base_req(Some(user.id), None);
+        req.manager_employee_id = first_manager.id;
+        let created = create_employee_in_tx(&db, ACTOR_ID, req).await.unwrap();
+        assert_eq!(
+            created.manager_employee_id, first_manager.id,
+            "创建应落直属上级"
+        );
+
+        let moved =
+            update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, second_manager.id))
+                .await
+                .unwrap();
+        assert_eq!(
+            moved.manager_employee_id, second_manager.id,
+            "更新应改写直属上级"
+        );
+        let reread = get_employee(&db, created.id).await.unwrap();
+        assert_eq!(
+            reread.manager_employee_id, second_manager.id,
+            "改写后的上级应已落库"
+        );
+
+        let cleared = update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, 0))
+            .await
+            .unwrap();
+        assert_eq!(cleared.manager_employee_id, 0, "更新传 0 应清空直属上级");
+    }
+
+    /// 批量取名：空入参早返；命中回填显示名；软删 / 不存在的员工缺席。
+    #[tokio::test]
+    async fn find_employee_name_map_maps_live_employees_only() {
+        let db = test_txn().await;
+        let live_user = seed_user(&db).await;
+        let live = create_employee_in_tx(&db, ACTOR_ID, base_req(Some(live_user.id), None))
+            .await
+            .unwrap();
+        let deleted_user = seed_user(&db).await;
+        let deleted = create_employee_in_tx(&db, ACTOR_ID, base_req(Some(deleted_user.id), None))
+            .await
+            .unwrap();
+        delete_employee_in_tx(&db, ACTOR_ID, deleted.id)
+            .await
+            .unwrap();
+
+        let empty = find_employee_name_map(&db, &[]).await.unwrap();
+        assert!(empty.is_empty(), "空入参应直接返回空映射");
+
+        let names = find_employee_name_map(&db, &[live.id, deleted.id, 9_999_999_999])
+            .await
+            .unwrap();
+        assert_eq!(
+            names.get(&live.id).map(String::as_str),
+            Some(live_user.username.as_str()),
+            "应回填为档案所属账号的显示名"
+        );
+        assert!(!names.contains_key(&deleted.id), "软删档案不应出现在映射里");
+        assert!(
+            !names.contains_key(&9_999_999_999),
+            "不存在的员工不应出现在映射里"
         );
     }
 }

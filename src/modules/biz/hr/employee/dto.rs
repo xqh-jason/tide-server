@@ -45,6 +45,10 @@ pub struct EmployeeResp {
     pub user_id: u64,
     /// 关联账号显示名（username，后端批量拼装）
     pub user_name: String,
+    /// 直属上级员工 ID（`hr_employee.id`；0 = 未设置）
+    pub manager_employee_id: u64,
+    /// 直属上级显示名（后端批量拼装；未设置 / 上级档案不存在给空串）
+    pub manager_employee_name: String,
     /// 入职日期（`yyyy-MM-dd`）
     pub hire_date: Option<String>,
     /// 转正日期（`yyyy-MM-dd`）
@@ -81,6 +85,8 @@ impl From<hr_employee::Model> for EmployeeResp {
             id: m.id,
             user_id: m.user_id,
             user_name: String::new(),
+            manager_employee_id: m.manager_employee_id,
+            manager_employee_name: String::new(),
             hire_date: fmt_date(m.hire_date),
             regular_date: fmt_date(m.regular_date),
             leave_date: fmt_date(m.leave_date),
@@ -112,6 +118,19 @@ impl UserRefNames for EmployeeResp {
     }
 }
 
+impl EmployeeResp {
+    /// 按「员工 ID → 显示名」映射填直属上级名（0 = 未设置 / 查不到给空串）。
+    ///
+    /// `manager_employee_id` 指向 `hr_employee.id`（不是 `sys_user.id`），因此**不**走
+    /// `UserRefNames` 管道；映射由 `service::find_employee_name_map` 一次批量查后在 api 层回填。
+    pub fn set_manager_name(&mut self, names: &HashMap<u64, String>) {
+        self.manager_employee_name = names
+            .get(&self.manager_employee_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+}
+
 /// 员工档案列表请求：分页字段内嵌 `PageQuery`，过滤条件在此声明。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -129,6 +148,8 @@ pub struct EmployeeListReq {
     pub created_by: Option<u64>,
     /// 更新人 ID 精确过滤；不传查全部
     pub updated_by: Option<u64>,
+    /// 直属上级员工 ID 精确过滤；不传查全部
+    pub manager_employee_id: Option<u64>,
     /// 创建时间范围起（含边界）；不传查全部
     pub created_at_begin: Option<String>,
     /// 创建时间范围止（含边界）；不传查全部
@@ -147,6 +168,7 @@ pub struct EmployeeFilter {
     pub education: Option<i8>,
     pub created_by: Option<u64>,
     pub updated_by: Option<u64>,
+    pub manager_employee_id: Option<u64>,
     pub created_at_begin: Option<chrono::NaiveDateTime>,
     pub created_at_end: Option<chrono::NaiveDateTime>,
     pub updated_at_begin: Option<chrono::NaiveDateTime>,
@@ -189,6 +211,9 @@ pub struct CreateEmployeeReq {
     pub user_id: Option<u64>,
     /// 同时创建登录账号（与 userId 二选一）
     pub create_account: Option<CreateAccountReq>,
+    /// 直属上级员工 ID（`hr_employee.id`；0 = 未设置）
+    #[serde(default)]
+    pub manager_employee_id: u64,
     /// 入职日期（`yyyy-MM-dd`）
     pub hire_date: Option<String>,
     /// 转正日期（`yyyy-MM-dd`）
@@ -231,6 +256,9 @@ pub struct CreateEmployeeReq {
 pub struct UpdateEmployeeReq {
     /// 目标档案 id
     pub id: u64,
+    /// 直属上级员工 ID（`hr_employee.id`；0 = 清空上级）
+    #[serde(default)]
+    pub manager_employee_id: u64,
     /// 入职日期（`yyyy-MM-dd`）
     pub hire_date: Option<String>,
     /// 转正日期（`yyyy-MM-dd`）
@@ -267,6 +295,7 @@ mod tests {
         hr_employee::Model {
             id: 9,
             user_id: 7,
+            manager_employee_id: 3,
             hire_date: None,
             regular_date: None,
             leave_date: None,
@@ -299,5 +328,32 @@ mod tests {
     fn mask_middle_short_input_is_returned_as_is() {
         assert_eq!(mask_middle("1234", 6, 4), "1234");
         assert_eq!(mask_middle("", 6, 4), "");
+    }
+
+    /// 上级字段按**员工 ID**（而非账号 ID）索引映射，0 = 未设置时查不到即留空串。
+    #[test]
+    fn resp_fills_manager_name_from_employee_id_map() {
+        let mut resp = EmployeeResp::from(model());
+        assert_eq!(resp.manager_employee_id, 3, "直属上级 ID 应原样搬运");
+        assert_eq!(
+            resp.manager_employee_name, "",
+            "名称由 service 批量拼装，转换时先留空串"
+        );
+
+        resp.set_manager_name(&HashMap::from([(3_u64, "王经理".to_string())]));
+        assert_eq!(
+            resp.manager_employee_name, "王经理",
+            "应按员工 ID 回填显示名"
+        );
+
+        let mut unset = EmployeeResp::from(hr_employee::Model {
+            manager_employee_id: 0,
+            ..model()
+        });
+        unset.set_manager_name(&HashMap::from([(3_u64, "王经理".to_string())]));
+        assert_eq!(
+            unset.manager_employee_name, "",
+            "0 = 未设置，映射里查不到应留空串"
+        );
     }
 }

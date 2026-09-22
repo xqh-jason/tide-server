@@ -8,8 +8,10 @@
 //!
 
 use crate::entity::{
-    hr_employee, hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
-    sys_api, sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job, sys_menu,
+    hr_approval_flow, hr_approval_instance, hr_approval_record, hr_attendance_record, hr_employee,
+    hr_overtime_request, hr_shift, hr_shift_schedule, hr_time_off_balance, hr_time_off_balance_log,
+    hr_time_off_grant, hr_time_off_request, hr_time_off_type, hr_work_calendar, sys_api,
+    sys_config, sys_dictionary, sys_dictionary_detail, sys_file, sys_job, sys_menu,
     sys_operation_log, sys_position, sys_refresh_token, sys_role, sys_site_config, sys_user,
 };
 use std::collections::HashMap;
@@ -157,6 +159,31 @@ impl UserRefIds for sys_refresh_token::Model {
     }
 }
 
+impl UserRefIds for hr_approval_flow::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_approval_instance::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        // 申请人 + 当前审批人（角色池时为 0，取名时空缺）+ 审计人字段
+        vec![
+            self.applicant_id,
+            self.current_approver_id,
+            self.created_by,
+            self.updated_by,
+        ]
+    }
+}
+
+impl UserRefIds for hr_approval_record::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        // 审批人（角色池时为 0）+ 实际操作人
+        vec![self.approver_id, self.acted_by]
+    }
+}
+
 impl UserRefIds for hr_time_off_type::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         vec![self.created_by, self.updated_by]
@@ -179,6 +206,42 @@ impl UserRefIds for hr_time_off_balance_log::Model {
     fn user_ref_ids(&self) -> Vec<u64> {
         // append-only 流水表：无 created_by / updated_by 审计人字段对，唯一人字段是操作人
         vec![self.operator_id]
+    }
+}
+
+impl UserRefIds for hr_time_off_request::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_overtime_request::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_shift::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_shift_schedule::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_attendance_record::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
+    }
+}
+
+impl UserRefIds for hr_work_calendar::Model {
+    fn user_ref_ids(&self) -> Vec<u64> {
+        vec![self.created_by, self.updated_by]
     }
 }
 
@@ -394,6 +457,7 @@ mod tests {
         let row = hr_employee::Model {
             id: 1,
             user_id: 7,
+            manager_employee_id: 0,
             hire_date: None,
             regular_date: None,
             leave_date: None,
@@ -426,6 +490,8 @@ mod tests {
             time_off_type_id: 3,
             source: 2,
             reason: "manual".to_string(),
+            source_kind: 0,
+            source_id: 0,
             period: "2026".to_string(),
             minutes: 480,
             remaining_minutes: 240,

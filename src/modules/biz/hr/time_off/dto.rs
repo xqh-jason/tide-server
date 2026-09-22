@@ -15,7 +15,8 @@ use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::entity::{
-    hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
+    hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_request,
+    hr_time_off_type,
 };
 use crate::utils::PageQuery;
 use crate::utils::serde_format::format_datetime;
@@ -268,6 +269,10 @@ pub struct TimeOffGrantResp {
     pub source: i8,
     /// 发放依据
     pub reason: String,
+    /// 来源对象类型：0 无（HR 发放/手工调整）1 系统任务 2 请假单 3 加班单 4 手工
+    pub source_kind: i8,
+    /// 来源对象 ID（配合 sourceKind 追溯「哪个加班单 / 请假单产生的批次」；0=无）
+    pub source_id: u64,
     /// 归属周期
     pub period: String,
     /// 授予分钟数
@@ -305,6 +310,8 @@ impl From<hr_time_off_grant::Model> for TimeOffGrantResp {
             time_off_type_name: String::new(),
             source: m.source,
             reason: m.reason,
+            source_kind: m.source_kind,
+            source_id: m.source_id,
             period: m.period,
             minutes: m.minutes,
             remaining_minutes: m.remaining_minutes,
@@ -525,5 +532,177 @@ impl From<hr_time_off_balance_log::Model> for TimeOffBalanceLogResp {
 impl UserRefNames for TimeOffBalanceLogResp {
     fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
         self.operator_name = names.get(&self.operator_id).cloned().unwrap_or_default();
+    }
+}
+
+// —— 请假单（P2）：单据的创建 / 修改 / 提交 / 撤销 / 查询 ——
+
+/// 请假单列表请求。
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeOffRequestListReq {
+    /// 分页参数（page / page_size）
+    #[serde(flatten)]
+    pub page: PageQuery,
+    /// 员工档案 ID 精确过滤；不传查全部
+    pub employee_id: Option<u64>,
+    /// 假期类型 ID 精确过滤；不传查全部
+    pub time_off_type_id: Option<u64>,
+    /// 状态精确过滤（1 审批中 2 已通过 3 已驳回 4 已撤销）；不传查全部
+    pub status: Option<i8>,
+    /// 请假开始时间范围起（`yyyy-MM-dd HH:mm:ss` 或 `yyyy-MM-dd`）
+    pub start_at_begin: Option<String>,
+    /// 请假开始时间范围止
+    pub start_at_end: Option<String>,
+}
+
+/// 我的请假单请求（员工身份由登录用户推导，不收 `employeeId`）。
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MineTimeOffRequestReq {
+    /// 分页参数（page / page_size）
+    #[serde(flatten)]
+    pub page: PageQuery,
+    /// 状态精确过滤；不传查全部
+    pub status: Option<i8>,
+}
+
+/// 请假单分页过滤条件（repo 层入参，分页参数另行传入）。
+#[derive(Debug, Clone, Default)]
+pub struct TimeOffRequestFilter {
+    /// 员工档案 ID 精确过滤
+    pub employee_id: Option<u64>,
+    /// 假期类型 ID 精确过滤
+    pub time_off_type_id: Option<u64>,
+    /// 状态精确过滤
+    pub status: Option<i8>,
+    /// 请假开始时间范围起
+    pub start_at_begin: Option<chrono::NaiveDateTime>,
+    /// 请假开始时间范围止
+    pub start_at_end: Option<chrono::NaiveDateTime>,
+    /// 审批实例 ID 精确过滤
+    pub approval_instance_id: Option<u64>,
+}
+
+/// 创建请假单请求（**建单即提交**：落库、预占额度、起审批实例在同一个事务里完成）。
+///
+/// 刻意**不接受 `durationMinutes`**：时长由后端按「排班 × 工作日历」派生（防伪造），
+/// 前端只需提交起止时间。
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTimeOffRequestReq {
+    /// 员工档案 ID
+    pub employee_id: u64,
+    /// 假期类型 ID
+    pub time_off_type_id: u64,
+    /// 请假开始时间（`yyyy-MM-dd HH:mm:ss`）
+    pub start_at: String,
+    /// 请假结束时间（`yyyy-MM-dd HH:mm:ss`）
+    pub end_at: String,
+    /// 请假事由
+    pub reason: String,
+    /// 附件 ID（sys_file.id；0=无）
+    #[serde(default)]
+    pub attachment_id: u64,
+    /// 备注
+    #[serde(default)]
+    pub remark: String,
+}
+
+/// 修改请假单请求（仅「已驳回 / 已撤销」可改，改完需重新提交）。
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTimeOffRequestReq {
+    /// 请假单主键
+    pub id: u64,
+    /// 假期类型 ID
+    pub time_off_type_id: u64,
+    /// 请假开始时间（`yyyy-MM-dd HH:mm:ss`）
+    pub start_at: String,
+    /// 请假结束时间（`yyyy-MM-dd HH:mm:ss`）
+    pub end_at: String,
+    /// 请假事由
+    pub reason: String,
+    /// 附件 ID（sys_file.id；0=无）
+    #[serde(default)]
+    pub attachment_id: u64,
+    /// 备注
+    #[serde(default)]
+    pub remark: String,
+}
+
+/// 请假单响应体。
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeOffRequestResp {
+    pub id: u64,
+    /// 员工档案 ID
+    pub employee_id: u64,
+    /// 员工显示名（service 批量拼装）
+    pub employee_name: String,
+    /// 假期类型 ID
+    pub time_off_type_id: u64,
+    /// 假期类型名称（service 批量拼装）
+    pub time_off_type_name: String,
+    /// 请假开始时间（`yyyy-MM-dd HH:mm:ss`）
+    pub start_at: String,
+    /// 请假结束时间
+    pub end_at: String,
+    /// 请假分钟数（后端按排班 × 工作日历派生）
+    pub duration_minutes: i32,
+    /// 请假事由
+    pub reason: String,
+    /// 附件 ID
+    pub attachment_id: u64,
+    /// 状态：1 审批中 2 已通过 3 已驳回 4 已撤销
+    pub status: i8,
+    /// 审批实例 ID（0=无）
+    pub approval_instance_id: u64,
+    /// 备注
+    pub remark: String,
+    /// 创建时间（`yyyy-MM-dd HH:mm:ss`）
+    pub created_at: String,
+    /// 更新时间
+    pub updated_at: String,
+    /// 创建人 ID（sys_user.id）
+    pub created_by: u64,
+    /// 更新人 ID（sys_user.id）
+    pub updated_by: u64,
+    /// 创建人显示名（`fill_user_names` 批量拼装）
+    pub created_by_name: String,
+    /// 更新人显示名（`fill_user_names` 批量拼装）
+    pub updated_by_name: String,
+}
+
+impl From<hr_time_off_request::Model> for TimeOffRequestResp {
+    fn from(m: hr_time_off_request::Model) -> Self {
+        Self {
+            id: m.id,
+            employee_id: m.employee_id,
+            employee_name: String::new(),
+            time_off_type_id: m.time_off_type_id,
+            time_off_type_name: String::new(),
+            start_at: format_datetime(m.start_at),
+            end_at: format_datetime(m.end_at),
+            duration_minutes: m.duration_minutes,
+            reason: m.reason,
+            attachment_id: m.attachment_id,
+            status: m.status,
+            approval_instance_id: m.approval_instance_id,
+            remark: m.remark,
+            created_at: format_datetime(m.created_at),
+            updated_at: format_datetime(m.updated_at),
+            created_by: m.created_by,
+            updated_by: m.updated_by,
+            created_by_name: String::new(),
+            updated_by_name: String::new(),
+        }
+    }
+}
+
+impl UserRefNames for TimeOffRequestResp {
+    fn set_user_ref_names(&mut self, names: &HashMap<u64, String>) {
+        self.created_by_name = names.get(&self.created_by).cloned().unwrap_or_default();
+        self.updated_by_name = names.get(&self.updated_by).cloned().unwrap_or_default();
     }
 }

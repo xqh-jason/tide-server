@@ -3,9 +3,11 @@
 //! 函数顺序 = `mod.rs` 路由挂载顺序：list → create → update → get → delete。
 //!
 //! handler 只做三件事：取状态（`AppState`）/ 取操作人（`AuthUser`）→ 预取值域（字典）
-//! → 调 validate + service → 拼显示名（`fill_user_names`）。业务规则不写在这里。
+//! → 调 validate + service → 拼显示名（`fill_user_names`；直属上级名走本文件
+//! `fill_manager_names`）。业务规则不写在这里。
 use salvo::oapi::endpoint;
 use salvo::prelude::*;
+use sea_orm::ConnectionTrait;
 
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
@@ -20,6 +22,31 @@ use crate::utils::request::JsonBody;
 use crate::utils::user_ref::fill_user_names;
 use crate::utils::{ApiResponse, ApiResult, IdReq, PageResult};
 
+/// 给响应批量回填直属上级显示名（未设置 / 上级档案不存在留空串）。
+///
+/// `manager_employee_id` 指向 `hr_employee.id`（不是 `sys_user.id`），不走
+/// `fill_user_names` 的账号口径；映射由 `employee_service::find_employee_name_map`
+/// **一次批量查**（列表页禁止逐行查库）。
+async fn fill_manager_names(
+    db: &impl ConnectionTrait,
+    items: &mut [EmployeeResp],
+) -> Result<(), AppError> {
+    let ids: Vec<u64> = items
+        .iter()
+        .map(|item| item.manager_employee_id)
+        .filter(|id| *id != 0)
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let names = employee_service::find_employee_name_map(db, &ids).await?;
+    for item in items.iter_mut() {
+        item.set_manager_name(&names);
+    }
+    Ok(())
+}
+
 /// 员工档案列表（POST + JSON body）。
 #[endpoint]
 pub async fn list_employees(
@@ -29,8 +56,9 @@ pub async fn list_employees(
     let state = AppState::from_depot(depot)?;
     let req = body.into_inner();
     let data = employee_service::page_employees(&state.db, &req).await?;
-    // 填充关联账号 / 创建人 / 更新人显示名
-    let items = fill_user_names(&state.db, data.items, EmployeeResp::from).await?;
+    // 填充关联账号 / 创建人 / 更新人显示名 + 直属上级显示名（各一次批量查）
+    let mut items = fill_user_names(&state.db, data.items, EmployeeResp::from).await?;
+    fill_manager_names(&state.db, &mut items).await?;
     Ok(ApiResponse::ok(PageResult::new(
         data.total,
         data.total_pages,
@@ -56,9 +84,10 @@ pub async fn create_employee(
         .map_err(AppError::Biz)?;
 
     let model = employee_service::create_employee(&state.db, auth.user_id, req).await?;
-    let resp = fill_user_names(&state.db, vec![model], EmployeeResp::from)
+    let mut resp = fill_user_names(&state.db, vec![model], EmployeeResp::from)
         .await?
         .remove(0);
+    fill_manager_names(&state.db, std::slice::from_mut(&mut resp)).await?;
     Ok(ApiResponse::ok(resp))
 }
 
@@ -79,9 +108,10 @@ pub async fn update_employee(
         .map_err(AppError::Biz)?;
 
     let model = employee_service::update_employee(&state.db, auth.user_id, &req).await?;
-    let resp = fill_user_names(&state.db, vec![model], EmployeeResp::from)
+    let mut resp = fill_user_names(&state.db, vec![model], EmployeeResp::from)
         .await?
         .remove(0);
+    fill_manager_names(&state.db, std::slice::from_mut(&mut resp)).await?;
     Ok(ApiResponse::ok(resp))
 }
 
@@ -90,9 +120,10 @@ pub async fn update_employee(
 pub async fn get_employee(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<EmployeeResp> {
     let state = AppState::from_depot(depot)?;
     let model = employee_service::get_employee(&state.db, body.into_inner().id).await?;
-    let resp = fill_user_names(&state.db, vec![model], EmployeeResp::from)
+    let mut resp = fill_user_names(&state.db, vec![model], EmployeeResp::from)
         .await?
         .remove(0);
+    fill_manager_names(&state.db, std::slice::from_mut(&mut resp)).await?;
     Ok(ApiResponse::ok(resp))
 }
 

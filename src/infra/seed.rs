@@ -8,8 +8,8 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 
 use crate::entity::{
-    hr_time_off_type, sys_api, sys_dictionary, sys_dictionary_detail, sys_job, sys_menu, sys_role,
-    sys_role_menu, sys_user, sys_user_role,
+    hr_approval_flow, hr_approval_flow_node, hr_time_off_type, sys_api, sys_dictionary,
+    sys_dictionary_detail, sys_job, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role,
 };
 use crate::utils::crypt;
 
@@ -37,6 +37,21 @@ fn canonical_api_path(path: &str) -> anyhow::Result<String> {
 /// 播种互斥锁：ensure_seed 的"先查后插"在并发下不幂等（TOCTOU），
 /// 启动初始化与测试并发调用时通过进程内锁串行化。
 static SEED_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+/// 审批流种子定义：模板 + 其节点（业务域 `hr/approval`）。
+struct ApprovalFlowSeed {
+    biz_type: &'static str,
+    name: &'static str,
+    nodes: &'static [ApprovalNodeSeed],
+}
+
+/// 审批流节点种子：`node_type`：1 直属上级 / 2 部门负责人（1、2 类由申请人档案与部门关系解析）。
+struct ApprovalNodeSeed {
+    seq: i32,
+    node_name: &'static str,
+    node_type: i8,
+    skip_if_empty: i8,
+}
 
 /// 菜单种子定义：`parent` 引用父菜单的 `name`（顶层为 `None`）。
 struct MenuSeed {
@@ -729,6 +744,427 @@ const MENU_SEEDS: &[MenuSeed] = &[
         parent: Some("HrTimeOff"),
         sort: 3,
     },
+    MenuSeed {
+        name: "HrTimeOffRequest",
+        title: "请假申请",
+        path: "/hr/time-off/request",
+        component: "#/views/biz/hr/time-off/request/index.vue",
+        icon: "lucide:file-text",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrTimeOff"),
+        sort: 4,
+    },
+    MenuSeed {
+        name: "HrTimeOffRequestCreate",
+        title: "请假申请提交",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:time-off-request:create",
+        parent: Some("HrTimeOffRequest"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrTimeOffRequestUpdate",
+        title: "请假申请修改",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:time-off-request:update",
+        parent: Some("HrTimeOffRequest"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrTimeOffRequestSubmit",
+        title: "请假申请重新提交",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:time-off-request:submit",
+        parent: Some("HrTimeOffRequest"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "HrTimeOffRequestCancel",
+        title: "请假申请撤销",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:time-off-request:cancel",
+        parent: Some("HrTimeOffRequest"),
+        sort: 4,
+    },
+    MenuSeed {
+        name: "HrTimeOffRequestDelete",
+        title: "请假申请删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:time-off-request:delete",
+        parent: Some("HrTimeOffRequest"),
+        sort: 5,
+    },
+    MenuSeed {
+        name: "HrTimeOffMyRequest",
+        title: "我的请假",
+        path: "/hr/time-off/my-request",
+        component: "#/views/biz/hr/time-off/my-request/index.vue",
+        icon: "lucide:user-round-check",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrTimeOff"),
+        sort: 5,
+    },
+    // 审批基座（业务域 `biz/hr/approval`）：审批管理目录 + 模板配置 / 我的待办 / 审批记录三个页面。
+    MenuSeed {
+        name: "HrApproval",
+        title: "审批管理",
+        path: "/hr/approval",
+        component: "",
+        icon: "lucide:git-branch",
+        menu_type: 1,
+        permission: "",
+        parent: Some("Hr"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "HrApprovalFlow",
+        title: "审批流配置",
+        path: "/hr/approval/flow",
+        component: "#/views/biz/hr/approval/flow/index.vue",
+        icon: "lucide:workflow",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrApproval"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrApprovalFlowCreate",
+        title: "审批流新增",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:approval-flow:create",
+        parent: Some("HrApprovalFlow"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrApprovalFlowUpdate",
+        title: "审批流修改",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:approval-flow:update",
+        parent: Some("HrApprovalFlow"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrApprovalFlowDelete",
+        title: "审批流删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:approval-flow:delete",
+        parent: Some("HrApprovalFlow"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "HrApprovalFlowNode",
+        title: "审批节点维护",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:approval-flow-node:upsert",
+        parent: Some("HrApprovalFlow"),
+        sort: 4,
+    },
+    MenuSeed {
+        name: "HrApprovalTodo",
+        title: "我的待办",
+        path: "/hr/approval/todo",
+        component: "#/views/biz/hr/approval/todo/index.vue",
+        icon: "lucide:clipboard-check",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrApproval"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrApprovalTodoApprove",
+        title: "审批通过",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:approval-instance:approve",
+        parent: Some("HrApprovalTodo"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrApprovalTodoReject",
+        title: "审批驳回",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:approval-instance:reject",
+        parent: Some("HrApprovalTodo"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrApprovalInstance",
+        title: "审批记录",
+        path: "/hr/approval/instance",
+        component: "#/views/biz/hr/approval/instance/index.vue",
+        icon: "lucide:history",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrApproval"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "HrApprovalInstanceCancel",
+        title: "单据撤销",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:approval-instance:cancel",
+        parent: Some("HrApprovalInstance"),
+        sort: 1,
+    },
+    // 考勤（业务域 `biz/hr/attendance`）：排班制四张表 + 四个页面。
+    MenuSeed {
+        name: "HrAttendance",
+        title: "考勤管理",
+        path: "/hr/attendance",
+        component: "",
+        icon: "lucide:calendar-clock",
+        menu_type: 1,
+        permission: "",
+        parent: Some("Hr"),
+        sort: 4,
+    },
+    MenuSeed {
+        name: "HrAttendanceShift",
+        title: "班次管理",
+        path: "/hr/attendance/shift",
+        component: "#/views/biz/hr/attendance/shift/index.vue",
+        icon: "lucide:clock",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrAttendance"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrAttendanceShiftCreate",
+        title: "班次新增",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:attendance-shift:create",
+        parent: Some("HrAttendanceShift"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrAttendanceShiftUpdate",
+        title: "班次修改",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:attendance-shift:update",
+        parent: Some("HrAttendanceShift"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrAttendanceShiftDelete",
+        title: "班次删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:attendance-shift:delete",
+        parent: Some("HrAttendanceShift"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "HrAttendanceSchedule",
+        title: "排班管理",
+        path: "/hr/attendance/schedule",
+        component: "#/views/biz/hr/attendance/schedule/index.vue",
+        icon: "lucide:calendar-range",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrAttendance"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrAttendanceScheduleCreate",
+        title: "批量排班",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:attendance-schedule:batch-create",
+        parent: Some("HrAttendanceSchedule"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrAttendanceScheduleUpdate",
+        title: "排班调整",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:attendance-schedule:update",
+        parent: Some("HrAttendanceSchedule"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrAttendanceRecord",
+        title: "出勤记录",
+        path: "/hr/attendance/record",
+        component: "#/views/biz/hr/attendance/record/index.vue",
+        icon: "lucide:list-checks",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrAttendance"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "HrAttendanceRecordUpdate",
+        title: "出勤补录",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:attendance-record:update",
+        parent: Some("HrAttendanceRecord"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrAttendanceRecordImport",
+        title: "出勤导入",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:attendance-record:import",
+        parent: Some("HrAttendanceRecord"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrAttendanceCalendar",
+        title: "工作日历",
+        path: "/hr/attendance/calendar",
+        component: "#/views/biz/hr/attendance/calendar/index.vue",
+        icon: "lucide:calendar-days",
+        menu_type: 2,
+        permission: "",
+        parent: Some("HrAttendance"),
+        sort: 4,
+    },
+    MenuSeed {
+        name: "HrAttendanceCalendarUpsert",
+        title: "日历维护",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:attendance-calendar:upsert",
+        parent: Some("HrAttendanceCalendar"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrAttendanceCalendarImport",
+        title: "日历批量导入",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:attendance-calendar:batch-import",
+        parent: Some("HrAttendanceCalendar"),
+        sort: 2,
+    },
+    // 加班（业务域 `biz/hr/overtime`）：加班申请 + 我的加班。
+    MenuSeed {
+        name: "HrOvertime",
+        title: "加班申请",
+        path: "/hr/overtime",
+        component: "#/views/biz/hr/overtime/index.vue",
+        icon: "lucide:moon-star",
+        menu_type: 2,
+        permission: "",
+        parent: Some("Hr"),
+        sort: 5,
+    },
+    MenuSeed {
+        name: "HrOvertimeCreate",
+        title: "加班申请提交",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:overtime:create",
+        parent: Some("HrOvertime"),
+        sort: 1,
+    },
+    MenuSeed {
+        name: "HrOvertimeUpdate",
+        title: "加班申请修改",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:overtime:update",
+        parent: Some("HrOvertime"),
+        sort: 2,
+    },
+    MenuSeed {
+        name: "HrOvertimeSubmit",
+        title: "加班申请重新提交",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:overtime:submit",
+        parent: Some("HrOvertime"),
+        sort: 3,
+    },
+    MenuSeed {
+        name: "HrOvertimeCancel",
+        title: "加班申请撤销",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:overtime:cancel",
+        parent: Some("HrOvertime"),
+        sort: 4,
+    },
+    MenuSeed {
+        name: "HrOvertimeDelete",
+        title: "加班申请删除",
+        path: "",
+        component: "",
+        icon: "",
+        menu_type: 3,
+        permission: "hr:overtime:delete",
+        parent: Some("HrOvertime"),
+        sort: 5,
+    },
 ];
 
 /// API 种子定义：`path` 必须带 `/api/v1` 前缀且**写成规范化形式**（无尾斜杠、无重复
@@ -756,7 +1192,8 @@ const fn api(
     }
 }
 
-/// 全部管理端点登记（92 条）。刻意排除：
+/// 全部管理端点登记（当前 151 条：平台 87 + 人事 64；条数由守卫测试
+/// `ensure_seed_creates_all_api_seeds` 的常量长度断言兜底）。刻意排除：
 /// - 公开接口：/health、/captcha/generate、/auth/{login,logout}、GET /site-config/get；
 /// - 登录后每个用户必调的契约端点：POST /user/{info,access-codes,menus}
 ///   （登记即 fail-closed，会把所有非超管用户挡在登录态之外）。
@@ -1119,6 +1556,283 @@ const API_SEEDS: &[ApiSeed] = &[
         "额度流水查询",
         "假期额度",
     ),
+    // 请假单（业务域 hr/time-off）：建单即提交（预占额度 + 起审批实例）。
+    api(
+        "/api/v1/hr/time-off/request/list",
+        "POST",
+        "请假单列表查询",
+        "请假单",
+    ),
+    api(
+        "/api/v1/hr/time-off/request/create",
+        "POST",
+        "请假单创建并提交",
+        "请假单",
+    ),
+    api(
+        "/api/v1/hr/time-off/request/update",
+        "POST",
+        "请假单修改",
+        "请假单",
+    ),
+    api(
+        "/api/v1/hr/time-off/request/get",
+        "POST",
+        "请假单详情",
+        "请假单",
+    ),
+    api(
+        "/api/v1/hr/time-off/request/delete",
+        "POST",
+        "请假单删除",
+        "请假单",
+    ),
+    api(
+        "/api/v1/hr/time-off/request/submit",
+        "POST",
+        "请假单重新提交",
+        "请假单",
+    ),
+    api(
+        "/api/v1/hr/time-off/request/cancel",
+        "POST",
+        "请假单撤销",
+        "请假单",
+    ),
+    api(
+        "/api/v1/hr/time-off/request/mine",
+        "POST",
+        "我的请假单",
+        "请假单",
+    ),
+    // 审批基座（业务域 hr/approval）：与 DOMAINS 的 "hr/approval" 档位、菜单 HrApproval* 一一对应；
+    // 漏登 = 该端点 fail-open（未登记放行）。
+    api(
+        "/api/v1/hr/approval/flow/list",
+        "POST",
+        "审批流模板列表查询",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/flow/create",
+        "POST",
+        "审批流模板新增",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/flow/update",
+        "POST",
+        "审批流模板修改",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/flow/get",
+        "POST",
+        "审批流模板详情",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/flow/delete",
+        "POST",
+        "审批流模板删除",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/flow-node/list",
+        "POST",
+        "审批节点列表查询",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/flow-node/upsert",
+        "POST",
+        "审批节点新增或修改",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/flow-node/delete",
+        "POST",
+        "审批节点删除",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/instance/list",
+        "POST",
+        "审批实例列表查询",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/instance/get",
+        "POST",
+        "审批实例详情",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/instance/todo",
+        "POST",
+        "我的待办查询",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/instance/approve",
+        "POST",
+        "审批通过",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/instance/reject",
+        "POST",
+        "审批驳回",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/instance/cancel",
+        "POST",
+        "审批实例撤销",
+        "审批基座",
+    ),
+    api(
+        "/api/v1/hr/approval/record/list",
+        "POST",
+        "审批节点记录查询",
+        "审批基座",
+    ),
+    // 考勤（业务域 hr/attendance）：与 DOMAINS 的 "hr/attendance" 档位、菜单 HrAttendance* 一一对应。
+    api(
+        "/api/v1/hr/attendance/shift/list",
+        "POST",
+        "班次列表查询",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/shift/create",
+        "POST",
+        "班次新增",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/shift/update",
+        "POST",
+        "班次修改",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/shift/get",
+        "POST",
+        "班次详情",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/shift/delete",
+        "POST",
+        "班次删除",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/schedule/list",
+        "POST",
+        "排班列表查询",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/schedule/batch-create",
+        "POST",
+        "批量排班",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/schedule/update",
+        "POST",
+        "排班调整",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/schedule/month",
+        "POST",
+        "月度排班表查询",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/record/list",
+        "POST",
+        "出勤记录列表查询",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/record/get",
+        "POST",
+        "出勤记录详情",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/record/update",
+        "POST",
+        "出勤记录补录",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/record/import",
+        "POST",
+        "出勤记录导入",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/calendar/list",
+        "POST",
+        "工作日历列表查询",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/calendar/upsert",
+        "POST",
+        "工作日历维护",
+        "考勤管理",
+    ),
+    api(
+        "/api/v1/hr/attendance/calendar/batch-import",
+        "POST",
+        "工作日历批量导入",
+        "考勤管理",
+    ),
+    // 加班（业务域 hr/overtime）：与 DOMAINS 的 "hr/overtime" 档位、菜单 HrOvertime* 一一对应。
+    api(
+        "/api/v1/hr/overtime/list",
+        "POST",
+        "加班单列表查询",
+        "加班管理",
+    ),
+    api(
+        "/api/v1/hr/overtime/create",
+        "POST",
+        "加班单创建并提交",
+        "加班管理",
+    ),
+    api(
+        "/api/v1/hr/overtime/update",
+        "POST",
+        "加班单修改",
+        "加班管理",
+    ),
+    api("/api/v1/hr/overtime/get", "POST", "加班单详情", "加班管理"),
+    api(
+        "/api/v1/hr/overtime/delete",
+        "POST",
+        "加班单删除",
+        "加班管理",
+    ),
+    api(
+        "/api/v1/hr/overtime/submit",
+        "POST",
+        "加班单重新提交",
+        "加班管理",
+    ),
+    api(
+        "/api/v1/hr/overtime/cancel",
+        "POST",
+        "加班单撤销",
+        "加班管理",
+    ),
+    api("/api/v1/hr/overtime/mine", "POST", "我的加班单", "加班管理"),
 ];
 
 /// 按 name 查菜单 id（不过滤软删，与 seed 的查重口径一致）。
@@ -1494,7 +2208,7 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
         admin_id,
         SEED_DICT_TYPE_LEAVE_GRANT_REASON,
         "发放依据",
-        "假期额度发放依据（hr_time_off_grant.reason）：法定年假 / 公司福利年假 / 司龄增补 / 上年结转 / 加班转调休 / 手工调整 / 离职补偿",
+        "假期额度发放依据（hr_time_off_grant.reason）：法定年假 / 公司福利年假 / 司龄增补 / 上年结转 / 加班转调休 / 手工调整 / 离职补偿 / 驳回释放归还",
         &[
             ("法定年假", "statutory", 1),
             ("公司福利年假", "company", 2),
@@ -1503,6 +2217,9 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             ("加班转调休", "comp", 5),
             ("手工调整", "manual", 6),
             ("离职补偿", "severance", 7),
+            // 请假驳回 / 撤销时，若原批次已失效或已撤销，额度归还到当前账期的「归还批次」，
+            // 该批次的 `reason` 记本项（不等于新授予，故与上面 7 项区分）
+            ("驳回释放归还", "releaseRestore", 8),
         ],
     )
     .await?;
@@ -1544,6 +2261,106 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
             }
             .insert(db)
             .await?;
+        }
+    }
+
+    // 4.6 数据字典：审批业务类型（type=approvalBizType，字符串枚举）。
+    //     `hr_approval_flow.biz_type` 的取值与展示来源；只有这里列出的类型才允许建模板
+    //     （`approval::validate` 预取本字典做值域校验，新增业务类型先加字典项再建模板）。
+    const SEED_DICT_TYPE_APPROVAL_BIZ_TYPE: &str = "approvalBizType";
+    seed_int_dictionary(
+        db,
+        admin_id,
+        SEED_DICT_TYPE_APPROVAL_BIZ_TYPE,
+        "审批业务类型",
+        "审批流业务类型（hr_approval_flow.biz_type）：与 hr/approval 的终态分派 match 一一对应，新增类型须同步代码",
+        &[("请假单", "timeOff", 1), ("加班单", "overtime", 2)],
+    )
+    .await?;
+
+    // 4.7 审批流模板（业务域 hr/approval）：请假 / 加班两条链。
+    //     幂等口径：模板按 `biz_type` 查重（**不加软删过滤** —— 单列唯一键软删行仍占位）；
+    //     节点按 `(flow_id, seq)` 只补缺，**不覆盖**运维在「审批流配置」页改过的节点。
+    //     节点类型：1 直属上级（`hr_employee.manager_employee_id`）、2 部门负责人
+    //     （申请人主部门的 `is_leader`）；`skip_if_empty`：解析不到审批人时是否跳过，
+    //     **最后一个节点必须为 0**（否则单据会无人把关，`upsert_flow_node` 会拒绝这种配置）。
+    const SEED_APPROVAL_FLOWS: &[ApprovalFlowSeed] = &[
+        ApprovalFlowSeed {
+            biz_type: "timeOff",
+            name: "请假审批流（直属上级 → 部门负责人）",
+            nodes: &[
+                ApprovalNodeSeed {
+                    seq: 1,
+                    node_name: "直属上级",
+                    node_type: 1,
+                    skip_if_empty: 1,
+                },
+                ApprovalNodeSeed {
+                    seq: 2,
+                    node_name: "部门负责人",
+                    node_type: 2,
+                    skip_if_empty: 0,
+                },
+            ],
+        },
+        ApprovalFlowSeed {
+            biz_type: "overtime",
+            name: "加班审批流（直属上级）",
+            nodes: &[ApprovalNodeSeed {
+                seq: 1,
+                node_name: "直属上级",
+                node_type: 1,
+                skip_if_empty: 0,
+            }],
+        },
+    ];
+    for flow in SEED_APPROVAL_FLOWS {
+        let flow_id = match hr_approval_flow::Entity::find()
+            .filter(hr_approval_flow::Column::BizType.eq(flow.biz_type))
+            .one(db)
+            .await?
+        {
+            Some(existing) => existing.id,
+            None => {
+                hr_approval_flow::ActiveModel {
+                    biz_type: Set(String::from(flow.biz_type)),
+                    name: Set(String::from(flow.name)),
+                    status: Set(1),
+                    remark: Set(String::new()),
+                    // 种子数据的操作人统一记为 admin 自己
+                    created_by: Set(admin_id),
+                    updated_by: Set(admin_id),
+                    ..Default::default()
+                }
+                .insert(db)
+                .await?
+                .id
+            }
+        };
+
+        for node in flow.nodes {
+            let existing = hr_approval_flow_node::Entity::find()
+                .filter(hr_approval_flow_node::Column::FlowId.eq(flow_id))
+                .filter(hr_approval_flow_node::Column::Seq.eq(node.seq))
+                .one(db)
+                .await?;
+            if existing.is_none() {
+                hr_approval_flow_node::ActiveModel {
+                    flow_id: Set(flow_id),
+                    seq: Set(node.seq),
+                    node_name: Set(String::from(node.node_name)),
+                    node_type: Set(node.node_type),
+                    // 1/2 类节点由申请人档案与部门关系解析，不需要引用 ID
+                    approver_ref_id: Set(0),
+                    skip_if_empty: Set(node.skip_if_empty),
+                    remark: Set(String::new()),
+                    created_by: Set(admin_id),
+                    updated_by: Set(admin_id),
+                    ..Default::default()
+                }
+                .insert(db)
+                .await?;
+            }
         }
     }
 
@@ -2447,11 +3264,12 @@ mod tests {
                 "comp",
                 "company",
                 "manual",
+                "releaseRestore",
                 "seniority",
                 "severance",
                 "statutory"
             ],
-            "发放依据字典应恰好 7 项且不重复"
+            "发放依据字典应恰好 8 项且不重复"
         );
 
         // 初始 7 类假期类型：type_code 各 1 行、启用、值等于基线表
@@ -2492,6 +3310,68 @@ mod tests {
         assert_eq!(
             jobs[0].handler_name,
             crate::task::time_off_grant_expire::HANDLER_NAME
+        );
+    }
+
+    /// 审批基座种子：业务类型字典 + 两条审批流模板（请假 / 加班）都幂等落库，
+    /// 且**最后一个节点不允许跳过**（单据必须有人把关）、`timeOff` 流第 1 节点可跳过。
+    #[tokio::test]
+    async fn ensure_seed_creates_approval_flows_and_biz_type_dict() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let (_, details) = crate::modules::system::dictionary::service::get_dictionary_by_type(
+            &db,
+            "approvalBizType",
+        )
+        .await
+        .unwrap();
+        let mut values: Vec<String> = details.into_iter().map(|d| d.value).collect();
+        values.sort();
+        assert_eq!(
+            values,
+            vec!["overtime".to_string(), "timeOff".to_string()],
+            "审批业务类型字典应恰好两项（与 approval 的终态分派 match 对应）"
+        );
+
+        for (biz_type, expected_nodes) in [("timeOff", 2usize), ("overtime", 1usize)] {
+            let flows = hr_approval_flow::Entity::find()
+                .filter(hr_approval_flow::Column::BizType.eq(biz_type))
+                .all(&db)
+                .await
+                .unwrap();
+            assert_eq!(
+                flows.len(),
+                1,
+                "业务类型 {biz_type} 应恰好 1 条模板（幂等）"
+            );
+            assert_eq!(flows[0].status, 1, "模板应启用");
+
+            let nodes = hr_approval_flow_node::Entity::find()
+                .filter(hr_approval_flow_node::Column::FlowId.eq(flows[0].id))
+                .all(&db)
+                .await
+                .unwrap();
+            assert_eq!(nodes.len(), expected_nodes, "{biz_type} 模板节点数应稳定");
+
+            let last = nodes.iter().max_by_key(|n| n.seq).unwrap();
+            assert_eq!(
+                last.skip_if_empty, 0,
+                "{biz_type} 模板最后一个节点不允许跳过（解析不到审批人必须报错）"
+            );
+        }
+
+        // 调休假别是「加班转调休」的入账落点，必须存在且启用
+        let comp = hr_time_off_type::Entity::find()
+            .filter(hr_time_off_type::Column::TypeCode.eq("comp"))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("调休假别 comp 必须存在（加班转调休的入账落点）");
+        assert_eq!(comp.status, 1, "调休假别应启用");
+        assert_eq!(
+            comp.balance_mode, 1,
+            "调休假别必须扣额度（否则调休余额无处可记）"
         );
     }
 }

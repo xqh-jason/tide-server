@@ -3,5 +3,8 @@
 //! 每个子域一个目录 `biz/hr/<域>/{api, service, repo, dto}` 四件套；
 //! 在顶层 `modules/mod.rs` 的 `DOMAINS` 追加一行即可挂载。
 
+pub mod approval;
+pub mod attendance;
 pub mod employee;
+pub mod overtime;
 pub mod time_off;

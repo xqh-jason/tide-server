@@ -17,10 +17,12 @@ use sea_orm::entity::prelude::*;
 use sea_orm::{Condition, DatabaseTransaction, QueryOrder, QuerySelect};
 
 use crate::entity::{
-    hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant, hr_time_off_type,
+    hr_employee, hr_time_off_balance, hr_time_off_balance_log, hr_time_off_grant,
+    hr_time_off_request, hr_time_off_type,
 };
 use crate::modules::biz::hr::time_off::dto::{
-    TimeOffBalanceFilter, TimeOffBalanceLogFilter, TimeOffGrantFilter, TimeOffTypeFilter,
+    TimeOffBalanceFilter, TimeOffBalanceLogFilter, TimeOffGrantFilter, TimeOffRequestFilter,
+    TimeOffTypeFilter,
 };
 use crate::utils::PageData;
 
@@ -524,6 +526,276 @@ pub async fn find_balance_log_page(
         .order_by_desc(hr_time_off_balance_log::Column::Id);
     let page = crate::utils::paginate(select, db, page_index, page_size).await?;
     Ok(page)
+}
+
+// —— 请假单（P2）：单据表原语 ——
+
+/// 分页 + 动态过滤请假单（employee_id / time_off_type_id / status 精确，`start_at` 区间），
+/// 按 id 降序，恒排除软删。
+pub async fn find_request_page(
+    db: &impl ConnectionTrait,
+    filter: &TimeOffRequestFilter,
+    page_index: u64,
+    page_size: u64,
+) -> anyhow::Result<PageData<hr_time_off_request::Model>> {
+    let mut cond = Condition::all();
+
+    if let Some(employee_id) = filter.employee_id {
+        cond = cond.add(hr_time_off_request::Column::EmployeeId.eq(employee_id));
+    }
+    if let Some(time_off_type_id) = filter.time_off_type_id {
+        cond = cond.add(hr_time_off_request::Column::TimeOffTypeId.eq(time_off_type_id));
+    }
+    if let Some(status) = filter.status {
+        cond = cond.add(hr_time_off_request::Column::Status.eq(status));
+    }
+    if let Some(begin) = filter.start_at_begin {
+        cond = cond.add(hr_time_off_request::Column::StartAt.gte(begin));
+    }
+    if let Some(end) = filter.start_at_end {
+        cond = cond.add(hr_time_off_request::Column::StartAt.lte(end));
+    }
+    if let Some(request_id) = filter.approval_instance_id {
+        cond = cond.add(hr_time_off_request::Column::ApprovalInstanceId.eq(request_id));
+    }
+
+    let select = hr_time_off_request::Entity::find()
+        .filter(cond)
+        .filter(hr_time_off_request::Column::DeletedAt.is_null())
+        .order_by_desc(hr_time_off_request::Column::Id);
+
+    crate::utils::paginate(select, db, page_index, page_size).await
+}
+
+/// 按 id 查请假单（软删视为不存在）。
+pub async fn find_request_by_id(
+    db: &impl ConnectionTrait,
+    id: u64,
+) -> anyhow::Result<Option<hr_time_off_request::Model>> {
+    Ok(hr_time_off_request::Entity::find()
+        .filter(hr_time_off_request::Column::Id.eq(id))
+        .filter(hr_time_off_request::Column::DeletedAt.is_null())
+        .one(db)
+        .await?)
+}
+
+/// 按 id 加锁读请假单（`SELECT ... FOR UPDATE`）：「读 → 判断 → 写」的提交 / 撤销路径用。
+pub async fn find_request_by_id_for_update(
+    txn: &DatabaseTransaction,
+    id: u64,
+) -> anyhow::Result<Option<hr_time_off_request::Model>> {
+    Ok(hr_time_off_request::Entity::find()
+        .filter(hr_time_off_request::Column::Id.eq(id))
+        .filter(hr_time_off_request::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .one(txn)
+        .await?)
+}
+
+/// 查同员工区间重叠的**有效**请假单（`status IN (1 审批中, 2 已通过)`）。
+///
+/// 重叠判据：`start_at < end_at_new AND end_at > start_at_new`（左闭右开语义下的区间相交）；
+/// `exclude_id` 非 0 时排除自身（修改单据时用）。返回行数由 service 判定。
+pub async fn find_overlapping_requests(
+    db: &impl ConnectionTrait,
+    employee_id: u64,
+    exclude_id: u64,
+    start_at: DateTime,
+    end_at: DateTime,
+) -> anyhow::Result<Vec<hr_time_off_request::Model>> {
+    let mut cond = Condition::all()
+        .add(hr_time_off_request::Column::EmployeeId.eq(employee_id))
+        .add(hr_time_off_request::Column::Status.is_in([
+            super::REQUEST_STATUS_PENDING,
+            super::REQUEST_STATUS_APPROVED,
+        ]))
+        .add(hr_time_off_request::Column::StartAt.lt(end_at))
+        .add(hr_time_off_request::Column::EndAt.gt(start_at));
+    if exclude_id != 0 {
+        cond = cond.add(hr_time_off_request::Column::Id.ne(exclude_id));
+    }
+
+    Ok(hr_time_off_request::Entity::find()
+        .filter(cond)
+        .filter(hr_time_off_request::Column::DeletedAt.is_null())
+        .all(db)
+        .await?)
+}
+
+/// 某假期类型是否已有请假单（类型删除护栏：有单据就不让删类型）。
+pub async fn count_requests_by_type(
+    db: &impl ConnectionTrait,
+    time_off_type_id: u64,
+) -> anyhow::Result<u64> {
+    use sea_orm::PaginatorTrait;
+    Ok(hr_time_off_request::Entity::find()
+        .filter(hr_time_off_request::Column::TimeOffTypeId.eq(time_off_type_id))
+        .filter(hr_time_off_request::Column::DeletedAt.is_null())
+        .count(db)
+        .await?)
+}
+
+/// 事务内创建请假单：审计盖章（创建人与更新人同源）。
+pub async fn create_request_in_tx(
+    txn: &DatabaseTransaction,
+    model: hr_time_off_request::ActiveModel,
+    actor_id: u64,
+) -> anyhow::Result<hr_time_off_request::Model> {
+    Ok(hr_time_off_request::ActiveModel {
+        created_by: Set(actor_id),
+        updated_by: Set(actor_id),
+        ..model
+    }
+    .insert(txn)
+    .await?)
+}
+
+/// 事务内更新请假单（窄写）：只刷新更新人。
+pub async fn update_request_in_tx(
+    txn: &DatabaseTransaction,
+    model: hr_time_off_request::ActiveModel,
+    actor_id: u64,
+) -> anyhow::Result<hr_time_off_request::Model> {
+    Ok(hr_time_off_request::ActiveModel {
+        updated_by: Set(actor_id),
+        ..model
+    }
+    .update(txn)
+    .await?)
+}
+
+/// 事务内软删请假单：返回是否命中。
+pub async fn soft_delete_request_in_tx(
+    txn: &DatabaseTransaction,
+    id: u64,
+    actor_id: u64,
+) -> anyhow::Result<bool> {
+    let now = chrono::Local::now().naive_local();
+    let result = hr_time_off_request::Entity::update_many()
+        .filter(hr_time_off_request::Column::Id.eq(id))
+        .filter(hr_time_off_request::Column::DeletedAt.is_null())
+        .set(hr_time_off_request::ActiveModel {
+            deleted_at: Set(Some(now)),
+            updated_by: Set(actor_id),
+            ..Default::default()
+        })
+        .exec(txn)
+        .await?;
+    Ok(result.rows_affected > 0)
+}
+
+// —— 单据来源的账本查询（「预占即扣批次」口径）——
+
+/// 按 `(source_kind, source_id, biz_type)` 查额度流水（按 id 升序）。
+///
+/// 预占 / 实扣 / 释放三个原语靠它定位「这笔单据动了哪些批次」：预占时每批一条
+/// `biz_type = 3` 的流水（`grant_id` 指向该批），实扣与释放都按同一 `(source_kind, source_id)`
+/// 回读这些流水，而不是重新按 FEFO 现算——批次归属因此在单据生命周期内保持稳定。
+pub async fn find_logs_by_source(
+    db: &impl ConnectionTrait,
+    source_kind: i8,
+    source_id: u64,
+    biz_type: i8,
+) -> anyhow::Result<Vec<hr_time_off_balance_log::Model>> {
+    Ok(hr_time_off_balance_log::Entity::find()
+        .filter(hr_time_off_balance_log::Column::SourceKind.eq(source_kind))
+        .filter(hr_time_off_balance_log::Column::SourceId.eq(source_id))
+        .filter(hr_time_off_balance_log::Column::BizType.eq(biz_type))
+        .order_by_asc(hr_time_off_balance_log::Column::Id)
+        .all(db)
+        .await?)
+}
+
+/// 按来源键查批次（`source_kind != 0` 时的幂等键：员工 × 假别 × 来源类型 × 来源单据）。
+///
+/// 用途有二：① 加班转调休入账幂等（同一年第二次加班不会被四列旧键吞掉）；
+/// ② 驳回释放的归还批次复用（同一单据只建一个归还批次）。
+pub async fn find_grant_by_source_key(
+    db: &impl ConnectionTrait,
+    employee_id: u64,
+    time_off_type_id: u64,
+    source_kind: i8,
+    source_id: u64,
+) -> anyhow::Result<Option<hr_time_off_grant::Model>> {
+    Ok(hr_time_off_grant::Entity::find()
+        .filter(hr_time_off_grant::Column::EmployeeId.eq(employee_id))
+        .filter(hr_time_off_grant::Column::TimeOffTypeId.eq(time_off_type_id))
+        .filter(hr_time_off_grant::Column::SourceKind.eq(source_kind))
+        .filter(hr_time_off_grant::Column::SourceId.eq(source_id))
+        .one(db)
+        .await?)
+}
+
+/// 归还批次：把分钟数加回批次剩余（**不动 `minutes` / `granted`** —— 归还的不是新授予）。
+pub async fn add_grant_remaining_in_tx(
+    txn: &DatabaseTransaction,
+    grant_id: u64,
+    minutes: i32,
+    actor_id: u64,
+) -> anyhow::Result<bool> {
+    let result = hr_time_off_grant::Entity::update_many()
+        .filter(hr_time_off_grant::Column::Id.eq(grant_id))
+        .col_expr(
+            hr_time_off_grant::Column::RemainingMinutes,
+            Expr::col(hr_time_off_grant::Column::RemainingMinutes).add(minutes),
+        )
+        .col_expr(hr_time_off_grant::Column::UpdatedBy, Expr::value(actor_id))
+        .exec(txn)
+        .await?;
+    Ok(result.rows_affected > 0)
+}
+
+/// 加锁读员工档案（软删视为不存在）。
+///
+/// **员工级互斥**：请假区间重叠是跨假别的「读 → 判断 → 写」不变式——账户行锁只能串行化
+/// 「同员工同假别」，而「同一人同一天不能既请年假又请病假」必须按员工串行化，故锁员工行。
+pub async fn lock_employee_for_update(
+    txn: &DatabaseTransaction,
+    employee_id: u64,
+) -> anyhow::Result<Option<hr_employee::Model>> {
+    Ok(hr_employee::Entity::find()
+        .filter(hr_employee::Column::Id.eq(employee_id))
+        .filter(hr_employee::Column::DeletedAt.is_null())
+        .lock_exclusive()
+        .one(txn)
+        .await?)
+}
+
+/// 按 `type_code` 查启用的假期类型（软删 / 停用视为不存在）——调休假别定位用。
+pub async fn find_enabled_type_by_code(
+    db: &impl ConnectionTrait,
+    type_code: &str,
+) -> anyhow::Result<Option<hr_time_off_type::Model>> {
+    Ok(hr_time_off_type::Entity::find()
+        .filter(hr_time_off_type::Column::TypeCode.eq(type_code))
+        .filter(hr_time_off_type::Column::Status.eq(super::TIME_OFF_TYPE_ENABLED))
+        .filter(hr_time_off_type::Column::DeletedAt.is_null())
+        .one(db)
+        .await?)
+}
+
+/// 按 `user_id` 查员工档案（软删视为不存在）——「我的请假单」用。
+pub async fn find_employee_by_user_id(
+    db: &impl ConnectionTrait,
+    user_id: u64,
+) -> anyhow::Result<Option<hr_employee::Model>> {
+    Ok(hr_employee::Entity::find()
+        .filter(hr_employee::Column::UserId.eq(user_id))
+        .filter(hr_employee::Column::DeletedAt.is_null())
+        .one(db)
+        .await?)
+}
+
+/// 按员工 ID 查员工档案（软删视为不存在）——单据归属校验用。
+pub async fn find_employee_by_id(
+    db: &impl ConnectionTrait,
+    id: u64,
+) -> anyhow::Result<Option<hr_employee::Model>> {
+    Ok(hr_employee::Entity::find()
+        .filter(hr_employee::Column::Id.eq(id))
+        .filter(hr_employee::Column::DeletedAt.is_null())
+        .one(db)
+        .await?)
 }
 
 #[cfg(test)]

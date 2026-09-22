@@ -13,6 +13,7 @@ use salvo::oapi::endpoint;
 use salvo::prelude::*;
 use sea_orm::ConnectionTrait;
 
+use crate::entity::hr_time_off_request;
 use crate::infra::state::AppState;
 use crate::middleware::auth::AuthUser;
 use crate::modules::biz::hr::time_off::service as time_off_service;
@@ -22,9 +23,11 @@ use crate::utils::ApiResponse;
 use crate::utils::user_ref::fill_user_names;
 
 use crate::modules::biz::hr::time_off::dto::{
-    BatchCreateGrantReq, BatchCreateGrantResp, CreateTimeOffTypeReq, TimeOffBalanceListReq,
-    TimeOffBalanceLogListReq, TimeOffBalanceLogResp, TimeOffBalanceResp, TimeOffGrantListReq,
-    TimeOffGrantResp, TimeOffTypeListReq, TimeOffTypeResp, UpdateTimeOffTypeReq,
+    BatchCreateGrantReq, BatchCreateGrantResp, CreateTimeOffRequestReq, CreateTimeOffTypeReq,
+    MineTimeOffRequestReq, TimeOffBalanceListReq, TimeOffBalanceLogListReq, TimeOffBalanceLogResp,
+    TimeOffBalanceResp, TimeOffGrantListReq, TimeOffGrantResp, TimeOffRequestListReq,
+    TimeOffRequestResp, TimeOffTypeListReq, TimeOffTypeResp, UpdateTimeOffRequestReq,
+    UpdateTimeOffTypeReq,
 };
 use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
@@ -342,6 +345,176 @@ pub async fn list_time_off_balance_logs(
     let data = time_off_service::page_time_off_balance_logs(&state.db, &req).await?;
     let mut items = fill_user_names(&state.db, data.items, TimeOffBalanceLogResp::from).await?;
     fill_log_ref_names(&state.db, &mut items).await?;
+    Ok(ApiResponse::ok(PageResult::new(
+        data.total,
+        data.total_pages,
+        items,
+    )))
+}
+
+// —— 请假单（P2）——
+
+/// 给请假单响应批量回填 `employee_name` / `time_off_type_name`（各一次批量查）。
+async fn fill_request_ref_names(
+    db: &impl ConnectionTrait,
+    items: &mut [TimeOffRequestResp],
+) -> Result<(), AppError> {
+    let employee_ids: Vec<u64> = items.iter().map(|item| item.employee_id).collect();
+    let type_ids: Vec<u64> = items.iter().map(|item| item.time_off_type_id).collect();
+    let employee_names = time_off_service::fill_employee_names(db, &employee_ids).await?;
+    let type_names = time_off_service::fill_time_off_type_names(db, &type_ids).await?;
+
+    for item in items.iter_mut() {
+        item.employee_name = employee_names
+            .get(&item.employee_id)
+            .cloned()
+            .unwrap_or_default();
+        item.time_off_type_name = type_names
+            .get(&item.time_off_type_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    Ok(())
+}
+
+/// 单条请假单响应：批量取名管道只吃 `Vec`，单条也走同一管道（口径与列表一致）。
+async fn build_request_resp(
+    db: &impl ConnectionTrait,
+    request: hr_time_off_request::Model,
+) -> Result<TimeOffRequestResp, AppError> {
+    let mut items = fill_user_names(db, vec![request], TimeOffRequestResp::from).await?;
+    fill_request_ref_names(db, &mut items).await?;
+    items
+        .pop()
+        .ok_or_else(|| AppError::Biz("请假单不存在".into()))
+}
+
+/// 请假单列表（管理视角：按员工 / 假别 / 状态 / 起止时间过滤）。
+#[endpoint]
+pub async fn list_time_off_requests(
+    depot: &mut Depot,
+    body: JsonBody<TimeOffRequestListReq>,
+) -> ApiResult<PageResult<TimeOffRequestResp>> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    let data = time_off_service::page_time_off_requests(&state.db, &req).await?;
+    let mut items = fill_user_names(&state.db, data.items, TimeOffRequestResp::from).await?;
+    fill_request_ref_names(&state.db, &mut items).await?;
+    Ok(ApiResponse::ok(PageResult::new(
+        data.total,
+        data.total_pages,
+        items,
+    )))
+}
+
+/// 创建请假单（建单即提交：预占额度 + 起审批实例，同一事务）。
+#[endpoint]
+pub async fn create_time_off_request(
+    depot: &mut Depot,
+    body: JsonBody<CreateTimeOffRequestReq>,
+) -> ApiResult<TimeOffRequestResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    validate::validate_create_time_off_request(&req).map_err(AppError::Biz)?;
+    let auth = AuthUser::from_depot(depot)?;
+    let request = time_off_service::create_time_off_request(&state.db, auth.user_id, req).await?;
+    Ok(ApiResponse::ok(
+        build_request_resp(&state.db, request).await?,
+    ))
+}
+
+/// 修改请假单（仅「已驳回 / 已撤销」可改）。
+#[endpoint]
+pub async fn update_time_off_request(
+    depot: &mut Depot,
+    body: JsonBody<UpdateTimeOffRequestReq>,
+) -> ApiResult<TimeOffRequestResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    validate::validate_update_time_off_request(&req).map_err(AppError::Biz)?;
+    let auth = AuthUser::from_depot(depot)?;
+    let request = time_off_service::update_time_off_request(&state.db, auth.user_id, req).await?;
+    Ok(ApiResponse::ok(
+        build_request_resp(&state.db, request).await?,
+    ))
+}
+
+/// 请假单详情。
+#[endpoint]
+pub async fn get_time_off_request(
+    depot: &mut Depot,
+    body: JsonBody<IdReq>,
+) -> ApiResult<TimeOffRequestResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+
+    let request = time_off_service::get_time_off_request(&state.db, req.id).await?;
+    Ok(ApiResponse::ok(
+        build_request_resp(&state.db, request).await?,
+    ))
+}
+
+/// 删除请假单（软删；审批中需先撤销）。
+#[endpoint]
+pub async fn delete_time_off_request(depot: &mut Depot, body: JsonBody<IdReq>) -> ApiResult<()> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let auth = AuthUser::from_depot(depot)?;
+
+    time_off_service::delete_time_off_request(&state.db, auth.user_id, req.id).await?;
+    Ok(ApiResponse::ok(()))
+}
+
+/// 重新提交请假单（仅「已驳回 / 已撤销」可提交）。
+#[endpoint]
+pub async fn submit_time_off_request(
+    depot: &mut Depot,
+    body: JsonBody<IdReq>,
+) -> ApiResult<TimeOffRequestResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let auth = AuthUser::from_depot(depot)?;
+
+    let request =
+        time_off_service::submit_time_off_request(&state.db, auth.user_id, req.id).await?;
+    Ok(ApiResponse::ok(
+        build_request_resp(&state.db, request).await?,
+    ))
+}
+
+/// 撤销请假单（只有申请人本人、且审批中）。
+#[endpoint]
+pub async fn cancel_time_off_request(
+    depot: &mut Depot,
+    body: JsonBody<IdReq>,
+) -> ApiResult<TimeOffRequestResp> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let auth = AuthUser::from_depot(depot)?;
+
+    let request =
+        time_off_service::cancel_time_off_request(&state.db, auth.user_id, req.id).await?;
+    Ok(ApiResponse::ok(
+        build_request_resp(&state.db, request).await?,
+    ))
+}
+
+/// 我的请假单（按登录用户对应的员工档案过滤）。
+#[endpoint]
+pub async fn list_my_time_off_requests(
+    depot: &mut Depot,
+    body: JsonBody<MineTimeOffRequestReq>,
+) -> ApiResult<PageResult<TimeOffRequestResp>> {
+    let state = AppState::from_depot(depot)?;
+    let req = body.into_inner();
+    let auth = AuthUser::from_depot(depot)?;
+
+    let data = time_off_service::page_my_time_off_requests(&state.db, auth.user_id, &req).await?;
+    let mut items = fill_user_names(&state.db, data.items, TimeOffRequestResp::from).await?;
+    fill_request_ref_names(&state.db, &mut items).await?;
     Ok(ApiResponse::ok(PageResult::new(
         data.total,
         data.total_pages,

@@ -84,7 +84,7 @@ pub async fn find_by_user_ids(
 }
 
 /// 分页 + 动态过滤：keyword 模糊备注 / 紧急联系人，状态与学历精确，
-/// 审计人 / 时间范围过滤，按 id 降序（新档案在前），恒排除软删。
+/// 直属上级 / 审计人 / 时间范围过滤，按 id 降序（新档案在前），恒排除软删。
 ///
 /// `page_index` 为 0-based、`page_size` 已由 `PageQuery` clamp 到 1..=1000。
 pub async fn find_employee_page(
@@ -117,6 +117,10 @@ pub async fn find_employee_page(
 
     if let Some(updated_by) = filter.updated_by {
         cond = cond.add(hr_employee::Column::UpdatedBy.eq(updated_by));
+    }
+
+    if let Some(manager_employee_id) = filter.manager_employee_id {
+        cond = cond.add(hr_employee::Column::ManagerEmployeeId.eq(manager_employee_id));
     }
 
     if let Some(created_at_begin) = filter.created_at_begin {
