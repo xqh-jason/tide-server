@@ -136,7 +136,7 @@ src/
 ├── lib.rs                       # 库入口：把各模块整体公开给本仓 bin target
 ├── main.rs                      # 进程入口：tracing + Config::load → infra::app::run
 ├── modules/system/<域>/         # 平台能力域（api/service/repo/dto 四件套）
-├── modules/biz/<模块>/<域>/     # 业务域（按模块分组，四件套写法同平台域）
+├── modules/biz/<模块>/<域>/     # 业务域（按模块分组，四件套写法同平台域；本仓 hr 分支下见 hr/*）
 ├── infra/                       # 启动管线、Config、AppState、路由装配、种子
 ├── middleware/                  # InjectState / AuthRequired / ApiPermission / OperationLog / CORS / 超时
 ├── entity/                      # SeaORM 实体（全局共享）
@@ -165,6 +165,38 @@ docker/        # 容器入口脚本
 与 RBAC 数据）；业务表引用 `sys_user.id` 用**逻辑外键**（全库不加物理外键），审计字段由 repo
 层盖章。前端页面与接口文件在 `tide-admin` 里按同样的模块分组镜像：
 `apps/web-ele/src/views/biz/<模块>/<域>/` + `apps/web-ele/src/api/<模块>/<域>.ts`。
+
+## 🏢 人事业务域（`hr` 分支）
+
+平台与业务用**两个长期分支 + 单向合并**承载：`main` 是纯平台（开源消费方 clone 到的就是它，
+不含任何业务源码），`hr` = 平台 + 人事域（本项目唯一自用部署）；业务只以**追加**方式落地，
+`hr → main` 永久禁止（CI 有 `禁 hr→main 合并` 守卫 job）。人事域当前 15 张表、64 个端点：
+
+| 域 | 表 | 端点 | 要点 |
+|---|---|---|---|
+| `hr/employee` | `hr_employee` | `/api/v1/hr/employee/*`（5） | 建档案可同事务建登录账号；`manager_employee_id`（直属上级）是审批「直属上级」节点的数据源 |
+| `hr/time-off` | `hr_time_off_type` / `_grant` / `_balance` / `_balance_log` / `_request` | `/api/v1/hr/time-off/{type,grant,balance,request}/*`（20） | 额度以**授予批次**为事实来源，FEFO 扣减、预占即扣批次；请假单「建单即提交」（时长由后端按**排班 × 工作日历**派生，请求体不接受该字段）→ 预占额度 + 起审批同一事务；流水 append-only，过期批次由每日任务作废 |
+| `hr/approval` | `hr_approval_flow` / `_flow_node` / `_instance` / `_record` | `/api/v1/hr/approval/{flow,flow-node,instance,record}/*`（15） | 多节点顺序审批：模板（谁审）→ 实例（走到哪）→ 节点记录（每步结论）；节点类型：直属上级 / 部门负责人 / 指定用户 / 指定角色（角色池按 `sys_user_role` 展开待办）；**最后一个节点不允许跳过** |
+| `hr/attendance` | `hr_shift` / `hr_shift_schedule` / `hr_attendance_record` / `hr_work_calendar` | `/api/v1/hr/attendance/{shift,schedule,record,calendar}/*`（16） | 公司排班制（多班次、支持跨天班）；「应出勤」由**排班 × 日历**派生、不落冗余列；打卡数据走**归一化行导入**（`source`：1 导入 / 2 手工补录 / 3 设备 / 4 钉钉 / 5 飞书），对接第三方只需把自己的响应映射成该 DTO |
+| `hr/overtime` | `hr_overtime_request` | `/api/v1/hr/overtime/*`（8） | 加班时长 = 区间总长（不裁剪到班次窗口，改为校验「工作日类型必须在应工作窗口之外」）；审批通过且 `comp_mode = 1 转调休` 时**同事务**生成调休额度批次（`sourceKind = 3 加班单`） |
+
+审批是**跨域复用**的：请假与加班各自只写自己的单据，提交时调 `hr/approval` 起实例，终态由审批域按
+`biz_type` 分派回业务域（同一事务内完成实扣 / 释放 / 调休入账）。
+
+额度账本的两条不变式（改动额度逻辑必读、必测）：
+
+```
+Σ log.delta_minutes      == granted + adjust − used − locked − expired
+Σ 未失效批次 remaining + locked == granted + adjust − used − expired
+```
+
+**前端**：菜单与按钮权限码已随种子登记（`/hr` 下 4 组目录 / 页面 / 按钮码），页面本身在
+[tide-admin](https://github.com/xqh-jason/tide-admin) 的 `views/biz/hr/**`，尚未补齐。
+
+**薪酬（P5）未做**：加班费与事假 / 病假扣薪不算金额，考勤事实只落库与展示
+（`overtime.comp_mode = 2 计加班费` 只落单据、`hr_time_off_type.pay_ratio` 暂为预留列）。
+
+完整约定（分层、事务边界、账本口径、陷阱清单）见 [AGENTS.md](AGENTS.md)。
 
 ## 🧪 测试与 CI
 

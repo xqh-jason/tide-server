@@ -25,6 +25,8 @@ CORS 预检 204/403、`file/upload` 走 multipart + `file/download` 与 `site-co
 - **AI 负责**：所有测试（失败测试先行 + 断言用例 + 真库夹具）、代码骨架（文件/模块结构、类型与函数签名、
   trait/impl 接线、`?` 错误传递、doc 注释与实现提示）、最终 code review。
 - **人负责**：具体业务实现（函数体逻辑）。AI 交付到「**可编译的骨架 + 失败的测试**」为止。
+- **本轮（2026-09-22）例外**：P2–P4（审批基座 / 请假单 / 考勤 / 加班）由**作者显式授权 AI 连函数体一起实现**，
+  交付即「可运行 + 测试绿」；此为一次性授权，不改变上面「骨架 + 失败测试」的默认分工。
 - **例外（可直接完成）**：配置文件、迁移 DDL、种子数据、机械登记行（`mod` 声明、`DOMAINS` 追加、
   `API_SEEDS` / `MENU_SEEDS` 条目）、文档。
 - **骨架体禁止 `todo!()`**（`Cargo.toml` 对 `todo` 已 `deny`）：写成可编译桩 —— 返回 `Default` / 空集合 /
@@ -86,7 +88,7 @@ CORS 预检 204/403、`file/upload` 走 multipart + `file/download` 与 `site-co
 
 ### 路由装配（`DOMAINS` 登记表）
 `src/modules/mod.rs` 定义 `MountGuard { Public, Protected }`、`DomainMount { path, guard, routers }`、
-`const DOMAINS: &[DomainMount]`（内置 21 行 = 19 个平台档位 + 业务域 `hr/employee` / `hr/time-off`，末行为 `hr/time-off`）与 `all_domains(extra)`（内置在前、extra 追加）。
+`const DOMAINS: &[DomainMount]`（内置 24 行 = 19 个平台档位 + 业务域 `hr/employee` / `hr/time-off` / `hr/approval` / `hr/attendance` / `hr/overtime`，末行为 `hr/overtime`）与 `all_domains(extra)`（内置在前、extra 追加）。
 `src/infra/router.rs` 的 `mount_domains` 按表循环：`path` 为 `api/v1` 下的前缀，空串表示出口自带路径；
 `Protected` 行自动获得 `AuthRequired + OperationLog + ApiPermission` 三件套，**不用自己接鉴权**。
 `build(state)` = `build_with(state, &[])`；自定义域集合走 `infra::app::run_with_domains(config, EXTRA)`。
@@ -123,10 +125,27 @@ GitHub 的分支保护只能按 base 分支与状态检查过滤、没有「按�
 - `biz/hr/employee`（员工档案，表 `hr_employee`，端点 `/api/v1/hr/employee/{list,create,update,get,delete}`），
   字典 `employmentStatus` / `education`、菜单与 `API_SEEDS` 均已登记；建档案可勾选同事务创建登录账号
   （必须调 `user::service::create_user_in_tx`，不得调自持 `db.begin()` 的 `create_user`）。
+- `biz/hr/approval`（审批基座，表 `hr_approval_flow` / `hr_approval_flow_node` / `hr_approval_instance` /
+  `hr_approval_record`，端点 `/api/v1/hr/approval/{flow,flow-node,instance,record}/*` 共 15 个）：
+  模板（谁审）→ 实例（这单走到哪）→ 节点记录（每步结论）；节点类型 1 直属上级 / 2 部门负责人 /
+  3 指定用户 / 4 指定角色；**最后一个节点不允许跳过**（解析不到审批人必须报错，否则单据无人把关）；
+  终态由本域按 `biz_type` match 分派到业务域 `on_instance_finished_in_tx`（同事务）。
+- `biz/hr/attendance`（考勤，表 `hr_shift` / `hr_shift_schedule` / `hr_attendance_record` / `hr_work_calendar`，
+  端点 `/api/v1/hr/attendance/{shift,schedule,record,calendar}/*` 共 16 个）：排班制（多班次），
+  「应出勤」由「排班 × 日历」派生（不落冗余列）；三张事实/排班/日历表**不软删、写入即 upsert**；
+  `record/import` 收归一化行数组（`source`：1 导入 / 2 手工补录 / 3 设备 / 4 钉钉 / 5 飞书），
+  这是第三方平台的**接入面**（后端不做连接器）。
+- `biz/hr/overtime`（加班，表 `hr_overtime_request`，端点 `/api/v1/hr/overtime/*` 共 8 个）：
+  加班时长 = 区间总长（不裁剪），校验「工作日类型必须落在应工作窗口之外 / 休息日类型必须非应出勤日」；
+  审批通过且 `comp_mode = 1 转调休` 时**同事务**生成 `hr_time_off_grant`（`source_kind = 3 加班单`）。
 - `biz/hr/time_off`（假期类型 + 额度账本，表 `hr_time_off_type` / `hr_time_off_grant` / `hr_time_off_balance` /
-  `hr_time_off_balance_log`，端点 `/api/v1/hr/time-off/{type,grant,balance}/*` 共 12 个），
-  字典 `timeOffGrantReason`、菜单（`HrTimeOff` 目录 + 3 页 + 5 个按钮码）、12 条 `API_SEEDS`、定时任务
-  `time_off_grant_expire`（每日 01:30 作废过期额度批次）均已登记。
+  `hr_time_off_balance_log` / `hr_time_off_request`，端点 `/api/v1/hr/time-off/{type,grant,balance,request}/*`
+  共 20 个）：
+  字典 `timeOffGrantReason`、菜单、`API_SEEDS`、定时任务 `time_off_grant_expire`（每日 01:30 作废过期额度批次）
+  均已登记。**请假单**（`hr_time_off_request`）：`create` = 建单即提交（后端按「排班 × 日历」派生
+  `duration_minutes`，请求体不收该字段）→ 预占额度 + 起审批实例同一事务；`update` / `submit` 仅限
+  「已驳回 / 已撤销」；`cancel` 仅限「审批中」且仅本人；区间重叠是**跨假别**的「读 → 判断 → 写」，
+  靠锁 `hr_employee` 行串行化（账户行锁只能串行化同假别）。
   **命名注意**：域名叫 `time-off`（Time Off = 假期/请假）；`hr_employee.leave_date` 是**离职日期**（另一个语义），
   两者不要混读——域改名正是为了消除这个歧义。额度模型：**授予批次是事实来源**，
   聚合账户只做展示与行锁，流水 append-only；扣减走 FEFO + `lock_exclusive()`；账期 = 交易发生日 /
@@ -138,11 +157,14 @@ GitHub 的分支保护只能按 base 分支与状态检查过滤、没有「按�
 src/lib.rs, src/main.rs        # 库入口（6 pub mod）/ 进程入口（tracing + Config::load + run）
 src/modules/mod.rs             # MountGuard / DomainMount / DOMAINS(21) / all_domains
 src/modules/system/<域>/       # 18 个平台域切片：api/service/repo/dto(+validate)
-src/modules/biz/hr/employee/   # 业务域切片（人事域员工档案）
-src/modules/biz/hr/time_off/   # 业务域切片（假期类型 + 额度账本：批次/账户/流水 + 批量发放；路径 hr/time-off）
+src/modules/biz/hr/employee/   # 业务域切片（员工档案，含直属上级 manager_employee_id）
+src/modules/biz/hr/time_off/   # 业务域切片（假期类型 + 额度账本（批次/账户/流水）+ 批量发放 + 请假单；路径 hr/time-off）
+src/modules/biz/hr/approval/   # 业务域切片（审批基座：模板/节点/实例/节点记录，供请假与加班复用）
+src/modules/biz/hr/attendance/ # 业务域切片（考勤：班次/排班/出勤事实/工作日历 + 归一化导入）
+src/modules/biz/hr/overtime/   # 业务域切片（加班单 → 通过后转调休入账）
 src/infra/                     # app 启动管线、config、state、router 装配、catcher、seed
 src/middleware/                # InjectState / AuthRequired / OperationLog / ApiPermission / RequestTimeout / Cors
-src/entity/                    # 26 张表的 SeaORM 实体（全局共享，含跨域关系表）+ prelude；全库无物理外键
+src/entity/                    # 36 张表的 SeaORM 实体（全局共享，含跨域关系表）+ prelude；全库无物理外键
 src/utils/                     # error、response、request、page、user_ref、jwt、crypt、cache、check、datetime、text、serde_format
 src/task/                      # 定时任务注册表 + 4 个保留期清理任务 + 1 个业务任务（假期额度过期作废 = time_off_grant_expire）
 migrations/                    # 独立 crate：baseline + 追加迁移（DDL 事实来源）
@@ -317,7 +339,7 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
 - **框架**：stock libtest + tokio，无 `sqlx::test` / `sea_orm` 测试宏 / `serial_test`，无 dev-dependencies。
 - **位置**：`#[cfg(test)] mod tests` **内联在业务文件里**（`repo.rs` / `service.rs` / `validate.rs` / `api.rs` /
   `middleware/*.rs` / `task/*.rs` / `utils/*.rs`）；**没有 `tests/` 目录、没有 fixtures 目录、全仓无 mock**。
-  `dto.rs` 从不写测试。当前规模（复核命令见下）：`src/` 75 个测试文件、575 条测试（400 条 `#[tokio::test]` + 175 条 `#[test]`）；
+  `dto.rs` 从不写测试。当前规模（复核命令见下）：`src/` 81 个测试文件、638 条测试（448 条 `#[tokio::test]` + 190 条 `#[test]`）；
   `codegen/` 另有纯 `#[test]`，根 `cargo test` 不会跑它（需 `cargo test --manifest-path codegen/Cargo.toml`）。
 - **属性选择**：纯逻辑用 `#[test]`；碰 DB / handler 用 `#[tokio::test]`（默认 `current_thread`）；
   真并发必须 `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`（忘了写就静默无法交错）。
@@ -373,11 +395,28 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
 9. **`config.local.toml` 是死配置**：`Config::load` 只读 `config.toml` + `TIDE_*` 环境变量，写它没有任何效果。
 10. **Dockerfile 里 `TZ` 与 `/etc/localtime` 被硬编码**、compose 的 `mysql` 与 `backend` 都假定 `Asia/Shanghai`；
     改动时区要三处一起改。
-11. **账本型表不软删**：`hr_time_off_grant` / `hr_time_off_balance` / `hr_time_off_balance_log` 是额度账本，**没有 `deleted_at`**
-    （作废走 `status` + 反向流水）。给它们加软删会与 `hr_time_off_balance` 的 `(employee_id, time_off_type_id, period)`
-    唯一键冲突——软删行仍占位，账户重建必然撞键。同理 `hr_time_off_balance_log` 是 append-only：无 `updated_at` /
-    `updated_by`，冲正靠写反向 `delta` 记录，不改历史行。
-12. **额度扣减必须走 FEFO + 行锁**：`hr_time_off_grant` 按 `(expire_at IS NULL, expire_at, id)` 取批次，
-    用 `consume_grant_in_tx`（带 `remaining >= minutes` 护栏）；账户与批次「读 → 判断 → 写」前 `lock_exclusive()`。
-    账本守恒（`Σ log.delta == granted + adjust − used − locked − expired`、`Σ 未失效批次 remaining == granted − used`）
-    是这两张表唯一的不变式，改动额度逻辑必须重跑 `cargo test --lib hr::time_off`。
+11. **账本 / 事实 / 历史表不软删**：`hr_time_off_grant` / `hr_time_off_balance` / `hr_time_off_balance_log`
+    （额度账本，作废走 `status` + 反向流水）、`hr_shift_schedule` / `hr_attendance_record` / `hr_work_calendar`
+    （排班 / 事实 / 日历，写入即 upsert）、`hr_approval_flow_node`（按 `(flow_id, seq)` 硬删重排）/
+    `hr_approval_instance` / `hr_approval_record`（审批历史）**都没有 `deleted_at`**。
+    给账本表加软删会与 `hr_time_off_balance` 的 `(employee_id, time_off_type_id, period)` 唯一键冲突
+    ——软删行仍占位，账户重建必然撞键；排班 / 事实表的 `(employee_id, work_date)`、日历的 `calendar_date`
+    同理。`hr_time_off_balance_log` 是 append-only：无 `updated_at` / `updated_by`，冲正靠写反向 `delta`
+    记录，不改历史行。
+12. **额度扣减必须走 FEFO + 行锁，且预占即扣批次**：`hr_time_off_grant` 按 `(expire_at IS NULL, expire_at, id)`
+    取批次，用 `consume_grant_in_tx`（带 `remaining >= minutes` 护栏）；账户与批次「读 → 判断 → 写」前
+    `lock_exclusive()`。**预占（`lock_time_off_in_tx`）会直接扣批次 `remaining`** 并写带 `grant_id` 的预占流水，
+    实扣只做账户 `locked → used` 迁移（不再按 FEFO 现扣）、释放按预占流水归还原批次（原批次已失效/已撤销时
+    归还到当前账期的「归还批次」，幂等键含 `source_kind = 2 请假单 + source_id`）。这么做的原因是过期 job
+    只看批次 `remaining`：预占若不动批次，在途量会被跨期作废、驳回释放再加回来，可用额度会凭空多出。
+    两条不变式（改动额度逻辑必须重跑 `cargo test --lib hr::time_off`）：
+    `Σ log.delta == granted + adjust − used − locked − expired`、
+    `Σ 未失效批次 remaining + locked == granted + adjust − used − expired`（**`locked` 必须在左边**，
+    旧表述 `Σ remaining == granted − used` 在预占即扣批次下必然破）。
+13. **批次幂等键按来源分流**：`hr_time_off_grant.source_id != 0` 时幂等键是
+    `(员工 × 假别 × source_kind × source_id)`，否则才是 `(员工 × 假别 × reason × period)`——
+    否则「同一年第二次加班转调休」会被旧四列键吞掉（第二次加班白干）。
+14. **真库测试不得依赖开发库的残留数据**：`admin`（`user_id = 1`）可能已被 e2e 或人工挂上员工档案，
+    依赖「admin 没有档案」的用例会随库状态漂移；审批/请假用例统一用新建的唯一用户（`900_4xx` / `900_5xx` 段位）。
+15. **审批模板的最后一个节点不允许跳过**：`upsert_flow_node` / `delete_flow_node` 写入后都会复核，
+    解析不到审批人时宁可报错让申请人找 HR，也不许单据无人把关（模板种子与页面改动都受此约束）。
