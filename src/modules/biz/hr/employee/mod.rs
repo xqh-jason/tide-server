@@ -9,6 +9,11 @@ pub mod repo;
 pub mod service;
 mod validate;
 
+/// 在职状态「离职」（字典 `employmentStatus` 的 3）——**全仓唯一定义点**：
+/// 离职员工不再作为审批人、不能再报加班 / 请假，额度发放范围也排除离职。
+/// 别处需要这个语义时引用本常量，不要各域各写一份（值一变就静默漏判）。
+pub const EMPLOYMENT_STATUS_RESIGNED: i8 = 3;
+
 /// 员工档案端点：`POST /api/v1/hr/employee/{list,create,update,get,delete}`。
 pub fn routes() -> Router {
     Router::new()

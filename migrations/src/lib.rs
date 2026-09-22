@@ -13,6 +13,7 @@ mod m20260922_000002_create_hr_approval;
 mod m20260922_000003_create_hr_time_off_request;
 mod m20260922_000004_create_hr_attendance;
 mod m20260922_000005_create_hr_overtime;
+mod m20260922_000006_drop_redundant_flow_node_index;
 
 pub struct Migrator;
 
@@ -59,6 +60,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260922_000003_create_hr_time_off_request::Migration),
             Box::new(m20260922_000004_create_hr_attendance::Migration),
             Box::new(m20260922_000005_create_hr_overtime::Migration),
+            Box::new(m20260922_000006_drop_redundant_flow_node_index::Migration),
         ]
     }
 }

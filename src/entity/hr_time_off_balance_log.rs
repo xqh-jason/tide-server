@@ -25,7 +25,9 @@ pub struct Model {
     pub after_minutes: i32,
     /// 0 无 1 系统任务 2 请假单 3 加班单 4 手工
     pub source_kind: i8,
-    /// 来源单据/批次 ID
+    /// 来源对象 ID：`source_kind = 2 请假单` 时记**审批实例 ID**（= 一次提交周期，见
+    /// `hr_time_off` service 的账本口径），`source_kind = 3 加班单` 时记加班单 ID，
+    /// 其余（系统任务 / 手工）记 0 或批次 ID
     pub source_id: u64,
     /// 操作人 sys_user.id；0=系统
     pub operator_id: u64,

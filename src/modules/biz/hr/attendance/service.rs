@@ -53,11 +53,10 @@ use crate::modules::biz::hr::attendance::{
     DEFAULT_STANDARD_MINUTES, MISS_CLOCK_BOTH, MISS_CLOCK_IN, MISS_CLOCK_NONE, MISS_CLOCK_OUT,
     SCHEDULE_STATUS_UNSCHEDULED, repo,
 };
+use crate::modules::biz::hr::employee::EMPLOYMENT_STATUS_RESIGNED;
+use crate::modules::biz::hr::employee::service::find_employee_name_map;
 use crate::utils::PageData;
 use crate::utils::error::AppError;
-
-/// 在职状态「离职」（字典 `employmentStatus` 的 3）：月视图「全员」范围要排除离职员工。
-const EMPLOYMENT_STATUS_RESIGNED: i8 = 3;
 
 /// 一次批量取员工档案的分页大小（`PageQuery` 上限同口径）。
 const EMPLOYEE_SCAN_PAGE_SIZE: u64 = 1000;
@@ -79,6 +78,8 @@ pub struct WorkdayWindow {
     pub cross_day: bool,
     /// 当日折算分钟数：有排班 = 班次应工作分钟数；无排班 = 日历标准工时（默认 480）
     pub standard_minutes: i32,
+    /// 迟到宽限分钟数：有班次取班次配置（负值归零）；无班次窗口时为 0
+    pub late_tolerance_minutes: i32,
 }
 
 /// 某员工某日的应出勤窗口（排班优先，工作日历覆盖）。
@@ -103,6 +104,7 @@ pub async fn resolve_workday(
                 end_time: Some(shift.end_time),
                 cross_day: shift.cross_day == 1,
                 standard_minutes: shift.work_minutes.max(0),
+                late_tolerance_minutes: shift.late_tolerance_minutes.max(0),
             });
         }
         // 排班引用的班次已被软删：排班本身即「应出勤」信号，退回标准工作制（无窗口）
@@ -186,6 +188,7 @@ fn rest_window(standard_minutes: i32) -> WorkdayWindow {
         end_time: None,
         cross_day: false,
         standard_minutes,
+        late_tolerance_minutes: 0,
     }
 }
 
@@ -198,6 +201,7 @@ fn standard_workday_window(standard_minutes: i32) -> WorkdayWindow {
         end_time: None,
         cross_day: false,
         standard_minutes,
+        late_tolerance_minutes: 0,
     }
 }
 
@@ -250,25 +254,6 @@ fn diff_minutes(from: DateTime, to: DateTime) -> i32 {
 }
 
 // —— 批量取名 / 批量取班次摘要（列表响应回填用；单次查询，禁止逐行查库）——
-
-/// 批量取员工名：`hr_employee.id` → `sys_user.username`（跨域读 employee 域 repo + 平台查名管道）。
-pub(crate) async fn fill_employee_names(
-    db: &impl ConnectionTrait,
-    employee_ids: &[u64],
-) -> Result<HashMap<u64, String>, AppError> {
-    let ids = crate::utils::user_ref::dedup_ids(employee_ids.to_vec());
-    if ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let employees = crate::modules::biz::hr::employee::repo::find_by_ids(db, &ids).await?;
-    let user_ids = employees.iter().map(|e| e.user_id).collect();
-    let names = crate::utils::user_ref::find_user_name_map_by_ids(db, user_ids).await?;
-    Ok(employees
-        .into_iter()
-        .filter_map(|e| names.get(&e.user_id).cloned().map(|name| (e.id, name)))
-        .collect())
-}
 
 /// 批量取班次摘要：`hr_shift.id` → (`shift_code`, `shift_name`)（软删班次不出现，调用方留空）。
 pub(crate) async fn shift_briefs(
@@ -640,7 +625,7 @@ pub async fn month_schedules(
         .filter(|id| *id > 0)
         .collect();
     let briefs = shift_briefs(db, &shift_ids).await?;
-    let names = fill_employee_names(db, &employee_ids).await?;
+    let names = find_employee_name_map(db, &employee_ids).await?;
 
     let mut by_key: HashMap<(u64, Date), &hr_shift_schedule::Model> = HashMap::new();
     for schedule in &schedules {
@@ -782,6 +767,8 @@ pub async fn update_record(
 /// 事务内手工补录：按当前排班口径重算派生列并刷新班次快照。
 ///
 /// `clock_in` / `clock_out` 为 `None` 表示不改；空串表示清空（`parse_datetime` 把空串视为 `None`）。
+/// 先后**按合并后的结果**校验：只给一端时另一端取库中值，`clock_out < clock_in` 直接报
+/// `下班打卡时间不能早于上班打卡时间`（只按请求体校验会落出「无缺卡却出勤 0」的自相矛盾记录）。
 async fn update_record_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
@@ -802,8 +789,17 @@ async fn update_record_in_tx(
         existing.clock_out
     };
 
+    // 合并后的先后必须自洽：只改一端时，另一端来自库中值，仅按请求体校验会落出 `clock_in > clock_out`
+    if let (Some(from), Some(to)) = (clock_in, clock_out)
+        && to < from
+    {
+        return Err(AppError::Biz(
+            "下班打卡时间不能早于上班打卡时间".to_string(),
+        ));
+    }
+
     let window = resolve_workday(txn, existing.employee_id, existing.work_date).await?;
-    let tolerance = shift_late_tolerance(txn, &window).await?;
+    let tolerance = window.late_tolerance_minutes;
     let derived = derive_attendance(&window, existing.work_date, clock_in, clock_out, tolerance);
 
     let mut model = hr_attendance_record::ActiveModel {
@@ -951,10 +947,12 @@ async fn import_records_in_tx(
 
         // ④ 迟到 / 早退 / 实际出勤 / 缺卡派生（无排班日只落原始打卡时间）
         let window = resolve_workday(txn, employee_id, work_date).await?;
-        let tolerance = shift_late_tolerance(txn, &window).await?;
+        let tolerance = window.late_tolerance_minutes;
         let derived = derive_attendance(&window, work_date, clock_in, clock_out, tolerance);
 
-        // ⑤ 按唯一键 `(employee_id, work_date)` upsert（行是权威口径，覆盖来源与外部 ID）
+        // ⑤ 按唯一键 `(employee_id, work_date)` upsert（行是权威口径，覆盖来源与外部 ID）。
+        // 空串外部 ID 归为 `None` 落 `NULL`：判重读取侧本就把空串当「无外部 ID」，落 `''`
+        // 会占住 `(source, external_id)` 唯一键，让后续同批行绕过判重后撞唯一键整批回滚。
         match repo::find_record_by_employee_date(txn, employee_id, work_date).await? {
             Some(existing) => {
                 repo::update_record_in_tx(
@@ -969,7 +967,7 @@ async fn import_records_in_tx(
                         early_leave_minutes: Set(derived.early_leave_minutes),
                         miss_clock: Set(derived.miss_clock),
                         source: Set(row.source),
-                        external_id: Set(row.external_id.clone()),
+                        external_id: Set(non_empty(&row.external_id).map(str::to_owned)),
                         remark: Set(row.remark.clone()),
                         ..Default::default()
                     },
@@ -992,7 +990,7 @@ async fn import_records_in_tx(
                         early_leave_minutes: Set(derived.early_leave_minutes),
                         miss_clock: Set(derived.miss_clock),
                         source: Set(row.source),
-                        external_id: Set(row.external_id.clone()),
+                        external_id: Set(non_empty(&row.external_id).map(str::to_owned)),
                         remark: Set(row.remark.clone()),
                         ..Default::default()
                     },
@@ -1111,20 +1109,6 @@ fn derive_attendance(
         early_leave_minutes,
         miss_clock,
     }
-}
-
-/// 取当日班次的迟到宽限分钟数；无排班（`shift_id = 0`）返回 0。
-async fn shift_late_tolerance(
-    db: &impl ConnectionTrait,
-    window: &WorkdayWindow,
-) -> Result<i32, AppError> {
-    if window.shift_id == 0 {
-        return Ok(0);
-    }
-    Ok(repo::find_shift_by_id(db, window.shift_id)
-        .await?
-        .map(|shift| shift.late_tolerance_minutes)
-        .unwrap_or(0))
 }
 
 // —— 工作日历 ——
@@ -1751,5 +1735,86 @@ mod tests {
         assert_eq!(record.late_minutes, 0, "09:00 打卡不迟到");
         assert_eq!(record.shift_id, shift_id, "必须落班次快照");
         assert_eq!(record.miss_clock, MISS_CLOCK_NONE, "两次打卡都不缺");
+    }
+
+    /// 适配层把「没有外部记录 ID」映射为空串时，导入必须按「无外部 ID」处理（落 `NULL`）。
+    ///
+    /// 空串落库会占住 `uk_hr_attendance_record_external(source, external_id)`：判重读取把空串
+    /// 当无外部 ID，第二行绕过判重直达 INSERT 撞唯一键 → 整批回滚；且该键被 `''` 永久占据。
+    #[tokio::test]
+    async fn import_treats_empty_external_id_as_null() {
+        let txn = test_txn().await;
+        let employee_id = seed_employee(&txn).await;
+
+        let rows = [date(2026, 10, 1), date(2026, 10, 2)]
+            .into_iter()
+            .map(|day| ImportRecordRow {
+                employee_id: Some(employee_id),
+                user_id: None,
+                work_date: day.format("%Y-%m-%d").to_string(),
+                clock_in: Some(format!("{} 09:00:00", day.format("%Y-%m-%d"))),
+                clock_out: Some(format!("{} 18:00:00", day.format("%Y-%m-%d"))),
+                source: SOURCE_IMPORT,
+                external_id: Some(String::new()),
+                remark: String::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let resp = import_records_in_tx(&txn, ACTOR_ID, &ImportRecordReq { rows })
+            .await
+            .unwrap();
+        assert_eq!(resp.created, 2, "两行空串外部 ID 都必须导入成功");
+        assert_eq!(resp.errors.len(), 0, "不得有行级错误");
+
+        for day in [date(2026, 10, 1), date(2026, 10, 2)] {
+            let record = repo::find_record_by_employee_date(&txn, employee_id, day)
+                .await
+                .unwrap()
+                .expect("两行都必须落库");
+            assert!(
+                record.external_id.is_none(),
+                "空串外部 ID 必须落 NULL（否则占用唯一键并让后续导入整批失败）"
+            );
+        }
+    }
+
+    /// 手工补录只改一个打卡时间时，必须按**合并后**的时间校验先后：
+    /// 库里已有 18:00 下班，只把上班改成 19:00 应被拒（否则出现「无缺卡 + 出勤 0 + 迟到 595」的自相矛盾记录）。
+    #[tokio::test]
+    async fn update_record_rejects_inverted_clock_after_merge() {
+        let txn = test_txn().await;
+        let employee_id = seed_employee(&txn).await;
+        let day = date(2026, 10, 3);
+        let record = repo::create_record_in_tx(
+            &txn,
+            hr_attendance_record::ActiveModel {
+                employee_id: Set(employee_id),
+                work_date: Set(day),
+                clock_in: Set(Some(at(2026, 10, 3, 9, 0))),
+                clock_out: Set(Some(at(2026, 10, 3, 18, 0))),
+                source: Set(SOURCE_MANUAL),
+                ..Default::default()
+            },
+            ACTOR_ID,
+        )
+        .await
+        .unwrap();
+
+        let err = update_record_in_tx(
+            &txn,
+            ACTOR_ID,
+            &UpdateRecordReq {
+                id: record.id,
+                clock_in: Some("2026-10-03 19:00:00".to_string()),
+                clock_out: None,
+                remark: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("不能早于"),
+            "合并后 clock_in > clock_out 必须被拒，实际：{err}"
+        );
     }
 }

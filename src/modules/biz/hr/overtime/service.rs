@@ -31,8 +31,6 @@
 //! 并发：所有「读 → 判断 → 写」都走 `find_overtime_by_id_for_update`（单据行）与
 //! `lock_employee_for_update`（员工行，串行化同一员工的并发建单与区间重叠判定）。
 
-use std::collections::HashMap;
-
 use chrono::{Datelike, Days, NaiveDate, NaiveDateTime};
 use sea_orm::ActiveValue::Set;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
@@ -40,6 +38,8 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, Transact
 use crate::entity::{hr_employee, hr_overtime_request};
 use crate::modules::biz::hr::approval::{BIZ_TYPE_OVERTIME, service as approval_service};
 use crate::modules::biz::hr::attendance::service::{WorkdayWindow, resolve_workday};
+use crate::modules::biz::hr::employee::EMPLOYMENT_STATUS_RESIGNED;
+use crate::modules::biz::hr::employee::repo as employee_repo;
 use crate::modules::biz::hr::overtime::dto::{
     CreateOvertimeReq, MineReq, OvertimeFilter, OvertimeListReq, UpdateOvertimeReq,
 };
@@ -54,9 +54,6 @@ use crate::modules::biz::hr::time_off::{
 };
 use crate::utils::PageData;
 use crate::utils::error::AppError;
-
-/// 在职状态「离职」（字典 `employmentStatus` 的 3）——离职员工不能再报加班。
-const EMPLOYMENT_STATUS_RESIGNED: i8 = 3;
 
 // —— 解析 helper（`validate.rs` 已拦格式，这里是进入 service 后的兜底）——
 
@@ -138,8 +135,10 @@ pub async fn page_my_overtimes(
     actor_id: u64,
     req: &MineReq,
 ) -> Result<PageData<hr_overtime_request::Model>, AppError> {
-    let employee = overtime_repo::find_employee_by_user_id(db, actor_id)
+    let employee = employee_repo::find_by_user_ids(db, &[actor_id])
         .await?
+        .into_iter()
+        .next()
         .ok_or_else(|| AppError::Biz("未找到当前用户的员工档案".into()))?;
     let filter = OvertimeFilter {
         employee_id: Some(employee.id),
@@ -178,6 +177,8 @@ pub(crate) async fn create_overtime_in_tx(
 
     // 先锁员工行：区间重叠判定是「读 → 判断 → 写」，同一员工的并发建单必须串行化
     let employee = lock_active_employee_in_tx(txn, req.employee_id).await?;
+    // 写入口只服务本人：`employee_id` 来自请求体，不校验就能替他人建单（并占用其审批链）
+    ensure_actor_is_employee(actor_id, &employee)?;
     let duration_minutes = validate_and_derive_in_tx(
         txn,
         &employee,
@@ -252,11 +253,16 @@ pub(crate) async fn update_overtime_in_tx(
     let existing = overtime_repo::find_overtime_by_id_for_update(txn, req.id)
         .await?
         .ok_or_else(|| AppError::Biz(format!("加班单不存在：{}", req.id)))?;
+    ensure_overtime_owner(txn, actor_id, existing.employee_id).await?;
     if !matches!(
         existing.status,
         REQUEST_STATUS_REJECTED | REQUEST_STATUS_CANCELED
     ) {
         return Err(AppError::Biz("已提交或已通过的加班单不能修改".into()));
+    }
+    // 归属一经创建不可变（改归属等于把别人的单据挪到自己名下 / 反过来）
+    if req.employee_id != existing.employee_id {
+        return Err(AppError::Biz("加班单归属不可修改".into()));
     }
 
     let work_date = parse_work_date(&req.work_date)?;
@@ -316,6 +322,7 @@ pub(crate) async fn submit_overtime_in_tx(
     let existing = overtime_repo::find_overtime_by_id_for_update(txn, id)
         .await?
         .ok_or_else(|| AppError::Biz(format!("加班单不存在：{id}")))?;
+    ensure_overtime_owner(txn, actor_id, existing.employee_id).await?;
     if !matches!(
         existing.status,
         REQUEST_STATUS_REJECTED | REQUEST_STATUS_CANCELED
@@ -325,7 +332,7 @@ pub(crate) async fn submit_overtime_in_tx(
         ));
     }
 
-    let employee = overtime_repo::find_employee_by_id(txn, existing.employee_id)
+    let employee = employee_repo::find_by_id(txn, existing.employee_id)
         .await?
         .ok_or_else(|| AppError::Biz(format!("员工档案不存在：{}", existing.employee_id)))?;
     if employee.employment_status == EMPLOYMENT_STATUS_RESIGNED {
@@ -376,9 +383,13 @@ pub(crate) async fn cancel_overtime_in_tx(
     actor_id: u64,
     id: u64,
 ) -> Result<(), AppError> {
+    // 锁序统一「审批实例 → 业务单据」（与审批侧 approve / reject 一致）：反序会构成 ABBA 环路
+    approval_service::lock_latest_instance_by_biz_in_tx(txn, BIZ_TYPE_OVERTIME, id).await?;
+
     let existing = overtime_repo::find_overtime_by_id_for_update(txn, id)
         .await?
         .ok_or_else(|| AppError::Biz(format!("加班单不存在：{id}")))?;
+    ensure_overtime_owner(txn, actor_id, existing.employee_id).await?;
     if existing.status != REQUEST_STATUS_PENDING {
         return Err(AppError::Biz("只有审批中的加班单可以撤销".into()));
     }
@@ -415,9 +426,13 @@ pub(crate) async fn delete_overtime_in_tx(
     actor_id: u64,
     id: u64,
 ) -> Result<(), AppError> {
+    // 锁序统一「审批实例 → 业务单据」（删除可能连带撤销在途实例）
+    approval_service::lock_latest_instance_by_biz_in_tx(txn, BIZ_TYPE_OVERTIME, id).await?;
+
     let existing = overtime_repo::find_overtime_by_id_for_update(txn, id)
         .await?
         .ok_or_else(|| AppError::Biz(format!("加班单不存在：{id}")))?;
+    ensure_overtime_owner(txn, actor_id, existing.employee_id).await?;
 
     if existing.status == REQUEST_STATUS_PENDING {
         // 审批中的单据先撤在途实例，否则实例会永远悬着
@@ -434,7 +449,7 @@ pub(crate) async fn delete_overtime_in_tx(
 // —— 审批终态回调（由 hr/approval 按 biz_type = overtime 分派，同事务）——
 
 /// 审批终态回调：通过 → 置「已通过」，`comp_mode = 1 转调休` 时**同事务**生成调休批次；
-/// 驳回 / 撤销 → 置「已驳回」（撤销态由调用方先置位，这里不改写）。
+/// 驳回 → 置「已驳回」，撤销（申请人撤回 / 从审批中心撤销）→ 置「已撤销」。
 ///
 /// **幂等**：单据已是终态（2 / 3 / 4）直接返回——重复回调不会重复入账；
 /// 调休批次本身还有一层来源幂等键（`source_kind = 3` + `source_id = 加班单 ID`）兜底。
@@ -443,8 +458,10 @@ pub(crate) async fn on_instance_finished_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
     biz_id: u64,
-    approved: bool,
+    instance_status: i8,
 ) -> Result<(), AppError> {
+    use crate::modules::biz::hr::approval::{INSTANCE_STATUS_APPROVED, INSTANCE_STATUS_CANCELED};
+
     let request = overtime_repo::find_overtime_by_id_for_update(txn, biz_id)
         .await?
         .ok_or_else(|| AppError::Biz(format!("加班单不存在：{biz_id}")))?;
@@ -453,12 +470,19 @@ pub(crate) async fn on_instance_finished_in_tx(
         return Ok(());
     }
 
-    if !approved {
+    if instance_status != INSTANCE_STATUS_APPROVED {
+        // 驳回 → 已驳回；撤销（申请人撤回 / 从审批中心撤销）→ 已撤销。
+        // 三态必须分开落：把撤销记成「被驳回」会让统计与员工申诉口径失真。
+        let terminal = if instance_status == INSTANCE_STATUS_CANCELED {
+            REQUEST_STATUS_CANCELED
+        } else {
+            REQUEST_STATUS_REJECTED
+        };
         overtime_repo::update_overtime_in_tx(
             txn,
             hr_overtime_request::ActiveModel {
                 id: Set(request.id),
-                status: Set(REQUEST_STATUS_REJECTED),
+                status: Set(terminal),
                 ..Default::default()
             },
             actor_id,
@@ -507,6 +531,29 @@ pub(crate) async fn on_instance_finished_in_tx(
 }
 
 // —— 私有 helper：把「校验」这件事收口一次，创建 / 修改共用 ——
+
+/// 校验单据属于当前操作人（写入口一律「本人」，与请假域 `ensure_request_owner` 同口径）。
+///
+/// 加班单的归属 = 单据所属员工的账号；不校验就能撤掉 / 改掉 / 删掉他人的单据，
+/// 从而左右他人的调休入账。HR 的批量事实录入走考勤域的 import，不做代报加班。
+async fn ensure_overtime_owner(
+    txn: &DatabaseTransaction,
+    actor_id: u64,
+    employee_id: u64,
+) -> Result<(), AppError> {
+    let employee = employee_repo::find_by_id(txn, employee_id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("员工档案不存在：{employee_id}")))?;
+    ensure_actor_is_employee(actor_id, &employee)
+}
+
+/// 档案归属校验（纯比较，不查库）。
+fn ensure_actor_is_employee(actor_id: u64, employee: &hr_employee::Model) -> Result<(), AppError> {
+    if employee.user_id != actor_id {
+        return Err(AppError::Biz("只能操作本人的加班单".into()));
+    }
+    Ok(())
+}
 
 /// 加锁读员工档案并校验「存在且未离职」（离职员工不能再报加班）。
 async fn lock_active_employee_in_tx(
@@ -616,35 +663,13 @@ async fn compensatory_type_id_in_tx(txn: &DatabaseTransaction) -> Result<u64, Ap
         .ok_or_else(|| AppError::Biz("未配置调休假别（type_code = comp），请联系管理员".into()))
 }
 
-// —— 批量取名 helper（列表 / 详情响应用；单次查询，禁止逐行查库）——
-
-/// 批量取员工名：`hr_employee.id` → `sys_user.username`。
-///
-/// 与平台唯一拼名管道口径一致（映射 `sys_user.username`）：先一次批量取档案拿 `user_id`，
-/// 再交给 `utils::user_ref::find_user_name_map_by_ids` 一次批量查名；软删档案 / 用户不出现在
-/// 映射里，调用方留空串。**不得逐行查库**。
-pub async fn fill_employee_names(
-    db: &impl ConnectionTrait,
-    employee_ids: &[u64],
-) -> Result<HashMap<u64, String>, AppError> {
-    let ids = crate::utils::user_ref::dedup_ids(employee_ids.to_vec());
-    if ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let employees = overtime_repo::find_employees_by_ids(db, &ids).await?;
-    let user_ids = employees.iter().map(|e| e.user_id).collect();
-    let names = crate::utils::user_ref::find_user_name_map_by_ids(db, user_ids).await?;
-    Ok(employees
-        .into_iter()
-        .filter_map(|e| names.get(&e.user_id).cloned().map(|name| (e.id, name)))
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::entity::{hr_shift, hr_shift_schedule, hr_time_off_grant, hr_time_off_type};
+    use crate::modules::biz::hr::approval::{
+        INSTANCE_STATUS_APPROVED, INSTANCE_STATUS_CANCELED, INSTANCE_STATUS_REJECTED,
+    };
     use crate::modules::biz::hr::overtime::COMP_MODE_PAY;
     use chrono::NaiveTime;
     use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter};
@@ -877,7 +902,7 @@ mod tests {
 
         let err = create_overtime_in_tx(
             &txn,
-            ACTOR_ID,
+            employee.user_id,
             &create_req(
                 employee.id,
                 work_date,
@@ -904,7 +929,7 @@ mod tests {
 
         let err = create_overtime_in_tx(
             &txn,
-            ACTOR_ID,
+            employee.user_id,
             &create_req(
                 employee.id,
                 work_date,
@@ -931,7 +956,7 @@ mod tests {
 
         let err = create_overtime_in_tx(
             &txn,
-            ACTOR_ID,
+            employee.user_id,
             &create_req(
                 employee.id,
                 work_date,
@@ -965,7 +990,7 @@ mod tests {
         );
         req.end_at = "2097-03-14 02:00:00".to_string();
 
-        let err = create_overtime_in_tx(&txn, ACTOR_ID, &req)
+        let err = create_overtime_in_tx(&txn, employee.user_id, &req)
             .await
             .unwrap_err();
         assert!(
@@ -1018,7 +1043,7 @@ mod tests {
 
         let err = create_overtime_in_tx(
             &txn,
-            ACTOR_ID,
+            employee.user_id,
             &create_req(
                 employee.id,
                 work_date,
@@ -1047,6 +1072,102 @@ mod tests {
         assert!(ok.is_ok(), "不重叠区间不应被拒：{ok:?}");
     }
 
+    /// ② 在途（审批中）加班单的区间也必须参与重叠判定：否则两份在途单据各自通过后
+    /// 会对同一时段重复补偿（请假域同名判定已把在途计入）。
+    #[tokio::test]
+    async fn overlap_counts_pending_requests_too() {
+        let txn = test_txn().await;
+        let employee = seed_employee(&txn).await;
+        let work_date = date(2097, 3, 22);
+        seed_rest_day(&txn, employee.id, work_date).await;
+        // 当日已有一条 19:00–21:30 的**审批中**加班单
+        seed_request(
+            &txn,
+            employee.id,
+            work_date,
+            COMP_MODE_TIME_OFF,
+            REQUEST_STATUS_PENDING,
+            150,
+        )
+        .await;
+
+        let err = validate_and_derive_in_tx(
+            &txn,
+            &employee,
+            work_date,
+            dt(2097, 3, 22, 20, 0),
+            dt(2097, 3, 22, 22, 0),
+            OVERTIME_TYPE_REST_DAY,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, AppError::Biz(m) if m.contains("区间重叠")),
+            "在途单据的区间也必须参与重叠判定：{err:?}"
+        );
+    }
+
+    /// 他人不得撤销 / 修改别人的加班单（与请假域的属主口径一致）。
+    #[tokio::test]
+    async fn cancel_and_update_reject_other_employees_overtime() {
+        let txn = test_txn().await;
+        let employee = seed_employee(&txn).await;
+        let other = seed_employee(&txn).await;
+        let work_date = date(2097, 3, 23);
+        seed_rest_day(&txn, employee.id, work_date).await;
+        let request = seed_request(
+            &txn,
+            employee.id,
+            work_date,
+            COMP_MODE_TIME_OFF,
+            REQUEST_STATUS_PENDING,
+            150,
+        )
+        .await;
+
+        let err = cancel_overtime_in_tx(&txn, other.user_id, request.id)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("本人"),
+            "他人不得撤销别人的加班单，实际：{err}"
+        );
+
+        let update_req = UpdateOvertimeReq {
+            id: request.id,
+            employee_id: employee.id,
+            work_date: work_date.format("%Y-%m-%d").to_string(),
+            start_at: dt(2097, 3, 23, 19, 0)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+            end_at: dt(2097, 3, 23, 21, 30)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+            overtime_type: OVERTIME_TYPE_REST_DAY,
+            comp_mode: COMP_MODE_TIME_OFF,
+            reason: "改一改".to_owned(),
+            attachment_id: 0,
+            remark: String::new(),
+        };
+        let err = update_overtime_in_tx(&txn, other.user_id, &update_req)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("本人"),
+            "他人不得修改别人的加班单，实际：{err}"
+        );
+
+        // 单据仍归原员工，状态未被改动
+        let reloaded = overtime_repo::find_overtime_by_id(&txn, request.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reloaded.status, REQUEST_STATUS_PENDING,
+            "越权操作不得改动单据"
+        );
+    }
+
     /// ③ `comp_mode = 1` 通过 → 生成调休批次（来源类型 / 来源单据 / 有效期），重复回调不再入账。
     #[tokio::test]
     async fn approved_time_off_mode_grants_compensatory_batch_once() {
@@ -1064,7 +1185,7 @@ mod tests {
         )
         .await;
 
-        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, true)
+        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, INSTANCE_STATUS_APPROVED)
             .await
             .unwrap();
 
@@ -1110,7 +1231,7 @@ mod tests {
         );
 
         // 幂等：重复回调不再生成批次
-        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, true)
+        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, INSTANCE_STATUS_APPROVED)
             .await
             .unwrap();
         assert_eq!(
@@ -1136,7 +1257,7 @@ mod tests {
         )
         .await;
 
-        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, true)
+        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, INSTANCE_STATUS_APPROVED)
             .await
             .unwrap();
 
@@ -1170,7 +1291,7 @@ mod tests {
         )
         .await;
 
-        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, false)
+        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, INSTANCE_STATUS_REJECTED)
             .await
             .unwrap();
 
@@ -1204,7 +1325,7 @@ mod tests {
         )
         .await;
 
-        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, false)
+        on_instance_finished_in_tx(&txn, ACTOR_ID, request.id, INSTANCE_STATUS_CANCELED)
             .await
             .unwrap();
 

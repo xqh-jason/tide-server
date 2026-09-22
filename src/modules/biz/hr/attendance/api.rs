@@ -5,8 +5,9 @@
 //! `calendar` list → upsert → batch-import。
 //!
 //! handler 只做三件事：取状态（`AppState`）/ 取操作人（`AuthUser`）→ 预取值域（字典）
-//! → 调 validate + service → 拼显示名（`fill_user_names` 走平台唯一管道；`employee_name` /
-//! `shift_code` / `shift_name` 另走本域 `fill_employee_names` / `shift_briefs`）。
+//! → 调 validate + service → 拼显示名（`fill_user_names` 走平台唯一管道；`employee_name` 走
+//! 员工域 `employee_service::find_employee_name_map`；`shift_code` / `shift_name` 走本域
+//! `shift_briefs`）。
 //! 业务规则不写在这里。
 
 use salvo::oapi::endpoint;
@@ -23,6 +24,7 @@ use crate::modules::biz::hr::attendance::dto::{
     UpdateShiftReq, UpsertCalendarReq,
 };
 use crate::modules::biz::hr::attendance::{service as attendance_service, validate};
+use crate::modules::biz::hr::employee::service as employee_service;
 use crate::modules::system::dictionary::service as dictionary_service;
 use crate::utils::error::AppError;
 use crate::utils::request::JsonBody;
@@ -36,7 +38,7 @@ async fn fill_schedule_ref_names(
 ) -> Result<(), AppError> {
     let employee_ids: Vec<u64> = items.iter().map(|item| item.employee_id).collect();
     let shift_ids: Vec<u64> = items.iter().map(|item| item.shift_id).collect();
-    let employee_names = attendance_service::fill_employee_names(db, &employee_ids).await?;
+    let employee_names = employee_service::find_employee_name_map(db, &employee_ids).await?;
     let briefs = attendance_service::shift_briefs(db, &shift_ids).await?;
 
     for item in items.iter_mut() {
@@ -59,7 +61,7 @@ async fn fill_record_ref_names(
 ) -> Result<(), AppError> {
     let employee_ids: Vec<u64> = items.iter().map(|item| item.employee_id).collect();
     let shift_ids: Vec<u64> = items.iter().map(|item| item.shift_id).collect();
-    let employee_names = attendance_service::fill_employee_names(db, &employee_ids).await?;
+    let employee_names = employee_service::find_employee_name_map(db, &employee_ids).await?;
     let briefs = attendance_service::shift_briefs(db, &shift_ids).await?;
 
     for item in items.iter_mut() {

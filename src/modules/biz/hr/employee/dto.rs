@@ -251,14 +251,18 @@ pub struct CreateEmployeeReq {
 ///
 /// 敏感字段（`id_card` / `bank_account`）**空串 = 不修改**：列表 / 详情回传的是掩码值，
 /// 前端编辑表单不回填敏感字段（同 user 域密码的做法）。
+///
+/// `manager_employee_id` 是**三态**字段（缺省不得清空上级）：档案的上级是审批链
+/// 「直属上级」节点的唯一来源，静默清空会让该员工的加班单解析不到审批人。
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateEmployeeReq {
     /// 目标档案 id
     pub id: u64,
-    /// 直属上级员工 ID（`hr_employee.id`；0 = 清空上级）
+    /// 直属上级员工 ID（`hr_employee.id`）：`null` / 缺省 = 不修改；`0` = 清空上级；
+    /// `>0` = 设为该员工（必须存在且不能是本人）
     #[serde(default)]
-    pub manager_employee_id: u64,
+    pub manager_employee_id: Option<u64>,
     /// 入职日期（`yyyy-MM-dd`）
     pub hire_date: Option<String>,
     /// 转正日期（`yyyy-MM-dd`）

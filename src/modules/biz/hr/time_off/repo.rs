@@ -30,9 +30,6 @@ use crate::utils::PageData;
 /// 按 id 降序（新建在前），恒排除软删。
 ///
 /// `page_index` 为 0-based、`page_size` 已由 `PageQuery` clamp 到 1..=1000。
-// 实现提示：`Condition::all()` 累加可选条件 → `Entity::find().filter(cond)`
-// `.filter(Column::DeletedAt.is_null()).order_by_desc(Column::Id)` →
-// `crate::utils::paginate(select, db, page_index, page_size)`。
 pub async fn find_time_off_type_page(
     db: &impl ConnectionTrait,
     filter: &TimeOffTypeFilter,
@@ -63,7 +60,6 @@ pub async fn find_time_off_type_page(
 }
 
 /// 按 id 查有效假期类型（排除软删）。
-// 实现提示：`Entity::find().filter(Column::Id.eq(id)).filter(Column::DeletedAt.is_null()).one(db)`。
 pub async fn find_time_off_type_by_id(
     db: &impl ConnectionTrait,
     id: u64,
@@ -79,8 +75,6 @@ pub async fn find_time_off_type_by_id(
 /// 按 ID 批量取假期类型（软删过滤：`DeletedAt.is_null()`；不分页；空入参直接返回空 `Vec`）。
 ///
 /// 供 service 列表响应批量取名（`fill_time_off_type_names`）：单次查询，禁止逐行查库。
-// 实现提示：`ids` 为空直接 `return Ok(Vec::new())` → `Entity::find().filter(Column::Id.is_in(ids))`
-// `.filter(Column::DeletedAt.is_null()).all(db)`（顺序无要求，取名按 id 建 map 即可）。
 pub async fn find_time_off_types_by_ids(
     db: &impl ConnectionTrait,
     ids: &[u64],
@@ -101,7 +95,6 @@ pub async fn find_time_off_types_by_ids(
 ///
 /// `uk_hr_time_off_type_code` 是单列唯一键，软删行仍占位，查重必须能看到软删记录
 /// （口径同 `sys_position.position_code`）；「编码已存在」的判定与文案在 service 层。
-// 实现提示：不加 `DeletedAt.is_null()` 过滤，`.one(db)` 取唯一命中。
 pub async fn find_time_off_type_by_code_include_deleted(
     db: &impl ConnectionTrait,
     code: &str,
@@ -114,8 +107,6 @@ pub async fn find_time_off_type_by_code_include_deleted(
 }
 
 /// 事务内创建假期类型：审计盖章（创建人与更新人同源，均取 `actor_id`）。
-// 实现提示：`ActiveModel { created_by: Set(actor_id), updated_by: Set(actor_id), ..model }`
-// 后 `.insert(txn)`。
 pub async fn create_time_off_type_in_tx(
     txn: &DatabaseTransaction,
     model: hr_time_off_type::ActiveModel,
@@ -133,7 +124,6 @@ pub async fn create_time_off_type_in_tx(
 /// 事务内更新假期类型（窄写）：只刷新更新人，`created_by` 保持 `NotSet` 不被覆盖。
 ///
 /// 入参 `model` 由 service 构造：只 Set 业务变更列，其余列留 `NotSet`。
-// 实现提示：`ActiveModel { updated_by: Set(actor_id), ..model }.update(txn)`。
 pub async fn update_time_off_type_in_tx(
     txn: &DatabaseTransaction,
     model: hr_time_off_type::ActiveModel,
@@ -151,8 +141,6 @@ pub async fn update_time_off_type_in_tx(
 ///
 /// 返回是否有行被更新（`false` = 目标不存在或已软删）；
 /// 「类型不存在」的判定与文案由 service 层负责。
-// 实现提示：`update_many()` + `Column::Id.eq(id)` + `Column::DeletedAt.is_null()`
-// （后者保证重复软删返回 false）+ `set(ActiveModel { deleted_at, updated_by, ..Default::default() })`。
 pub async fn soft_delete_time_off_type_in_tx(
     txn: &DatabaseTransaction,
     id: u64,
@@ -178,12 +166,6 @@ pub async fn soft_delete_time_off_type_in_tx(
 /// 按 `expire_at ASC`（NULL 视为无穷大，排最后），`lock_exclusive()`。
 ///
 /// 「读 → 判断 → 写」的额度原语专用：同一账户并发扣减靠行锁串行化。
-// 实现提示：`.order_by_asc(Column::ExpireAt)` 无法把 NULL 排最后 → 用
-// `sea_orm::sea_query::Expr::cust("expire_at IS NULL")` 作为第一排序键
-// （`order_by_asc` 布尔表达式），再 `order_by_asc(Column::ExpireAt)`，
-// 最后 `.lock_exclusive()`；`.all(txn)`。
-// 同一失效日的批次（含多条 NULL）必须再补 `order_by_asc(Column::Id)` 兜底，
-// 否则扣减顺序不确定（测试期望 NULL 组按 id 升序）。
 pub async fn find_active_grants_for_update(
     txn: &DatabaseTransaction,
     employee_id: u64,
@@ -249,7 +231,6 @@ pub async fn find_grant_by_id_for_update(
 }
 
 /// 事务内创建批次：审计盖章（创建人与更新人同源，均取 `actor_id`）。
-// 实现提示：`ActiveModel { created_by: Set(actor_id), updated_by: Set(actor_id), ..model }.insert(txn)`。
 pub async fn create_grant_in_tx(
     txn: &DatabaseTransaction,
     model: hr_time_off_grant::ActiveModel,
@@ -267,7 +248,6 @@ pub async fn create_grant_in_tx(
 /// 按幂等键（员工 × 假别 × 依据 × 周期）查批次——**含已用尽 / 已失效行**。
 ///
 /// 幂等判定必须能看到任何状态的历史批次，故不加 `status` 过滤。
-// 实现提示：四列精确过滤 + `.one(txn)`；`idx_hr_time_off_grant_idempotent` 覆盖该查询。
 pub async fn find_grant_by_idempotent_key(
     txn: &DatabaseTransaction,
     employee_id: u64,
@@ -287,8 +267,6 @@ pub async fn find_grant_by_idempotent_key(
 
 /// 分页 + 动态过滤批次（employee_id / time_off_type_id / period / status 精确，
 /// reason 模糊），按 id 降序（新批次在前）。
-// 实现提示：`Condition::all()` 累加 → `.order_by_desc(Column::Id)` →
-// `crate::utils::paginate(select, db, page_index, page_size)`；账本表无软删列，不加 `DeletedAt` 过滤。
 pub async fn find_grant_page(
     db: &impl ConnectionTrait,
     filter: &TimeOffGrantFilter,
@@ -319,7 +297,6 @@ pub async fn find_grant_page(
 }
 
 /// 按 id 查批次（详情用，不加锁）。
-// 实现提示：`Entity::find().filter(Column::Id.eq(id)).one(db)`。
 pub async fn find_grant_by_id(
     db: &impl ConnectionTrait,
     id: u64,
@@ -335,9 +312,6 @@ pub async fn find_grant_by_id(
 ///
 /// 条件写进 `UPDATE ... WHERE` 而不先读后写，避免并发下扣成负数；
 /// 扣到 0 之后的 `status` 翻转由 service 决定（本层只降剩余）。
-// 实现提示：`update_many()` + `Column::Id.eq(grant_id)` + `Column::RemainingMinutes.gte(minutes)` +
-// `col_expr(Column::RemainingMinutes, Expr::col(Column::RemainingMinutes) - minutes)` +
-// `col_expr(Column::UpdatedBy, Expr::value(actor_id))`，返回 `rows_affected > 0`。
 pub async fn consume_grant_in_tx(
     txn: &DatabaseTransaction,
     grant_id: u64,
@@ -359,8 +333,6 @@ pub async fn consume_grant_in_tx(
 }
 
 /// 事务内刷新批次状态（2 已用尽 / 3 已失效 / 4 已撤销），返回是否有行被更新。
-// 实现提示：`update_many()` + `Column::Id.eq(grant_id)` +
-// `set(ActiveModel { status: Set(status), updated_by: Set(actor_id), ..Default::default() })`。
 pub async fn set_grant_status_in_tx(
     txn: &DatabaseTransaction,
     grant_id: u64,
@@ -401,7 +373,6 @@ pub async fn find_balance_by_account(
 /// 按账户唯一键（员工 × 假别 × 账期）加锁读账户，`lock_exclusive()`。
 ///
 /// 「读 → 判断 → 写」的额度原语专用：`uk_hr_time_off_balance_account` 保证唯一命中。
-// 实现提示：三列精确过滤 + `.lock_exclusive()` + `.one(txn)`。
 pub async fn find_balance_by_account_for_update(
     txn: &DatabaseTransaction,
     employee_id: u64,
@@ -419,7 +390,6 @@ pub async fn find_balance_by_account_for_update(
 }
 
 /// 按 id 查账户（详情用，不加锁）。
-// 实现提示：`Entity::find().filter(Column::Id.eq(id)).one(db)`。
 pub async fn find_balance_by_id(
     db: &impl ConnectionTrait,
     id: u64,
@@ -432,8 +402,6 @@ pub async fn find_balance_by_id(
 }
 
 /// 分页 + 动态过滤账户（employee_id / time_off_type_id / period 精确），按 id 降序。
-// 实现提示：`Condition::all()` 累加 → `.order_by_desc(Column::Id)` →
-// `crate::utils::paginate(select, db, page_index, page_size)`。
 pub async fn find_balance_page(
     db: &impl ConnectionTrait,
     filter: &TimeOffBalanceFilter,
@@ -460,7 +428,6 @@ pub async fn find_balance_page(
 /// 事务内建账户（唯一键冲突即并发建户，由 service 重读）。
 ///
 /// 无 `actor_id` 入参：审计列由 service 在 `ActiveModel` 里给定（账户由发放 / 系统动作创建）。
-// 实现提示：`model.insert(txn)`。
 pub async fn create_balance_in_tx(
     txn: &DatabaseTransaction,
     model: hr_time_off_balance::ActiveModel,
@@ -472,7 +439,6 @@ pub async fn create_balance_in_tx(
 /// 事务内更新账户（窄写）：只刷新更新人，其余列以入参 `model` 为准。
 ///
 /// 入参 `model` 由 service 构造：只 Set 变动列，其余列留 `NotSet`。
-// 实现提示：`ActiveModel { updated_by: Set(actor_id), ..model }.update(txn)`。
 pub async fn update_balance_in_tx(
     txn: &DatabaseTransaction,
     model: hr_time_off_balance::ActiveModel,
@@ -489,7 +455,6 @@ pub async fn update_balance_in_tx(
 /// 事务内追加一条流水（append-only：本层不提供更新 / 删除原语，冲正靠反向记录）。
 ///
 /// 无 `actor_id` 入参：`operator_id` 是业务字段（0=系统），由 service 决定。
-// 实现提示：`model.insert(txn)`。
 pub async fn create_balance_log_in_tx(
     txn: &DatabaseTransaction,
     model: hr_time_off_balance_log::ActiveModel,
@@ -499,8 +464,6 @@ pub async fn create_balance_log_in_tx(
 
 /// 分页 + 动态过滤流水（employee_id / time_off_type_id / biz_type 精确），
 /// 按 id 降序（最新在前）。
-// 实现提示：`Condition::all()` 累加 → `.order_by_desc(Column::Id)` →
-// `crate::utils::paginate(select, db, page_index, page_size)`；流水表无软删列。
 pub async fn find_balance_log_page(
     db: &impl ConnectionTrait,
     filter: &TimeOffBalanceLogFilter,

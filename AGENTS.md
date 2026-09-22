@@ -137,14 +137,16 @@ GitHub 的分支保护只能按 base 分支与状态检查过滤、没有「按�
   这是第三方平台的**接入面**（后端不做连接器）。
 - `biz/hr/overtime`（加班，表 `hr_overtime_request`，端点 `/api/v1/hr/overtime/*` 共 8 个）：
   加班时长 = 区间总长（不裁剪），校验「工作日类型必须落在应工作窗口之外 / 休息日类型必须非应出勤日」；
+  同日区间重叠的判定把**在途（审批中）**单据一并算入（只比已通过会让两张相交的在途单各自通过后重复补偿）；
   审批通过且 `comp_mode = 1 转调休` 时**同事务**生成 `hr_time_off_grant`（`source_kind = 3 加班单`）。
 - `biz/hr/time_off`（假期类型 + 额度账本，表 `hr_time_off_type` / `hr_time_off_grant` / `hr_time_off_balance` /
   `hr_time_off_balance_log` / `hr_time_off_request`，端点 `/api/v1/hr/time-off/{type,grant,balance,request}/*`
   共 20 个）：
   字典 `timeOffGrantReason`、菜单、`API_SEEDS`、定时任务 `time_off_grant_expire`（每日 01:30 作废过期额度批次）
   均已登记。**请假单**（`hr_time_off_request`）：`create` = 建单即提交（后端按「排班 × 日历」派生
-  `duration_minutes`，请求体不收该字段）→ 预占额度 + 起审批实例同一事务；`update` / `submit` 仅限
-  「已驳回 / 已撤销」；`cancel` 仅限「审批中」且仅本人；区间重叠是**跨假别**的「读 → 判断 → 写」，
+  `duration_minutes`，请求体不收该字段）→ 起审批实例 + 预占额度同一事务（**预占流水以审批实例 ID 为来源**，
+  见陷阱 12）；`update` / `submit` 仅限「已驳回 / 已撤销」（`submit` 必须挡「已通过」，否则二次预占会锁死额度）；
+  `cancel` 仅限「审批中」且仅本人；区间重叠是**跨假别**的「读 → 判断 → 写」，
   靠锁 `hr_employee` 行串行化（账户行锁只能串行化同假别）。
   **命名注意**：域名叫 `time-off`（Time Off = 假期/请假）；`hr_employee.leave_date` 是**离职日期**（另一个语义），
   两者不要混读——域改名正是为了消除这个歧义。额度模型：**授予批次是事实来源**，
@@ -339,7 +341,7 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
 - **框架**：stock libtest + tokio，无 `sqlx::test` / `sea_orm` 测试宏 / `serial_test`，无 dev-dependencies。
 - **位置**：`#[cfg(test)] mod tests` **内联在业务文件里**（`repo.rs` / `service.rs` / `validate.rs` / `api.rs` /
   `middleware/*.rs` / `task/*.rs` / `utils/*.rs`）；**没有 `tests/` 目录、没有 fixtures 目录、全仓无 mock**。
-  `dto.rs` 从不写测试。当前规模（复核命令见下）：`src/` 81 个测试文件、638 条测试（448 条 `#[tokio::test]` + 190 条 `#[test]`）；
+  `dto.rs` 从不写测试。当前规模（复核命令见下）：`src/` 81 个测试文件、661 条测试（467 条 `#[tokio::test]` + 194 条 `#[test]`）；
   `codegen/` 另有纯 `#[test]`，根 `cargo test` 不会跑它（需 `cargo test --manifest-path codegen/Cargo.toml`）。
 - **属性选择**：纯逻辑用 `#[test]`；碰 DB / handler 用 `#[tokio::test]`（默认 `current_thread`）；
   真并发必须 `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`（忘了写就静默无法交错）。
@@ -397,7 +399,7 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
     改动时区要三处一起改。
 11. **账本 / 事实 / 历史表不软删**：`hr_time_off_grant` / `hr_time_off_balance` / `hr_time_off_balance_log`
     （额度账本，作废走 `status` + 反向流水）、`hr_shift_schedule` / `hr_attendance_record` / `hr_work_calendar`
-    （排班 / 事实 / 日历，写入即 upsert）、`hr_approval_flow_node`（按 `(flow_id, seq)` 硬删重排）/
+    （排班 / 事实 / 日历，写入即 upsert）、`hr_approval_flow_node`（按 `(flow_id, seq)` 硬删，**不重排 seq**）/
     `hr_approval_instance` / `hr_approval_record`（审批历史）**都没有 `deleted_at`**。
     给账本表加软删会与 `hr_time_off_balance` 的 `(employee_id, time_off_type_id, period)` 唯一键冲突
     ——软删行仍占位，账户重建必然撞键；排班 / 事实表的 `(employee_id, work_date)`、日历的 `calendar_date`
@@ -409,14 +411,31 @@ Conventional Commits + **中文描述**，类型限 `feat` / `fix` / `refactor` 
     实扣只做账户 `locked → used` 迁移（不再按 FEFO 现扣）、释放按预占流水归还原批次（原批次已失效/已撤销时
     归还到当前账期的「归还批次」，幂等键含 `source_kind = 2 请假单 + source_id`）。这么做的原因是过期 job
     只看批次 `remaining`：预占若不动批次，在途量会被跨期作废、驳回释放再加回来，可用额度会凭空多出。
+    **`source_id` 记审批实例 ID（= 一次提交周期），不是请假单 ID**：单据允许「驳回 → 改 → 重新提交」，
+    用单据 ID 会让两轮预占串在一本账上（第二轮释放被「已有释放流水」的幂等守卫跳过 → `locked` 永久滞留；
+    第二轮实扣按两轮求和 → 判「预占量不足」把单据卡死）。单据 ID 由实例的 `biz_id` 反查。
     两条不变式（改动额度逻辑必须重跑 `cargo test --lib hr::time_off`）：
     `Σ log.delta == granted + adjust − used − locked − expired`、
     `Σ 未失效批次 remaining + locked == granted + adjust − used − expired`（**`locked` 必须在左边**，
     旧表述 `Σ remaining == granted − used` 在预占即扣批次下必然破）。
+    锁序两条硬约定（反序会被 MySQL 以 1213 杀掉其中一个事务）：额度链一律**账户 → 批次**
+    （`lock` / `consume` / `release` / 过期 job 同序）；审批链一律**实例 → 业务单据**
+    （审批侧 `approve` / `reject` 先锁实例，业务侧撤销 / 删除入口先调
+    `approval::service::lock_latest_instance_by_biz_in_tx` 再锁自己的单据行）。
 13. **批次幂等键按来源分流**：`hr_time_off_grant.source_id != 0` 时幂等键是
     `(员工 × 假别 × source_kind × source_id)`，否则才是 `(员工 × 假别 × reason × period)`——
     否则「同一年第二次加班转调休」会被旧四列键吞掉（第二次加班白干）。
 14. **真库测试不得依赖开发库的残留数据**：`admin`（`user_id = 1`）可能已被 e2e 或人工挂上员工档案，
     依赖「admin 没有档案」的用例会随库状态漂移；审批/请假用例统一用新建的唯一用户（`900_4xx` / `900_5xx` 段位）。
+    审批链用例还必须给**审批人建启用账号**（`sys_user.status = 1`）：解析审批人时会校验账号可用。
 15. **审批模板的最后一个节点不允许跳过**：`upsert_flow_node` / `delete_flow_node` 写入后都会复核，
     解析不到审批人时宁可报错让申请人找 HR，也不许单据无人把关（模板种子与页面改动都受此约束）。
+    「解析得到」还要求**真的有人能审**：1 直属上级 / 2 部门负责人解析出的账号必须启用且未软删，
+    4 指定角色池必须至少有一名启用成员（否则节点判「已解析」却无人可待办，单据卡在审批中）。
+16. **请假单 / 加班单的写入口一律「本人」**：`create` / `update` / `submit` / `cancel` / `delete` 都要求
+    单据归属 = 当前登录用户的员工档案（`create` 的请求体 `employeeId` 必须等于本人的档案 ID），
+    加班单归属不可修改。HR **不做代报**——批量事实录入走 `hr/attendance/record/import`。
+    若要开放「HR 代录」，请新增独立端点 + 独立权限码，不要放宽这些入口。
+17. **审批流模板软删后同 `biz_type` 重建 = 恢复原行**（`uk_hr_approval_flow_biz_type` 被软删行占位，
+    直接 INSERT 必撞键）；种子只在**模板新建时**种节点，已存在的模板不再补种
+    （运维在页面上删掉的节点不会在重启时复活）。

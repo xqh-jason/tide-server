@@ -13,7 +13,8 @@
 //!   「学历取值不合法，仅允许：…」。
 //!
 //! 需要查库的规则（`user_id` 查重、账号存在性、档案存在性、直属上级合法性）留在 service 层；
-//! `manager_employee_id` 是 `u64`（`0` = 未设置），本身无值域可校验，故本层不为它造规则。
+//! `manager_employee_id` 的规则只有「必须存在 / 不能是本人」这类查库判断（创建入参 `0` = 未设置，
+//! 更新入参 `null` / 缺省 = 不修改、`0` = 清空），本身无值域可校验，故本层不为它造规则。
 
 use crate::modules::biz::hr::employee::dto::{
     CreateAccountReq, CreateEmployeeReq, UpdateEmployeeReq,
@@ -50,6 +51,17 @@ fn check_required(s: &str, label: &str, max: usize, errors: &mut Vec<String>) {
 fn check_len(s: &str, label: &str, max: usize, errors: &mut Vec<String>) {
     if s.chars().count() > max {
         errors.push(format!("{label}长度不能超过 {max} 个字符"));
+    }
+}
+
+/// 检查敏感字段不得回填掩码值：详情 / 列表响应把 `id_card` / `bank_account` 掩码成
+/// `110101********1234`，前端若把掩码原样提交就会写进库且不可逆；含 `*` 即拒。
+/// 空串（语义「不修改」）与真实值不受影响。
+fn check_not_masked(s: &str, label: &str, errors: &mut Vec<String>) {
+    if s.contains('*') {
+        errors.push(format!(
+            "{label}不能包含掩码字符 *（请填真实值，空串表示不修改）"
+        ));
     }
 }
 
@@ -127,6 +139,9 @@ fn join_errors(errors: Vec<String>) -> Result<(), String> {
 /// 长度上限（按 `char` 计数，对齐 `hr_employee` 列定义）：
 /// `graduate_school` / `major` 128、`id_card` 32、`emergency_contact` 64、
 /// `emergency_phone` 32、`bank_account` 64、`remark` 255。
+///
+/// 敏感字段（`id_card` / `bank_account`）另拒掩码值（含 `*`）：
+/// 这两个字段的响应体是掩码串，前端直接回填会不可逆地覆盖真实值。
 pub fn validate_create_employee(
     req: &CreateEmployeeReq,
     employment_status_allowed: &[i8],
@@ -145,6 +160,7 @@ pub fn validate_create_employee(
     );
     check_len(&req.major, "专业", MAJOR_MAX, &mut errors);
     check_len(&req.id_card, "身份证号", ID_CARD_MAX, &mut errors);
+    check_not_masked(&req.id_card, "身份证号", &mut errors);
     check_len(
         &req.emergency_contact,
         "紧急联系人",
@@ -158,6 +174,7 @@ pub fn validate_create_employee(
         &mut errors,
     );
     check_len(&req.bank_account, "工资卡号", BANK_ACCOUNT_MAX, &mut errors);
+    check_not_masked(&req.bank_account, "工资卡号", &mut errors);
     check_len(&req.remark, "备注", REMARK_MAX, &mut errors);
     check_value_domains(
         req.employment_status,
@@ -172,7 +189,8 @@ pub fn validate_create_employee(
 /// 更新员工档案校验：同创建，但无账号字段，另加 id 必须大于 0。
 ///
 /// 敏感字段（`id_card` / `bank_account`）**空串合法**：语义是「不修改」
-/// （列表 / 详情回传掩码值，前端编辑表单不回填）。
+/// （列表 / 详情回传掩码值，前端编辑表单不回填）；但**掩码值本身必须被拒**——
+/// 直接回填 `110101********1234` 会把掩码写进库且不可逆。
 pub fn validate_update_employee(
     req: &UpdateEmployeeReq,
     employment_status_allowed: &[i8],
@@ -193,6 +211,7 @@ pub fn validate_update_employee(
     );
     check_len(&req.major, "专业", MAJOR_MAX, &mut errors);
     check_len(&req.id_card, "身份证号", ID_CARD_MAX, &mut errors);
+    check_not_masked(&req.id_card, "身份证号", &mut errors);
     check_len(
         &req.emergency_contact,
         "紧急联系人",
@@ -206,6 +225,7 @@ pub fn validate_update_employee(
         &mut errors,
     );
     check_len(&req.bank_account, "工资卡号", BANK_ACCOUNT_MAX, &mut errors);
+    check_not_masked(&req.bank_account, "工资卡号", &mut errors);
     check_len(&req.remark, "备注", REMARK_MAX, &mut errors);
     check_value_domains(
         req.employment_status,
@@ -261,7 +281,7 @@ mod tests {
     fn update_req() -> UpdateEmployeeReq {
         UpdateEmployeeReq {
             id: 1,
-            manager_employee_id: 0,
+            manager_employee_id: Some(0),
             hire_date: None,
             regular_date: None,
             leave_date: None,
@@ -281,6 +301,51 @@ mod tests {
     fn valid_request_passes() {
         assert!(validate_create_employee(&req(), STATUS_ALLOWED, EDUCATION_ALLOWED).is_ok());
         assert!(validate_update_employee(&update_req(), STATUS_ALLOWED, EDUCATION_ALLOWED).is_ok());
+    }
+
+    /// 详情 / 列表回传的是掩码值（`110101********1234`），一旦被前端回填提交就会把掩码写进库
+    /// 且不可逆 —— 含 `*` 的敏感字段必须被拒。
+    #[test]
+    fn validation_rejects_masked_sensitive_fields() {
+        let masked_card = "110101********1234";
+
+        let create = CreateEmployeeReq {
+            id_card: masked_card.to_string(),
+            ..req()
+        };
+        let message =
+            validate_create_employee(&create, STATUS_ALLOWED, EDUCATION_ALLOWED).unwrap_err();
+        assert!(message.contains("掩码"), "{message}");
+
+        let update = UpdateEmployeeReq {
+            id_card: masked_card.to_string(),
+            ..update_req()
+        };
+        let message =
+            validate_update_employee(&update, STATUS_ALLOWED, EDUCATION_ALLOWED).unwrap_err();
+        assert!(message.contains("掩码"), "{message}");
+
+        let update_bank = UpdateEmployeeReq {
+            bank_account: "6222********0123".to_string(),
+            ..update_req()
+        };
+        let message =
+            validate_update_employee(&update_bank, STATUS_ALLOWED, EDUCATION_ALLOWED).unwrap_err();
+        assert!(message.contains("掩码"), "{message}");
+
+        // 空串（不修改）与真实值仍必须合法
+        assert!(
+            validate_update_employee(&update_req(), STATUS_ALLOWED, EDUCATION_ALLOWED).is_ok(),
+            "空串 = 不修改，必须合法"
+        );
+        let real = UpdateEmployeeReq {
+            id_card: "110101199003071234".to_string(),
+            ..update_req()
+        };
+        assert!(
+            validate_update_employee(&real, STATUS_ALLOWED, EDUCATION_ALLOWED).is_ok(),
+            "真实身份证号必须合法"
+        );
     }
 
     #[test]

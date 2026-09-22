@@ -2,7 +2,8 @@
 //!
 //! - 软删主表；`duration_minutes` 由后端按排班 × 工作日历派生（请求体只收起止时间）；
 //! - `comp_mode = 1 转调休` 在审批通过（同一事务）时生成 `hr_time_off_grant`
-//!   （`source = 3 加班转调休`、`source_kind = 1`、`source_id = 本单 ID`）；
+//!   （`source = 3 加班转调休`、`source_kind = 3 加班单`
+//!   ——`time_off::SOURCE_KIND_OVERTIME`、`source_id = 本单 ID`）；
 //!   `comp_mode = 2 计加班费` 只落单据 —— P5 薪酬域不做，本期不算金额；
 //! - 审批复用 `hr_approval_instance`（`biz_type = "overtime"`），不新建审批逻辑；
 //! - 幂等：表存在即跳过。

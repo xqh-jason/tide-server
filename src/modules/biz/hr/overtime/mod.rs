@@ -8,8 +8,9 @@
 //! - **类型必须与应出勤日匹配**：`overtime_type = 1 工作日` 要求 `work_date` 是应出勤日，
 //!   `2 休息日` / `3 法定节假日` 要求 `work_date` **不是**应出勤日。应出勤与否由考勤域
 //!   `attendance::service::resolve_workday`（排班 × 工作日历）实时派生，本域不自己判日历；
-//! - **同日区间不重叠**：同一员工同一 `work_date` 的已通过加班单区间不得相交
-//!   （`start_at < end_at_new AND end_at > start_at_new`）。
+//! - **同日区间不重叠**：同一员工同一 `work_date` 的**在途（审批中）或已通过**加班单区间不得相交
+//!   （`start_at < end_at_new AND end_at > start_at_new`）；只比对已通过的单据时，
+//!   两张相交的在途单各自通过后会对同一时段重复补偿。
 //!
 //! 审批复用基座（`biz_type = "overtime"`）：建单即提交，同事务起审批实例并把
 //! `approval_instance_id` 写回；终态由基座按 `biz_type` 分派回

@@ -14,6 +14,19 @@ use crate::middleware::auth::AuthUser;
 use crate::utils::request::CapturedBody;
 
 const MAX_BODY_BYTES: usize = 4096;
+/// 递归脱敏的键名白名单（**精确、区分大小写**匹配，故 camelCase 与 snake_case 都要列）。
+///
+/// 覆盖两类：
+///
+/// - **凭据类**：`password` / `old_password` / `new_password` / `token` / `authorization`
+///   / `secret` —— 落库即等于泄露可用凭据；
+/// - **HR PII 标识类**：`id_card`(`idCard`) / `bank_account`(`bankAccount`) /
+///   `emergency_phone`(`emergencyPhone`) / `emergency_contact`(`emergencyContact`) /
+///   `phone` / `mobile` —— 身份证、工资卡、手机号会以原文长期留在
+///   `sys_operation_log`，任何持日志查看权限的角色都能读到（响应体已掩码，日志侧不能漏）。
+///
+/// 刻意**不**脱敏事由 / 备注（`reason` / `remark`）：操作日志的审计价值在于「谁**改**了
+/// 什么」，事由是判断改动合理性的核心内容，脱敏后日志就失去审计意义。
 const SENSITIVE_KEYS: &[&str] = &[
     "password",
     "old_password",
@@ -21,6 +34,16 @@ const SENSITIVE_KEYS: &[&str] = &[
     "token",
     "authorization",
     "secret",
+    "id_card",
+    "idCard",
+    "bank_account",
+    "bankAccount",
+    "emergency_phone",
+    "emergencyPhone",
+    "emergency_contact",
+    "emergencyContact",
+    "phone",
+    "mobile",
 ];
 
 /// 只读语义的路径后缀：这些端点不写操作日志。
@@ -271,6 +294,29 @@ mod tests {
         assert!(!out.contains("sec-1"), "嵌套数组中的 secret 也应脱敏");
         assert!(out.contains("***"));
         assert!(out.contains("\"ok\":1"), "普通字段应原样保留");
+    }
+
+    /// HR 写接口引入的 PII 字段同样必须脱敏：否则身份证 / 工资卡 / 手机号会以原文长期落在
+    /// `sys_operation_log`，被任何持日志查看权限的角色读到（响应体已掩码，日志侧不能漏）。
+    #[tokio::test]
+    async fn sanitize_redacts_hr_pii_keys() {
+        let input = r#"{"idCard":"110101199003071234","bankAccount":"6222021234567890123","emergencyPhone":"13800000000","emergencyContact":"张三","phone":"13900000000","mobile":"13700000000","password":"pwd-1","reason":"感冒发烧"}"#;
+        let out = sanitize_and_truncate(input);
+
+        for leaked in [
+            "110101199003071234",
+            "6222021234567890123",
+            "13800000000",
+            "13900000000",
+            "13700000000",
+        ] {
+            assert!(!out.contains(leaked), "{leaked} 必须脱敏");
+        }
+        assert!(out.contains("***"), "脱敏值应为 ***");
+        assert!(
+            out.contains("感冒发烧"),
+            "事由保留原样：操作日志的审计价值在于「改了什么」，事由是核心审计内容"
+        );
     }
 
     /// 截断：落在 UTF-8 字符边界并带 ...(截断) 后缀。

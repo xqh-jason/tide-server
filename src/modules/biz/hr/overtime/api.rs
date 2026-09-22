@@ -29,7 +29,9 @@ async fn fill_employee_names_of(
     items: &mut [OvertimeResp],
 ) -> Result<(), AppError> {
     let employee_ids: Vec<u64> = items.iter().map(|item| item.employee_id).collect();
-    let names = overtime_service::fill_employee_names(db, &employee_ids).await?;
+    let names =
+        crate::modules::biz::hr::employee::service::find_employee_name_map(db, &employee_ids)
+            .await?;
     for item in items.iter_mut() {
         item.employee_name = names.get(&item.employee_id).cloned().unwrap_or_default();
     }

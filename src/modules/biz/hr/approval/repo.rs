@@ -508,18 +508,64 @@ pub async fn find_leader_user_id_by_dept(
         .map(|m| m.user_id))
 }
 
-/// 某用户持有的角色 ID 列表（角色池待办判定用）。
+/// 某用户持有的**启用**角色 ID 列表（角色池待办与审批资格判定用）。
+///
+/// 角色停用 / 软删后其成员资格立即失效：与 `resolve_approver` 的 `find_enabled_role_by_id`
+/// 同口径（否则停用角色的残留成员仍能进待办并审批，角色治理形同虚设）。
 pub async fn find_role_ids_by_user_id(
     db: &impl ConnectionTrait,
     user_id: u64,
 ) -> anyhow::Result<Vec<u64>> {
-    Ok(sys_user_role::Entity::find()
+    let role_ids: Vec<u64> = sys_user_role::Entity::find()
         .filter(sys_user_role::Column::UserId.eq(user_id))
         .all(db)
         .await?
         .into_iter()
         .map(|m| m.role_id)
+        .collect();
+    if role_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(sys_role::Entity::find()
+        .filter(sys_role::Column::Id.is_in(role_ids))
+        .filter(sys_role::Column::Status.eq(1))
+        .filter(sys_role::Column::DeletedAt.is_null())
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|r| r.id)
         .collect())
+}
+
+/// 角色池是否至少有一名**启用**成员（`node_type = 4` 的「有人能审」判定用）。
+///
+/// 角色存在且启用还不够：池子里没人 = 节点判「已解析」却无人可审，单据会卡在审批中。
+pub async fn role_has_enabled_member(
+    db: &impl ConnectionTrait,
+    role_id: u64,
+) -> anyhow::Result<bool> {
+    use crate::entity::sys_user;
+    use sea_orm::PaginatorTrait;
+
+    let member_ids: Vec<u64> = sys_user_role::Entity::find()
+        .filter(sys_user_role::Column::RoleId.eq(role_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|m| m.user_id)
+        .collect();
+    if member_ids.is_empty() {
+        return Ok(false);
+    }
+
+    Ok(sys_user::Entity::find()
+        .filter(sys_user::Column::Id.is_in(member_ids))
+        .filter(sys_user::Column::Status.eq(1))
+        .filter(sys_user::Column::DeletedAt.is_null())
+        .count(db)
+        .await?
+        > 0)
 }
 
 /// 按 id 查启用角色（软删 / 停用视为不存在）——`node_type = 4` 的引用校验用。

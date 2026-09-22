@@ -82,10 +82,14 @@ pub async fn find_overtime_by_id_for_update(
         .await?)
 }
 
-/// 查同员工、同 `work_date`、**已通过**的加班单里与给定区间重叠的行。
+/// 查同员工、同 `work_date`、**在途（审批中）或已通过**的加班单里与给定区间重叠的行。
 ///
 /// 重叠判据：`start_at < end_at_new AND end_at > start_at_new`（左闭右开语义下的区间相交）。
 /// `work_date` 已在 service 层要求与起止时间同日，故跨天单据不会漏（本域不接受跨天提交）。
+///
+/// **在途单据必须一起判**（与请假域 `find_overlapping_requests` 同口径）：只比对已通过的单据时，
+/// 两张相交的在途单都能落库，各自审批通过后会对同一时段重复补偿（调休批次按各自单据 ID 入账，
+/// 互不拦截）。
 pub async fn find_overlapping_approved_overtime(
     db: &impl ConnectionTrait,
     employee_id: u64,
@@ -96,7 +100,10 @@ pub async fn find_overlapping_approved_overtime(
     let cond = Condition::all()
         .add(hr_overtime_request::Column::EmployeeId.eq(employee_id))
         .add(hr_overtime_request::Column::WorkDate.eq(work_date))
-        .add(hr_overtime_request::Column::Status.eq(super::REQUEST_STATUS_APPROVED))
+        .add(hr_overtime_request::Column::Status.is_in([
+            super::REQUEST_STATUS_PENDING,
+            super::REQUEST_STATUS_APPROVED,
+        ]))
         .add(hr_overtime_request::Column::StartAt.lt(end_at))
         .add(hr_overtime_request::Column::EndAt.gt(start_at));
 
@@ -175,45 +182,6 @@ pub async fn lock_employee_for_update(
         .filter(hr_employee::Column::DeletedAt.is_null())
         .lock_exclusive()
         .one(txn)
-        .await?)
-}
-
-/// 按 id 查员工档案（软删视为不存在）。
-pub async fn find_employee_by_id(
-    db: &impl ConnectionTrait,
-    employee_id: u64,
-) -> anyhow::Result<Option<hr_employee::Model>> {
-    Ok(hr_employee::Entity::find()
-        .filter(hr_employee::Column::Id.eq(employee_id))
-        .filter(hr_employee::Column::DeletedAt.is_null())
-        .one(db)
-        .await?)
-}
-
-/// 按平台用户 ID 查员工档案（软删视为不存在）——「我的单据」按 `user_id` 反查档案用。
-pub async fn find_employee_by_user_id(
-    db: &impl ConnectionTrait,
-    user_id: u64,
-) -> anyhow::Result<Option<hr_employee::Model>> {
-    Ok(hr_employee::Entity::find()
-        .filter(hr_employee::Column::UserId.eq(user_id))
-        .filter(hr_employee::Column::DeletedAt.is_null())
-        .one(db)
-        .await?)
-}
-
-/// 按员工 ID 批量取档案（列表响应的员工名拼装用；空入参早返，不发 `IN ()`）。
-pub async fn find_employees_by_ids(
-    db: &impl ConnectionTrait,
-    ids: &[u64],
-) -> anyhow::Result<Vec<hr_employee::Model>> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    Ok(hr_employee::Entity::find()
-        .filter(hr_employee::Column::Id.is_in(ids.iter().copied()))
-        .filter(hr_employee::Column::DeletedAt.is_null())
-        .all(db)
         .await?)
 }
 

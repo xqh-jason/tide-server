@@ -145,11 +145,6 @@ fn join_errors(errors: Vec<String>) -> Result<(), String> {
 /// - `remark` 长度 > 255 → `备注长度不能超过 255 个字符`；
 /// - `status`：`check::check_status(req.status, status_allowed)` 的 `Err` 原样入列。
 //
-// 实现提示：照 `modules::biz::hr::employee::validate::validate_create_employee` 的形状写——
-// 一组 `check_*` 私有小函数（必填 / 长度 / 值域，值域文案 `仅允许：1 / 2` 形式）+ `join_errors`；
-// `status` 走 `crate::utils::check::check_status(req.status, status_allowed)
-// .map_err(|e| errors.push(e)).ok();`（返回 `Result<(), String>`，非 `AppError`）。
-// 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
 pub fn validate_create_time_off_type(
     req: &CreateTimeOffTypeReq,
     status_allowed: &[i8],
@@ -177,9 +172,6 @@ pub fn validate_create_time_off_type(
 /// 追加规则：`id` = 0 → `假期类型 ID 必须大于 0`；其余字段文案与
 /// [`validate_create_time_off_type`] 逐字一致。
 //
-// 实现提示：除 id 检查外与创建共用同一组 `check_*` 小函数；`UpdateTimeOffTypeReq` 与
-// `CreateTimeOffTypeReq` 字段同名同型（多一个 `id`），拆一个 `&str`/`i8` 入参的共用内部函数即可。
-// 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
 pub fn validate_update_time_off_type(
     req: &UpdateTimeOffTypeReq,
     status_allowed: &[i8],
@@ -220,9 +212,6 @@ pub fn validate_update_time_off_type(
 ///   `expire_at` 非空且非 `yyyy-MM-dd` → `失效日期格式应为 yyyy-MM-dd`；
 ///   两者都能解析且 `expire_at < effective_at` → `失效日期不能早于生效日期`。
 //
-// 实现提示：日期解析用 `chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")`（同 employee 域）；
-// 员工 ID 去重计数用 `crate::utils::check` 或就地 `HashSet`（`duplicate_ids` 是查重、不是去重）。
-// 骨架期：仅测试调用，实现函数体（api 层接线）后删除本属性
 pub fn validate_batch_create_grant(req: &BatchCreateGrantReq) -> Result<(), String> {
     let mut errors = Vec::new();
 

@@ -39,8 +39,9 @@ fn parse_date(field: &str, v: &Option<String>) -> Result<Option<chrono::NaiveDat
 /// （`utils::user_ref::find_user_name_map_by_ids`，全项目唯一查名管道）→
 /// 回填 `employee_id → 显示名`。空入参早返；**不得逐行查库**。
 ///
-/// 供指向「员工」而非「账号」的字段拼装显示名（如 `EmployeeResp::manager_employee_name`、
-/// 审批节点「直属上级」解析）；查不到的人（软删 / 不存在）不出现，调用方留空串。
+/// **全仓唯一实现**：time_off / attendance / overtime 三个域的显示名拼装都走本函数
+/// （各自的同构副本已删除），不得再新增第二份；查不到的人（软删 / 不存在）不出现，
+/// 调用方留空串。
 pub async fn find_employee_name_map(
     db: &impl ConnectionTrait,
     ids: &[u64],
@@ -184,7 +185,7 @@ pub(crate) async fn create_employee_in_tx(
     Ok(employee_repo::create_employee_in_tx(txn, model, actor_id).await?)
 }
 
-/// 事务内更新档案：判存在 → 直属上级校验（非本人 / 必须存在）→
+/// 事务内更新档案：判存在 → 直属上级三态校验（缺省保留 / 0 清空 / 非本人且存在）→
 /// 敏感字段空串保持原值 → 窄写（不动 `user_id`）。
 pub(crate) async fn update_employee_in_tx(
     txn: &DatabaseTransaction,
@@ -192,26 +193,27 @@ pub(crate) async fn update_employee_in_tx(
     req: &UpdateEmployeeReq,
 ) -> Result<hr_employee::Model, AppError> {
     use crate::modules::biz::hr::employee::repo as employee_repo;
-    use sea_orm::ActiveValue::Set;
+    use sea_orm::ActiveValue::{NotSet, Set};
 
     let Some(existing) = employee_repo::find_by_id(txn, req.id).await? else {
         return Err(AppError::Biz(format!("员工档案不存在：{}", req.id)));
     };
 
-    // 直属上级：不能是本人；非 0 时必须存在（软删视为不存在）
-    if req.manager_employee_id == req.id {
-        return Err(AppError::Biz("直属上级不能是本人".into()));
-    }
-    if req.manager_employee_id != 0
-        && employee_repo::find_by_id(txn, req.manager_employee_id)
-            .await?
-            .is_none()
-    {
-        return Err(AppError::Biz(format!(
-            "直属上级不存在：{}",
-            req.manager_employee_id
-        )));
-    }
+    // 直属上级三态：缺省 / `null` = 不修改（写 NotSet 保留原值）；0 = 清空；
+    // >0 = 改写为该员工，且不能是本人、必须存在（软删视为不存在）
+    let manager_employee_id = match req.manager_employee_id {
+        None => NotSet,
+        Some(0) => Set(0),
+        Some(id) => {
+            if id == req.id {
+                return Err(AppError::Biz("直属上级不能是本人".into()));
+            }
+            if employee_repo::find_by_id(txn, id).await?.is_none() {
+                return Err(AppError::Biz(format!("直属上级不存在：{id}")));
+            }
+            Set(id)
+        }
+    };
 
     // 敏感字段空串 = 不修改（列表 / 详情回传掩码值，前端编辑表单不回填）
     let id_card = if req.id_card.trim().is_empty() {
@@ -228,7 +230,7 @@ pub(crate) async fn update_employee_in_tx(
     // 窄写：只 Set 业务变更列（不动 user_id，`created_by` 由 repo 保持 NotSet）
     let model = hr_employee::ActiveModel {
         id: Set(req.id),
-        manager_employee_id: Set(req.manager_employee_id),
+        manager_employee_id,
         hire_date: Set(parse_date("入职日期", &req.hire_date)?),
         regular_date: Set(parse_date("转正日期", &req.regular_date)?),
         leave_date: Set(parse_date("离职日期", &req.leave_date)?),
@@ -407,7 +409,8 @@ mod tests {
     }
 
     /// 只改直属上级的更新请求骨架：敏感字段空串 = 不改写，其余业务列取稳定值。
-    fn update_req(id: u64, manager_employee_id: u64) -> UpdateEmployeeReq {
+    /// 上级三态：`None` = 不修改、`Some(0)` = 清空、`Some(id)` = 设为该员工。
+    fn update_req(id: u64, manager_employee_id: Option<u64>) -> UpdateEmployeeReq {
         UpdateEmployeeReq {
             id,
             manager_employee_id,
@@ -518,6 +521,50 @@ mod tests {
         );
     }
 
+    /// 未传 `managerEmployeeId` 的部分更新不得清空直属上级：档案的上级是审批链「直属上级」
+    /// 节点的唯一来源，静默清空会让该员工的加班单无法提交、请假单少一级审批。
+    #[tokio::test]
+    async fn update_without_manager_field_keeps_existing_manager() {
+        let db = test_txn().await;
+        let manager_user = seed_user(&db).await;
+        let user = seed_user(&db).await;
+        let manager = create_employee_in_tx(&db, ACTOR_ID, base_req(Some(manager_user.id), None))
+            .await
+            .unwrap();
+        let created = create_employee_in_tx(&db, ACTOR_ID, base_req(Some(user.id), None))
+            .await
+            .unwrap();
+
+        // 先挂上直属上级
+        let linked =
+            update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, Some(manager.id)))
+                .await
+                .unwrap();
+        assert_eq!(linked.manager_employee_id, manager.id, "前置：上级已挂上");
+
+        // 前端部分更新（不带 managerEmployeeId）→ 上级必须保持不变
+        let partial: UpdateEmployeeReq = serde_json::from_value(serde_json::json!({
+            "id": created.id,
+            "hireDate": "2026-03-03",
+            "employmentStatus": 1,
+            "education": 3
+        }))
+        .unwrap();
+        let updated = update_employee_in_tx(&db, ACTOR_ID, &partial)
+            .await
+            .unwrap();
+        assert_eq!(
+            updated.manager_employee_id, manager.id,
+            "缺省字段不得清空直属上级（显式传 0 才是清空）"
+        );
+
+        // 显式传 0 = 清空上级
+        let cleared = update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, Some(0)))
+            .await
+            .unwrap();
+        assert_eq!(cleared.manager_employee_id, 0, "显式 0 应清空上级");
+    }
+
     #[tokio::test]
     async fn update_employee_keeps_sensitive_when_blank() {
         let db = test_txn().await;
@@ -532,7 +579,7 @@ mod tests {
             ACTOR_ID,
             &UpdateEmployeeReq {
                 id: created.id,
-                manager_employee_id: 0,
+                manager_employee_id: Some(0),
                 hire_date: Some("2026-02-02".to_string()),
                 regular_date: Some("2026-05-02".to_string()),
                 leave_date: None,
@@ -649,7 +696,7 @@ mod tests {
             .await
             .unwrap();
 
-        let err = update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, created.id))
+        let err = update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, Some(created.id)))
             .await
             .unwrap_err();
 
@@ -683,10 +730,13 @@ mod tests {
             "创建应落直属上级"
         );
 
-        let moved =
-            update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, second_manager.id))
-                .await
-                .unwrap();
+        let moved = update_employee_in_tx(
+            &db,
+            ACTOR_ID,
+            &update_req(created.id, Some(second_manager.id)),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             moved.manager_employee_id, second_manager.id,
             "更新应改写直属上级"
@@ -697,7 +747,7 @@ mod tests {
             "改写后的上级应已落库"
         );
 
-        let cleared = update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, 0))
+        let cleared = update_employee_in_tx(&db, ACTOR_ID, &update_req(created.id, Some(0)))
             .await
             .unwrap();
         assert_eq!(cleared.manager_employee_id, 0, "更新传 0 应清空直属上级");

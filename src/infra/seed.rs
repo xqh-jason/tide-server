@@ -7,6 +7,8 @@
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 
+use std::borrow::Cow;
+
 use crate::entity::{
     hr_approval_flow, hr_approval_flow_node, hr_time_off_type, sys_api, sys_dictionary,
     sys_dictionary_detail, sys_job, sys_menu, sys_role, sys_role_menu, sys_user, sys_user_role,
@@ -39,16 +41,18 @@ fn canonical_api_path(path: &str) -> anyhow::Result<String> {
 static SEED_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 /// 审批流种子定义：模板 + 其节点（业务域 `hr/approval`）。
+/// 审批流种子：字段用 `Cow` 而不是 `&'static str`，好让用例能传自建的 `biz_type`
+/// 去验证「模板已存在时不补种节点」，不必借用 `'static`。
 struct ApprovalFlowSeed {
-    biz_type: &'static str,
-    name: &'static str,
+    biz_type: Cow<'static, str>,
+    name: Cow<'static, str>,
     nodes: &'static [ApprovalNodeSeed],
 }
 
 /// 审批流节点种子：`node_type`：1 直属上级 / 2 部门负责人（1、2 类由申请人档案与部门关系解析）。
 struct ApprovalNodeSeed {
     seq: i32,
-    node_name: &'static str,
+    node_name: Cow<'static, str>,
     node_type: i8,
     skip_if_empty: i8,
 }
@@ -1909,6 +1913,82 @@ async fn seed_int_dictionary(
     Ok(dict_id)
 }
 
+/// 播种一批审批流模板与节点（`flows` 由调用方给出，便于用例用自建模板验证
+/// 「模板已存在时不补种节点」——避免用例去改动共享的种子行）。
+///
+/// 幂等口径：模板按 `biz_type` 查重（**不加软删过滤**：单列唯一键软删行仍占位）；
+/// 节点**只在模板本次新建时种下**，已存在的模板整条跳过（运维删除的节点不被复活）。
+/// 并发安全：`uk_hr_approval_flow_biz_type` 唯一键兜底，插入冲突时回查既有行并跳过
+/// （另一进程已插同批种子），回查不到才认为真失败。
+async fn seed_approval_flows(
+    db: &DatabaseConnection,
+    admin_id: u64,
+    flows: &[ApprovalFlowSeed],
+) -> anyhow::Result<()> {
+    for flow in flows {
+        let existing = hr_approval_flow::Entity::find()
+            .filter(hr_approval_flow::Column::BizType.eq(flow.biz_type.as_ref()))
+            .one(db)
+            .await?;
+        if existing.is_some() {
+            continue;
+        }
+
+        let insert_result = hr_approval_flow::ActiveModel {
+            biz_type: Set(flow.biz_type.to_string()),
+            name: Set(flow.name.to_string()),
+            status: Set(1),
+            remark: Set(String::new()),
+            // 种子数据的操作人统一记为 admin 自己
+            created_by: Set(admin_id),
+            updated_by: Set(admin_id),
+            ..Default::default()
+        }
+        .insert(db)
+        .await;
+        let flow_id = match insert_result {
+            Ok(inserted) => inserted.id,
+            // 唯一键冲突（同一 biz_type 刚被并发进程插入）：该模板对本次运行而言属于
+            // 「已存在」，节点交给插入方去种，本进程跳过；回查不到才认为是真失败
+            Err(_) => {
+                let raced = hr_approval_flow::Entity::find()
+                    .filter(hr_approval_flow::Column::BizType.eq(flow.biz_type.as_ref()))
+                    .one(db)
+                    .await?
+                    .is_some();
+                if !raced {
+                    return Err(anyhow::anyhow!(
+                        "审批流模板种子插入失败且回查不到：{}",
+                        flow.biz_type
+                    ));
+                }
+                continue;
+            }
+        };
+
+        // 模板刚刚由本进程插入，节点必然不存在：无需「按 (flow_id, seq) 查不到就补插」，
+        // 直接种下即可（新库首启用例断言节点形状就落在这里）
+        for node in flow.nodes {
+            hr_approval_flow_node::ActiveModel {
+                flow_id: Set(flow_id),
+                seq: Set(node.seq),
+                node_name: Set(node.node_name.to_string()),
+                node_type: Set(node.node_type),
+                // 1/2 类节点由申请人档案与部门关系解析，不需要引用 ID
+                approver_ref_id: Set(0),
+                skip_if_empty: Set(node.skip_if_empty),
+                remark: Set(String::new()),
+                created_by: Set(admin_id),
+                updated_by: Set(admin_id),
+                ..Default::default()
+            }
+            .insert(db)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 /// 启动初始化：确保开发种子数据存在（幂等，可重复调用）。
 pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
     let lock = SEED_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
@@ -2280,89 +2360,49 @@ pub async fn ensure_seed(db: &DatabaseConnection) -> anyhow::Result<()> {
 
     // 4.7 审批流模板（业务域 hr/approval）：请假 / 加班两条链。
     //     幂等口径：模板按 `biz_type` 查重（**不加软删过滤** —— 单列唯一键软删行仍占位）；
-    //     节点按 `(flow_id, seq)` 只补缺，**不覆盖**运维在「审批流配置」页改过的节点。
+    //     节点**只在模板本次新建时种下**：模板已存在（含并发兜底回查到的行）则整条跳过，
+    //     运维在「审批流配置」页增删改过的节点既不被覆盖、也不被补缺复活。
     //     节点类型：1 直属上级（`hr_employee.manager_employee_id`）、2 部门负责人
     //     （申请人主部门的 `is_leader`）；`skip_if_empty`：解析不到审批人时是否跳过，
     //     **最后一个节点必须为 0**（否则单据会无人把关，`upsert_flow_node` 会拒绝这种配置）。
     const SEED_APPROVAL_FLOWS: &[ApprovalFlowSeed] = &[
         ApprovalFlowSeed {
-            biz_type: "timeOff",
-            name: "请假审批流（直属上级 → 部门负责人）",
+            biz_type: Cow::Borrowed("timeOff"),
+            name: Cow::Borrowed("请假审批流（直属上级 → 部门负责人）"),
             nodes: &[
                 ApprovalNodeSeed {
                     seq: 1,
-                    node_name: "直属上级",
+                    node_name: Cow::Borrowed("直属上级"),
                     node_type: 1,
                     skip_if_empty: 1,
                 },
                 ApprovalNodeSeed {
                     seq: 2,
-                    node_name: "部门负责人",
+                    node_name: Cow::Borrowed("部门负责人"),
                     node_type: 2,
                     skip_if_empty: 0,
                 },
             ],
         },
         ApprovalFlowSeed {
-            biz_type: "overtime",
-            name: "加班审批流（直属上级）",
+            biz_type: Cow::Borrowed("overtime"),
+            name: Cow::Borrowed("加班审批流（直属上级）"),
             nodes: &[ApprovalNodeSeed {
                 seq: 1,
-                node_name: "直属上级",
+                node_name: Cow::Borrowed("直属上级"),
                 node_type: 1,
                 skip_if_empty: 0,
             }],
         },
     ];
-    for flow in SEED_APPROVAL_FLOWS {
-        let flow_id = match hr_approval_flow::Entity::find()
-            .filter(hr_approval_flow::Column::BizType.eq(flow.biz_type))
-            .one(db)
-            .await?
-        {
-            Some(existing) => existing.id,
-            None => {
-                hr_approval_flow::ActiveModel {
-                    biz_type: Set(String::from(flow.biz_type)),
-                    name: Set(String::from(flow.name)),
-                    status: Set(1),
-                    remark: Set(String::new()),
-                    // 种子数据的操作人统一记为 admin 自己
-                    created_by: Set(admin_id),
-                    updated_by: Set(admin_id),
-                    ..Default::default()
-                }
-                .insert(db)
-                .await?
-                .id
-            }
-        };
-
-        for node in flow.nodes {
-            let existing = hr_approval_flow_node::Entity::find()
-                .filter(hr_approval_flow_node::Column::FlowId.eq(flow_id))
-                .filter(hr_approval_flow_node::Column::Seq.eq(node.seq))
-                .one(db)
-                .await?;
-            if existing.is_none() {
-                hr_approval_flow_node::ActiveModel {
-                    flow_id: Set(flow_id),
-                    seq: Set(node.seq),
-                    node_name: Set(String::from(node.node_name)),
-                    node_type: Set(node.node_type),
-                    // 1/2 类节点由申请人档案与部门关系解析，不需要引用 ID
-                    approver_ref_id: Set(0),
-                    skip_if_empty: Set(node.skip_if_empty),
-                    remark: Set(String::new()),
-                    created_by: Set(admin_id),
-                    updated_by: Set(admin_id),
-                    ..Default::default()
-                }
-                .insert(db)
-                .await?;
-            }
-        }
-    }
+    // 节点只在模板**本次新建**时种下；模板已存在则整条跳过（含并发兜底回查到的行）。
+    // 原因：运维在页面上删掉的节点（例如让某个强制节点不再把关）不能在下一次启动被
+    // 种回来 —— 复活后的强制节点会因解析不到审批人让该业务类型的单据全部提交失败，
+    // 运维意图优先于种子。
+    // 并发安全：`uk_hr_approval_flow_biz_type` 唯一键兜底，插入冲突时回查既有行
+    // （另一进程已插同批种子），避免「先查后插」在多进程首启新库时冒泡失败
+    // （与上方菜单播种同口径，2026-09-11 实际踩到）。
+    seed_approval_flows(db, admin_id, SEED_APPROVAL_FLOWS).await?;
 
     // 5. 示例定时任务：登录日志每日清理（幂等按 job_name；调度器在 init_scheduler 装载）
     const SEED_JOB_NAME: &str = "登录日志每日清理";
@@ -2959,6 +2999,142 @@ mod tests {
             assert_eq!(button.menu_type, 3, "{name} 应是按钮");
             assert_eq!(button.permission, permission);
         }
+    }
+
+    /// P2–P4 新增端点（审批基座 / 考勤 / 加班 / 请假单）同样必须全部登记：
+    /// 漏登 = 该端点对所有已登录用户 fail-open。
+    ///
+    /// 这是**登记面护栏**（不是行为用例）：路由→种子的方向此前只能靠人工比对，
+    /// 后续有人加路由忘加种子时它会直接红。
+    #[tokio::test]
+    async fn ensure_seed_registers_hr_p2_p4_endpoints() {
+        let db = test_db().await;
+        ensure_seed(&db).await.unwrap();
+
+        let domains: [(&str, &[&str]); 10] = [
+            (
+                "/api/v1/hr/approval/flow",
+                &["list", "create", "update", "get", "delete"],
+            ),
+            (
+                "/api/v1/hr/approval/flow-node",
+                &["list", "upsert", "delete"],
+            ),
+            (
+                "/api/v1/hr/approval/instance",
+                &["list", "get", "todo", "approve", "reject", "cancel"],
+            ),
+            ("/api/v1/hr/approval/record", &["list"]),
+            (
+                "/api/v1/hr/attendance/shift",
+                &["list", "create", "update", "get", "delete"],
+            ),
+            (
+                "/api/v1/hr/attendance/schedule",
+                &["list", "batch-create", "update", "month"],
+            ),
+            (
+                "/api/v1/hr/attendance/record",
+                &["list", "get", "update", "import"],
+            ),
+            (
+                "/api/v1/hr/attendance/calendar",
+                &["list", "upsert", "batch-import"],
+            ),
+            (
+                "/api/v1/hr/overtime",
+                &[
+                    "list", "create", "update", "get", "delete", "submit", "cancel", "mine",
+                ],
+            ),
+            (
+                "/api/v1/hr/time-off/request",
+                &[
+                    "list", "create", "update", "get", "delete", "submit", "cancel", "mine",
+                ],
+            ),
+        ];
+
+        for (prefix, actions) in domains {
+            for action in actions {
+                let path = format!("{prefix}/{action}");
+                let row = sys_api::Entity::find()
+                    .filter(sys_api::Column::Path.eq(path.as_str()))
+                    .filter(sys_api::Column::Method.eq("POST"))
+                    .one(&db)
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{path} 必须登记在 sys_api"));
+                assert_eq!(row.status, 1, "{path} 种子应为启用");
+                assert!(row.deleted_at.is_none(), "{path} 不应是软删占位行");
+            }
+        }
+    }
+
+    /// 运维删除的审批节点不得被重启时的种子「补缺」复活：删掉的强制节点复活后，
+    /// 该业务类型的单据会因解析不到审批人而全部提交失败。
+    ///
+    /// 用**用例自建的模板**（唯一 `biz_type`）验证，不动共享种子行——否则并行用例会看到
+    /// 被删掉的节点。
+    #[tokio::test]
+    async fn seed_does_not_resurrect_deleted_flow_node() {
+        let db = test_db().await;
+        let admin_id = 1;
+
+        // 唯一 biz_type：自建模板，绝不触碰共享种子行
+        let biz_type = format!("seed_resurrect_{}", std::process::id());
+        let flows = [ApprovalFlowSeed {
+            biz_type: Cow::Owned(biz_type.clone()),
+            name: Cow::Borrowed("用例模板"),
+            nodes: &[ApprovalNodeSeed {
+                seq: 1,
+                node_name: Cow::Borrowed("直属上级"),
+                node_type: 1,
+                skip_if_empty: 0,
+            }],
+        }];
+
+        seed_approval_flows(&db, admin_id, &flows).await.unwrap();
+        let flow = hr_approval_flow::Entity::find()
+            .filter(hr_approval_flow::Column::BizType.eq(biz_type.as_str()))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("首次播种应建模板");
+        let node = hr_approval_flow_node::Entity::find()
+            .filter(hr_approval_flow_node::Column::FlowId.eq(flow.id))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("首次播种应建节点");
+
+        // 运维删掉该节点（硬删）
+        hr_approval_flow_node::Entity::delete_by_id(node.id)
+            .exec(&db)
+            .await
+            .unwrap();
+
+        // 再次播种：模板已存在 → 整条跳过，节点不得复活
+        seed_approval_flows(&db, admin_id, &flows).await.unwrap();
+        assert!(
+            hr_approval_flow_node::Entity::find_by_id(node.id)
+                .one(&db)
+                .await
+                .unwrap()
+                .is_none(),
+            "被删除的审批节点不得被种子补种复活（运维意图优先）"
+        );
+
+        // 清理本用例自建的行（唯一 biz_type，不影响共享种子行）
+        hr_approval_flow_node::Entity::delete_many()
+            .filter(hr_approval_flow_node::Column::FlowId.eq(flow.id))
+            .exec(&db)
+            .await
+            .unwrap();
+        hr_approval_flow::Entity::delete_by_id(flow.id)
+            .exec(&db)
+            .await
+            .unwrap();
     }
 
     /// API 种子：全部管理端点应随 ensure_seed 落库（含可能被管理员软删的

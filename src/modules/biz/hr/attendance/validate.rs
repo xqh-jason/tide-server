@@ -32,6 +32,8 @@ const EXTERNAL_ID_MAX: usize = 64;
 const MAX_IMPORT_ROWS: usize = 1000;
 /// 单次批量排班人数上限。
 const MAX_BATCH_EMPLOYEES: usize = 1000;
+/// 单次批量排班的「人数 × 天数」总行数上限：单事务逐行「探测读 + 写入」，超限必然超时并整体回滚。
+const MAX_BATCH_SCHEDULE_ROWS: u64 = 10_000;
 /// 单次排班 / 日历导入的区间天数上限（跨自然日，含两端）。
 const MAX_RANGE_DAYS: i64 = 366;
 /// 单日标准工时上限（分钟）——一天最多 24 小时。
@@ -153,6 +155,12 @@ fn join_errors(errors: Vec<String>) -> Result<(), String> {
     }
 }
 
+/// 班次窗口分钟数：非跨天班为 `end − start`；跨天班下班时间顺延次日（`end + 24h − start`）。
+fn window_minutes(start: chrono::NaiveTime, end: chrono::NaiveTime, cross_day: i8) -> i64 {
+    let base = (end - start).num_minutes();
+    if cross_day == 1 { base + 24 * 60 } else { base }
+}
+
 /// 创建 / 更新班次共用字段检查。
 fn check_shift_fields(fields: ShiftFields<'_>, status_allowed: &[i8]) -> Vec<String> {
     let mut errors = Vec::new();
@@ -167,6 +175,9 @@ fn check_shift_fields(fields: ShiftFields<'_>, status_allowed: &[i8]) -> Vec<Str
     check_int_in(fields.cross_day, &[0, 1], "是否跨天班", &mut errors);
     if fields.work_minutes <= 0 {
         errors.push("应工作分钟数必须大于 0".to_string());
+    }
+    if fields.work_minutes > MAX_STANDARD_MINUTES {
+        errors.push(format!("应工作分钟数不能超过 {MAX_STANDARD_MINUTES} 分钟"));
     }
     if fields.rest_minutes < 0 {
         errors.push("休息分钟数不能小于 0".to_string());
@@ -184,7 +195,19 @@ fn check_shift_fields(fields: ShiftFields<'_>, status_allowed: &[i8]) -> Vec<Str
         if fields.cross_day == 0 && end <= start {
             errors.push("非跨天班的下班时间必须晚于上班时间".to_string());
         } else if fields.cross_day == 1 && end > start {
-            errors.push("跨天班的下班时间必须早于上班时间".to_string());
+            // `end == start` 是 24 小时窗口，合法；只有「晚于」才是交叉区间
+            errors.push("跨天班的下班时间不得晚于上班时间".to_string());
+        }
+    }
+
+    // 工时 + 休息必须落在班次窗口内，否则 `derive_work_minutes` 的逐日封顶值（= `work_minutes`）
+    // 会大于真实窗口，请假时长与加班校验一起畸变
+    if let (Some(start), Some(end)) = (start, end)
+        && matches!(fields.cross_day, 0 | 1)
+    {
+        let window = window_minutes(start, end, fields.cross_day);
+        if i64::from(fields.work_minutes) + i64::from(fields.rest_minutes) > window {
+            errors.push("应工作分钟数与休息分钟数之和不能超过班次窗口".to_string());
         }
     }
 
@@ -206,9 +229,13 @@ fn check_shift_fields(fields: ShiftFields<'_>, status_allowed: &[i8]) -> Vec<Str
 /// - `start_time` / `end_time` 非 `HH:MM:SS` → `上班时间格式应为 HH:MM:SS` / `下班时间格式应为 HH:MM:SS`；
 /// - `cross_day` ∉ {0, 1} → `是否跨天班取值不合法，仅允许：0 / 1`；
 ///   非跨天班 `end <= start` → `非跨天班的下班时间必须晚于上班时间`；
-///   跨天班 `end > start` → `跨天班的下班时间必须早于上班时间`；
-/// - `work_minutes <= 0` → `应工作分钟数必须大于 0`；`rest_minutes < 0` → `休息分钟数不能小于 0`；
+///   跨天班 `end > start` → `跨天班的下班时间不得晚于上班时间`（`end == start` 是 24 小时窗口，合法）；
+/// - `work_minutes <= 0` → `应工作分钟数必须大于 0`；`work_minutes > 1440` →
+///   `应工作分钟数不能超过 1440 分钟`；`rest_minutes < 0` → `休息分钟数不能小于 0`；
 ///   `late_tolerance_minutes < 0` → `迟到宽限分钟数不能小于 0`；
+/// - 起止时间都能解析且 `cross_day ∈ {0, 1}` 时，`work_minutes + rest_minutes` 大于窗口分钟数
+///   （非跨天班窗口 `end − start`，跨天班顺延次日 `end + 24h − start`）→
+///   `应工作分钟数与休息分钟数之和不能超过班次窗口`；
 /// - `need_clock` ∉ {0, 1} → `是否需要打卡取值不合法，仅允许：0 / 1`；
 /// - `remark` 长度 > 255 → `备注长度不能超过 255 个字符`；
 /// - `status`：`check::check_status(req.status, status_allowed)` 的 `Err` 原样入列。
@@ -264,16 +291,19 @@ pub fn validate_update_shift(req: &UpdateShiftReq, status_allowed: &[i8]) -> Res
 /// 规则：员工列表为空 → `员工列表不能为空`；去重后 > 1000 → `单次排班人数不能超过 1000`；
 /// `start_date` / `end_date` 非 `yyyy-MM-dd` → `开始日期格式应为 yyyy-MM-dd` /
 /// `结束日期格式应为 yyyy-MM-dd`；止早于起 → `结束日期不能早于开始日期`；
-/// 跨度 > 366 天 → `排班区间不能超过 366 天`；`status` ∉ {1, 2} → 值域错误；
-/// `remark` > 255 → 长度错误。`shift_id = 0` 是「排为休息」的合法值，不校验班次存在性
-/// （存在性需要查库，留在 service）。
+/// 跨度 > 366 天 → `排班区间不能超过 366 天`；两个日期都能解析且去重后人数 > 0 时，
+/// `人数 × 天数` > 10000 → `单次排班总行数不能超过 10000`（「人数 ≤ 1000」与「区间 ≤ 366 天」
+/// 各自成立时乘积仍可到 36 万行，而 service 在同一事务里逐行「探测读 + 写入」必然超时回滚）；
+/// `status` ∉ {1, 2} → 值域错误；`remark` > 255 → 长度错误。`shift_id = 0` 是「排为休息」的
+/// 合法值，不校验班次存在性（存在性需要查库，留在 service）。
 pub fn validate_batch_create_schedules(req: &BatchCreateScheduleReq) -> Result<(), String> {
     let mut errors = Vec::new();
 
+    let employee_count = crate::utils::user_ref::dedup_ids(req.employee_ids.clone()).len();
     if req.employee_ids.is_empty() {
         errors.push("员工列表不能为空".to_string());
     }
-    if crate::utils::user_ref::dedup_ids(req.employee_ids.clone()).len() > MAX_BATCH_EMPLOYEES {
+    if employee_count > MAX_BATCH_EMPLOYEES {
         errors.push(format!("单次排班人数不能超过 {MAX_BATCH_EMPLOYEES}"));
     }
     check_int_in(req.status, &SCHEDULE_STATUSES, "排班状态", &mut errors);
@@ -284,6 +314,17 @@ pub fn validate_batch_create_schedules(req: &BatchCreateScheduleReq) -> Result<(
     let start = parse_date(&req.start_date, "开始日期", &mut errors);
     let end = parse_date(&req.end_date, "结束日期", &mut errors);
     check_date_range(start, end, MAX_RANGE_DAYS, "排班区间", &mut errors);
+
+    // 「人数 × 天数」总量上限：单量上限都成立也拦不住 36 万行的乘积，必须在入口挡掉
+    if let (Some(start), Some(end)) = (start, end)
+        && end >= start
+        && employee_count > 0
+    {
+        let days = (end - start).num_days() as u64 + 1;
+        if (employee_count as u64).saturating_mul(days) > MAX_BATCH_SCHEDULE_ROWS {
+            errors.push(format!("单次排班总行数不能超过 {MAX_BATCH_SCHEDULE_ROWS}"));
+        }
+    }
 
     join_errors(errors)
 }
@@ -550,7 +591,7 @@ mod tests {
         // 跨天班却给出「晚于上班时间」的下班时间
         let message = validate_create_shift(&req, STATUS_ALLOWED).unwrap_err();
         assert!(
-            message.contains("跨天班的下班时间必须早于上班时间"),
+            message.contains("跨天班的下班时间不得晚于上班时间"),
             "{message}"
         );
 
@@ -686,5 +727,100 @@ mod tests {
             remark: "国庆节".to_string(),
         };
         assert!(validate_upsert_calendar(&ok).is_ok(), "合法日历行必须通过");
+    }
+
+    /// 班次工时必须与上下班窗口自洽：`work_minutes + rest_minutes` 不得超过窗口分钟数，
+    /// 否则 `derive_work_minutes` 的逐日封顶值（= 班次 `work_minutes`）会大于真实窗口，
+    /// 请假时长与加班校验一起畸变。
+    #[test]
+    fn shift_validation_rejects_work_minutes_exceeding_window() {
+        // 09:00–18:00 = 540 分钟窗口，却声明 800 分钟工时
+        let req = CreateShiftReq {
+            work_minutes: 800,
+            rest_minutes: 0,
+            ..valid_shift_req()
+        };
+        let message = validate_create_shift(&req, STATUS_ALLOWED).unwrap_err();
+        assert!(
+            message.contains("应工作分钟数与休息分钟数之和不能超过班次窗口"),
+            "{message}"
+        );
+
+        // 工时 + 休息超出窗口（480 + 120 > 540）
+        let req = CreateShiftReq {
+            work_minutes: 480,
+            rest_minutes: 120,
+            ..valid_shift_req()
+        };
+        let message = validate_create_shift(&req, STATUS_ALLOWED).unwrap_err();
+        assert!(
+            message.contains("应工作分钟数与休息分钟数之和不能超过班次窗口"),
+            "{message}"
+        );
+
+        // 基线（480 + 60 = 540，正好等于窗口）必须仍然合法
+        assert!(
+            validate_create_shift(&valid_shift_req(), STATUS_ALLOWED).is_ok(),
+            "工时 + 休息等于窗口必须通过"
+        );
+    }
+
+    /// 跨天班的起止时间文案必须与规则一致：`end > start` 才是非法（`end == start` 是 24 小时窗口）。
+    #[test]
+    fn shift_cross_day_message_matches_rule() {
+        let req = CreateShiftReq {
+            start_time: "09:00:00".to_string(),
+            end_time: "10:00:00".to_string(),
+            cross_day: 1,
+            ..valid_shift_req()
+        };
+        let message = validate_create_shift(&req, STATUS_ALLOWED).unwrap_err();
+        assert!(
+            message.contains("跨天班的下班时间不得晚于上班时间"),
+            "{message}"
+        );
+
+        let same = CreateShiftReq {
+            start_time: "09:00:00".to_string(),
+            end_time: "09:00:00".to_string(),
+            cross_day: 1,
+            work_minutes: 1380,
+            rest_minutes: 60,
+            ..valid_shift_req()
+        };
+        assert!(
+            validate_create_shift(&same, STATUS_ALLOWED).is_ok(),
+            "跨天班 24 小时窗口（end == start）应通过：{}",
+            validate_create_shift(&same, STATUS_ALLOWED).unwrap_err()
+        );
+    }
+
+    /// 批量排班必须挡「人数 × 天数」总量：两个上限各自成立时乘积仍可到 36 万行，
+    /// 单事务逐行读写会超时并整体回滚。
+    #[test]
+    fn batch_create_schedules_rejects_oversized_person_day_product() {
+        let req = BatchCreateScheduleReq {
+            employee_ids: (1..=1000).collect(),
+            start_date: "2026-01-01".to_string(),
+            end_date: "2026-12-31".to_string(),
+            shift_id: 1,
+            status: crate::modules::biz::hr::attendance::SCHEDULE_STATUS_NORMAL,
+            remark: String::new(),
+        };
+        let message = validate_batch_create_schedules(&req).unwrap_err();
+        assert!(message.contains("单次排班总行数不能超过"), "{message}");
+
+        let ok = BatchCreateScheduleReq {
+            employee_ids: (1..=10).collect(),
+            start_date: "2026-01-01".to_string(),
+            end_date: "2026-01-31".to_string(),
+            shift_id: 1,
+            status: crate::modules::biz::hr::attendance::SCHEDULE_STATUS_NORMAL,
+            remark: String::new(),
+        };
+        assert!(
+            validate_batch_create_schedules(&ok).is_ok(),
+            "10 人 × 31 天应在上限内"
+        );
     }
 }

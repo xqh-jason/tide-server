@@ -35,12 +35,10 @@ use crate::modules::biz::hr::approval::{
     INSTANCE_STATUS_PENDING, INSTANCE_STATUS_REJECTED, MAX_FLOW_NODES, NODE_TYPE_ROLE,
     repo as approval_repo,
 };
+use crate::modules::biz::hr::employee::EMPLOYMENT_STATUS_RESIGNED;
 use crate::utils::PageData;
 use crate::utils::error::AppError;
 use sea_orm::ActiveValue::Set;
-
-/// 在职状态「离职」（字典 `employmentStatus` 的 3）——离职的上级不再作为审批人。
-const EMPLOYMENT_STATUS_RESIGNED: i8 = 3;
 
 /// 当前时间（与仓储层的 `created_at` 默认值同口径：本地时间落 `DATETIME`）。
 fn now() -> chrono::NaiveDateTime {
@@ -65,17 +63,36 @@ pub async fn page_flows(
 }
 
 /// 事务内创建模板：`biz_type` 单列唯一（含软删占位）→ 查重后落库。
+///
+/// **软删行占着唯一键**：同 `biz_type` 重建时恢复原行（覆盖 `name` / `status` / `remark`、
+/// 清空 `deleted_at`），否则该业务类型永久无法再建模板，对应单据永远提交不了
+/// （`update_flow` / `start_instance` 都只看未软删的行）。
 pub(crate) async fn create_flow_in_tx(
     txn: &DatabaseTransaction,
     actor_id: u64,
     req: &CreateFlowReq,
 ) -> Result<hr_approval_flow::Model, AppError> {
     let biz_type = req.biz_type.trim();
-    if approval_repo::find_flow_by_biz_type_include_deleted(txn, biz_type)
-        .await?
-        .is_some()
+    if let Some(existing) =
+        approval_repo::find_flow_by_biz_type_include_deleted(txn, biz_type).await?
     {
-        return Err(AppError::Biz(format!("该业务类型已存在审批流：{biz_type}")));
+        if existing.deleted_at.is_none() {
+            return Err(AppError::Biz(format!("该业务类型已存在审批流：{biz_type}")));
+        }
+        return Ok(approval_repo::update_flow_in_tx(
+            txn,
+            hr_approval_flow::ActiveModel {
+                id: Set(existing.id),
+                biz_type: Set(biz_type.to_string()),
+                name: Set(req.name.trim().to_string()),
+                status: Set(req.status),
+                remark: Set(req.remark.clone()),
+                deleted_at: Set(None),
+                ..Default::default()
+            },
+            actor_id,
+        )
+        .await?);
     }
 
     Ok(approval_repo::create_flow_in_tx(
@@ -509,6 +526,28 @@ pub(crate) async fn cancel_instance_in_tx(
     dispatch_terminal_in_tx(txn, actor_id, &finished).await
 }
 
+/// 按业务单据**预锁**其审批实例（锁序：实例 → 业务单据）。
+///
+/// 业务域的撤销 / 删除入口在锁自己的单据行之前必须先调本函数：审批侧（approve / reject）是
+/// 「先锁实例、终态回调里再锁业务单据」，业务侧若反序持锁，两个事务会构成 ABBA 环路，
+/// 被 MySQL 以 1213 杀掉其中一个（表现为随机的「操作冲突，请稍后重试」）。
+///
+/// 无实例时什么都不做——注意**不要**用 `WHERE biz_type/biz_id` 直接加锁：命中不到行会取间隙锁，
+/// 与并发提交插入实例的 `INSERT` 互相阻塞。这里先普通读拿到主键，再按主键加锁（记录锁）。
+pub(crate) async fn lock_latest_instance_by_biz_in_tx(
+    txn: &DatabaseTransaction,
+    biz_type: &str,
+    biz_id: u64,
+) -> Result<Option<u64>, AppError> {
+    let Some(instance) = approval_repo::find_instance_by_biz(txn, biz_type, biz_id).await? else {
+        return Ok(None);
+    };
+    approval_repo::find_instance_by_id_for_update(txn, instance.id)
+        .await?
+        .ok_or_else(|| AppError::Biz(format!("审批实例不存在：{}", instance.id)))?;
+    Ok(Some(instance.id))
+}
+
 /// 按业务单据撤销在途实例（单据软删 / 撤回时由业务域调用）：无实例或已终结都是 no-op。
 pub(crate) async fn cancel_by_biz_in_tx(
     txn: &DatabaseTransaction,
@@ -584,14 +623,14 @@ async fn dispatch_terminal_in_tx(
     actor_id: u64,
     instance: &hr_approval_instance::Model,
 ) -> Result<(), AppError> {
-    let approved = instance.status == INSTANCE_STATUS_APPROVED;
     match instance.biz_type.as_str() {
         BIZ_TYPE_TIME_OFF => {
             crate::modules::biz::hr::time_off::service::on_instance_finished_in_tx(
                 txn,
                 actor_id,
+                instance.id,
                 instance.biz_id,
-                approved,
+                instance.status,
             )
             .await
         }
@@ -600,7 +639,7 @@ async fn dispatch_terminal_in_tx(
                 txn,
                 actor_id,
                 instance.biz_id,
-                approved,
+                instance.status,
             )
             .await
         }
@@ -629,6 +668,10 @@ async fn ensure_can_act(
 /// 解析节点审批人：返回 `(审批人 user_id, 角色池 role_id)`（两者其一为 0）。
 ///
 /// 解析不到一律返回 `(0, 0)`，由调用方决定「跳过」还是报错——本函数不写业务决策。
+///
+/// **「引用查得到」不等于「有人能审」**：1 直属上级 / 2 部门负责人解析出的账号必须**启用且未软删**
+/// （停用账号登不进来，节点会被判「已解析」却无人可审 → 单据卡在审批中，与「解析不到必须报错」的
+/// 不变式矛盾）；4 指定角色池必须**至少有一名启用成员**，否则同样无人可审。
 async fn resolve_approver(
     db: &impl ConnectionTrait,
     applicant_id: u64,
@@ -637,6 +680,22 @@ async fn resolve_approver(
     use crate::modules::biz::hr::approval::{
         NODE_TYPE_DEPT_LEADER, NODE_TYPE_MANAGER, NODE_TYPE_USER,
     };
+
+    /// 账号可用（启用且未软删）才算解析到人。
+    async fn enabled_user_or_none(
+        db: &impl ConnectionTrait,
+        user_id: u64,
+    ) -> Result<u64, AppError> {
+        if user_id == 0 {
+            return Ok(0);
+        }
+        Ok(
+            match approval_repo::find_enabled_user_by_id(db, user_id).await? {
+                Some(_) => user_id,
+                None => 0,
+            },
+        )
+    }
 
     match node.node_type {
         NODE_TYPE_MANAGER => {
@@ -656,7 +715,7 @@ async fn resolve_approver(
             if manager.employment_status == EMPLOYMENT_STATUS_RESIGNED {
                 return Ok((0, 0));
             }
-            Ok((manager.user_id, 0))
+            Ok((enabled_user_or_none(db, manager.user_id).await?, 0))
         }
         NODE_TYPE_DEPT_LEADER => {
             let Some(dept_id) =
@@ -664,12 +723,10 @@ async fn resolve_approver(
             else {
                 return Ok((0, 0));
             };
-            Ok((
-                approval_repo::find_leader_user_id_by_dept(db, dept_id)
-                    .await?
-                    .unwrap_or(0),
-                0,
-            ))
+            let leader_user_id = approval_repo::find_leader_user_id_by_dept(db, dept_id)
+                .await?
+                .unwrap_or(0);
+            Ok((enabled_user_or_none(db, leader_user_id).await?, 0))
         }
         NODE_TYPE_USER => {
             if approval_repo::find_enabled_user_by_id(db, node.approver_ref_id)
@@ -685,6 +742,7 @@ async fn resolve_approver(
             if approval_repo::find_enabled_role_by_id(db, node.approver_ref_id)
                 .await?
                 .is_some()
+                && approval_repo::role_has_enabled_member(db, node.approver_ref_id).await?
             {
                 Ok((0, node.approver_ref_id))
             } else {
@@ -877,8 +935,8 @@ mod tests {
     use crate::modules::biz::hr::approval::dto::{CreateFlowReq, TodoListReq, UpsertFlowNodeReq};
     use crate::modules::biz::hr::approval::{
         ACTION_APPROVED, ACTION_PENDING, ACTION_SKIPPED, INSTANCE_STATUS_APPROVED,
-        INSTANCE_STATUS_CANCELED, INSTANCE_STATUS_PENDING, NODE_TYPE_MANAGER, NODE_TYPE_ROLE,
-        NODE_TYPE_USER, repo,
+        INSTANCE_STATUS_CANCELED, INSTANCE_STATUS_PENDING, NODE_TYPE_DEPT_LEADER,
+        NODE_TYPE_MANAGER, NODE_TYPE_ROLE, NODE_TYPE_USER, repo,
     };
     use crate::modules::biz::hr::time_off::{REQUEST_STATUS_APPROVED, repo as time_off_repo};
     use sea_orm::{
@@ -1120,10 +1178,11 @@ mod tests {
     /// 造一对「申请人 + 直属上级」，并让**同一个上级**同时是该申请人主部门的负责人。
     ///
     /// 这样种子形状的 `timeOff` 流（直属上级 → 部门负责人）两级都会解析到同一个审批人，
-    /// 用例无需改动共享模板即可走完两级审批。
+    /// 用例无需改动共享模板即可走完两级审批。两人的 `sys_user` 都必须**启用**：
+    /// 审批人解析会校验账号可用（停用 / 无账号视为解析不到审批人）。
     async fn seed_subordinate_with_leader(txn: &DatabaseTransaction) -> (u64, u64, u64) {
-        let manager_user = unique_user_id();
-        let applicant_user = unique_user_id();
+        let manager_user = seed_user_with_status(txn, 1).await;
+        let applicant_user = seed_user_with_status(txn, 1).await;
         let dept_id = unique_user_id();
 
         let manager_employee = seed_employee(txn, manager_user, 0).await;
@@ -1141,6 +1200,205 @@ mod tests {
             .unwrap();
         }
         (applicant_employee, applicant_user, manager_user)
+    }
+
+    /// 直插一个账号（`status` 决定启用 / 停用），返回其自动生成的 ID。
+    ///
+    /// 用自动 ID 而不是显式大 ID：显式 ID 会把 `sys_user` 的 AUTO_INCREMENT 顶到高位
+    /// （计数器不随事务回滚），后续真实用户就会拿到 900M 段的 ID。
+    async fn seed_user_with_status(txn: &DatabaseTransaction, status: i8) -> u64 {
+        crate::entity::sys_user::ActiveModel {
+            username: Set(unique("appr_user")),
+            password: Set("x".to_string()),
+            emp_no: Set(String::new()),
+            nickname: Set("审批人".to_string()),
+            status: Set(status),
+            created_by: Set(ACTOR_ID),
+            updated_by: Set(ACTOR_ID),
+            ..Default::default()
+        }
+        .insert(txn)
+        .await
+        .unwrap()
+        .id
+    }
+
+    /// 直插一个角色（`status` 决定启用 / 停用），角色池节点用。
+    async fn seed_role_with_status(txn: &DatabaseTransaction, status: i8) -> u64 {
+        sys_role::ActiveModel {
+            role_name: Set(unique("审批角色")),
+            role_key: Set(unique("appr_role")),
+            sort: Set(0),
+            status: Set(status),
+            remark: Set(String::new()),
+            created_by: Set(ACTOR_ID),
+            updated_by: Set(ACTOR_ID),
+            ..Default::default()
+        }
+        .insert(txn)
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn bind_user_role(txn: &DatabaseTransaction, user_id: u64, role_id: u64) {
+        sys_user_role::ActiveModel {
+            user_id: Set(user_id),
+            role_id: Set(role_id),
+        }
+        .insert(txn)
+        .await
+        .unwrap();
+    }
+
+    /// 直属上级的账号被停用 → 该节点解析不到审批人；末节点不允许跳过 → 提交必须报错
+    /// （而不是让单据卡在「无人可审」）。
+    #[tokio::test]
+    async fn manager_node_is_unresolvable_without_enabled_manager_account() {
+        let txn = test_txn().await;
+        let (_flow_id, biz_type) =
+            seed_flow(&txn, "appr_mgr_disabled", &[(1, NODE_TYPE_MANAGER, 0, 0)]).await;
+        let biz_id = seed_settled_request(&txn).await;
+
+        let applicant_user = unique_user_id();
+        let manager_user = seed_user_with_status(&txn, 0).await;
+        let manager_employee = seed_employee(&txn, manager_user, 0).await;
+        seed_employee(&txn, applicant_user, manager_employee).await;
+
+        let err = super::start_instance_in_tx(&txn, ACTOR_ID, &biz_type, biz_id, applicant_user)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("没有可用的审批人"),
+            "上级账号停用应视为解析不到审批人（末节点必须报错），实际：{err}"
+        );
+    }
+
+    /// 部门负责人账号被停用 → 同样解析不到（与直属上级同口径）。
+    #[tokio::test]
+    async fn dept_leader_node_is_unresolvable_without_enabled_leader_account() {
+        let txn = test_txn().await;
+        let (_flow_id, biz_type) = seed_flow(
+            &txn,
+            "appr_leader_disabled",
+            &[(1, NODE_TYPE_DEPT_LEADER, 0, 0)],
+        )
+        .await;
+        let biz_id = seed_settled_request(&txn).await;
+
+        let applicant_user = unique_user_id();
+        let leader_user = seed_user_with_status(&txn, 0).await;
+        let dept_id = unique_user_id();
+        seed_employee(&txn, applicant_user, 0).await;
+
+        for (user_id, is_primary, is_leader) in [(applicant_user, 1, 0), (leader_user, 0, 1)] {
+            crate::entity::sys_user_dept::ActiveModel {
+                user_id: Set(user_id),
+                dept_id: Set(dept_id),
+                is_primary: Set(is_primary),
+                is_leader: Set(is_leader),
+            }
+            .insert(&txn)
+            .await
+            .unwrap();
+        }
+
+        let err = super::start_instance_in_tx(&txn, ACTOR_ID, &biz_type, biz_id, applicant_user)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("没有可用的审批人"),
+            "负责人账号停用应视为解析不到审批人，实际：{err}"
+        );
+    }
+
+    /// 角色池节点的角色没有启用成员 → 解析不到审批人（末节点必须报错）。
+    #[tokio::test]
+    async fn role_pool_node_is_unresolvable_when_role_has_no_enabled_member() {
+        let txn = test_txn().await;
+        let role_id = seed_role_with_status(&txn, 1).await;
+        let (_flow_id, biz_type) =
+            seed_flow(&txn, "appr_role_empty", &[(1, NODE_TYPE_ROLE, role_id, 0)]).await;
+        let biz_id = seed_settled_request(&txn).await;
+
+        let err = super::start_instance_in_tx(&txn, ACTOR_ID, &biz_type, biz_id, unique_user_id())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("没有可用的审批人"),
+            "无成员角色池应视为解析不到审批人，实际：{err}"
+        );
+    }
+
+    /// 角色池成员资格只看**启用**角色：角色在审批期间被停用后，成员不得再审批。
+    #[tokio::test]
+    async fn disabled_role_is_not_a_pool_member() {
+        let txn = test_txn().await;
+        let role_id = seed_role_with_status(&txn, 1).await;
+        let approver = seed_user_with_status(&txn, 1).await;
+        bind_user_role(&txn, approver, role_id).await;
+
+        let (_flow_id, biz_type) = seed_flow(
+            &txn,
+            "appr_role_disabled",
+            &[(1, NODE_TYPE_ROLE, role_id, 0)],
+        )
+        .await;
+        let biz_id = seed_settled_request(&txn).await;
+        let instance_id =
+            super::start_instance_in_tx(&txn, ACTOR_ID, &biz_type, biz_id, unique_user_id())
+                .await
+                .unwrap();
+
+        // 角色被停用（审批期间的角色治理）
+        sys_role::Entity::update_many()
+            .set(sys_role::ActiveModel {
+                status: Set(0),
+                ..Default::default()
+            })
+            .filter(sys_role::Column::Id.eq(role_id))
+            .exec(&txn)
+            .await
+            .unwrap();
+
+        let err = super::approve_in_tx(&txn, approver, instance_id, "同意")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("不由你审批"),
+            "停用角色的成员不得再作为角色池审批人，实际：{err}"
+        );
+    }
+
+    /// 软删的模板占着 `uk_hr_approval_flow_biz_type` 唯一键：同 `biz_type` 重建必须**恢复**原行，
+    /// 否则该业务类型永久无法再建模板（单据永久无法提交）。
+    #[tokio::test]
+    async fn create_flow_restores_soft_deleted_template() {
+        let txn = test_txn().await;
+        let (flow_id, biz_type) =
+            seed_flow(&txn, "appr_restore", &[(1, NODE_TYPE_USER, ACTOR_ID, 0)]).await;
+        super::delete_flow_in_tx(&txn, ACTOR_ID, flow_id)
+            .await
+            .unwrap();
+
+        let restored = super::create_flow_in_tx(
+            &txn,
+            ACTOR_ID,
+            &CreateFlowReq {
+                biz_type: biz_type.clone(),
+                name: "恢复后的模板".to_string(),
+                status: 1,
+                remark: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            restored.id, flow_id,
+            "软删行占唯一键，重建必须复用同一行（恢复）"
+        );
+        assert!(restored.deleted_at.is_none(), "恢复后 deleted_at 必须清空");
+        assert_eq!(restored.name, "恢复后的模板", "恢复时应覆盖新字段");
     }
 
     /// 提交时展开节点：解析不到审批人且该节点 `skip_if_empty = 1` → 记跳过，
@@ -1512,15 +1770,13 @@ mod tests {
         );
     }
 
-    /// 模板业务类型单列唯一（**含软删占位**）：软删后仍不能再建同类型模板。
+    /// 未软删的同 `biz_type` 模板必须查重拒绝（软删行的处理见
+    /// `create_flow_restores_soft_deleted_template`：占着唯一键的行改为**恢复**）。
     #[tokio::test]
-    async fn create_flow_rejects_duplicate_biz_type_including_soft_deleted() {
+    async fn create_flow_rejects_duplicate_active_biz_type() {
         let txn = test_txn().await;
-        let (flow_id, biz_type) =
+        let (_flow_id, biz_type) =
             seed_flow(&txn, "approval_dup", &[(1, NODE_TYPE_USER, ACTOR_ID, 0)]).await;
-        super::delete_flow_in_tx(&txn, ACTOR_ID, flow_id)
-            .await
-            .unwrap();
 
         let err = super::create_flow_in_tx(
             &txn,
@@ -1536,7 +1792,7 @@ mod tests {
         .unwrap_err();
         assert!(
             err.to_string().contains("已存在审批流"),
-            "软删行仍占唯一键，必须查重，实际：{err}"
+            "同业务类型的启用模板必须查重拒绝，实际：{err}"
         );
     }
 }

@@ -6,6 +6,9 @@
 //!   （一个业务类型只能有一条流，删除后仍占位，避免同类型出现两条流）；
 //! - 其余三张**不软删**：模板节点按 `(flow_id, seq)` 硬删重排；实例与节点记录是
 //!   审批历史（单据软删时由业务层把实例置「已撤销」，不改写历史行）；
+//!   模板节点不再单建 `flow_id` 索引——`uk_hr_approval_flow_node_seq (flow_id, seq)`
+//!   的最左前缀已覆盖按 `flow_id` 过滤的全部查询（存量库由
+//!   `m20260922_000006_drop_redundant_flow_node_index` 清理）；
 //! - 全库无物理外键：`flow_id` / `biz_id` / `applicant_id` / `approver_id` 都是逻辑外键；
 //! - 幂等：逐表探测 `information_schema`，只为缺失的表建表（DDL 不在事务里，
 //!   中途失败重跑可补齐剩余表）。
@@ -53,8 +56,7 @@ const CREATE_FLOW_NODE: &str = r#"CREATE TABLE `hr_approval_flow_node` (
   `created_by` bigint unsigned NOT NULL DEFAULT '0' COMMENT '创建人 ID（sys_user.id；0=系统写入）',
   `updated_by` bigint unsigned NOT NULL DEFAULT '0' COMMENT '更新人 ID（sys_user.id；0=系统写入）',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_hr_approval_flow_node_seq` (`flow_id`, `seq`),
-  KEY `idx_hr_approval_flow_node_flow` (`flow_id`)
+  UNIQUE KEY `uk_hr_approval_flow_node_seq` (`flow_id`, `seq`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='审批流模板节点（不软删：按 (flow_id, seq) 硬删重排）'"#;
 
 const CREATE_INSTANCE: &str = r#"CREATE TABLE `hr_approval_instance` (

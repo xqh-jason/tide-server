@@ -17,7 +17,8 @@ pub struct Model {
     pub reason: String,
     /// 来源对象类型（与 `hr_time_off_balance_log.source_kind` 同口径）：0 无 1 系统任务 2 请假单 3 加班单 4 手工
     pub source_kind: i8,
-    /// 来源对象 ID（配合 source_kind 作幂等键）
+    /// 来源对象 ID（配合 `source_kind` 作幂等键）：`2 请假单` 时是**审批实例 ID**
+    /// （「归还批次」按一次提交周期一个桶），`3 加班单` 时是加班单 ID，其余为 0
     pub source_id: u64,
     /// 归属周期（如 2026）
     pub period: String,
